@@ -1,0 +1,23 @@
+## Log configuration
+log_mode: file
+log_dir: /var/log/
+log_level: info
+log_compression: true
+log_max_size: 100
+log_max_backups: 3
+log_max_age: 30
+
+## LAPI configuration
+update_frequency: 10s
+api_url: http://127.0.0.1:8080/
+api_key: ${API_KEY}
+insecure_skip_verify: false
+
+## SPOA configuration
+listen_addr: 127.0.0.1:9000
+#listen_socket: /run/crowdsec-spoa.sock
+
+prometheus:
+  enabled: false
+  listen_addr: 127.0.0.1
+  listen_port: 60601

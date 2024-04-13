@@ -16,8 +16,9 @@ type PrometheusConfig struct {
 }
 
 type BouncerConfig struct {
-	UpdateFrequency string        `yaml:"update_frequency"`
-	Logging         LoggingConfig `yaml:",inline"`
+	Logging      LoggingConfig `yaml:",inline"`
+	ListenAddr   string        `yaml:"listen_addr"`
+	ListenSocket string        `yaml:"listen_socket"`
 
 	PrometheusConfig PrometheusConfig `yaml:"prometheus"`
 }
@@ -49,6 +50,10 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 
 	if err = config.Logging.setup("crowdsec-spoa-bouncer.log"); err != nil {
 		return nil, fmt.Errorf("failed to setup logging: %w", err)
+	}
+
+	if config.ListenAddr == "" && config.ListenSocket == "" {
+		return nil, fmt.Errorf("listen_addr or listen_socket must be set")
 	}
 
 	return config, nil

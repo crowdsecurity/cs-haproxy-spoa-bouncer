@@ -18,6 +18,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/spoa"
 	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
 	"github.com/crowdsecurity/go-cs-lib/csdaemon"
 	"github.com/crowdsecurity/go-cs-lib/csstring"
@@ -111,6 +112,10 @@ func Execute() error {
 	g, ctx := errgroup.WithContext(context.Background())
 
 	g.Go(func() error {
+		return HandleSignals(ctx)
+	})
+
+	g.Go(func() error {
 		bouncer.Run(ctx)
 		return errors.New("bouncer stream halted")
 	})
@@ -148,11 +153,27 @@ func Execute() error {
 		}
 	})
 
-	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
+	spoad, err := spoa.New(config)
+
+	if err != nil {
+		return fmt.Errorf("failed to create SPOA: %w", err)
+	}
 
 	g.Go(func() error {
-		return HandleSignals(ctx)
+		if err := spoad.ServeTCP(); err != nil {
+			return fmt.Errorf("failed to serve TCP: %w", err)
+		}
+		return nil
 	})
+
+	g.Go(func() error {
+		if err := spoad.ServeUnix(); err != nil {
+			return fmt.Errorf("failed to serve Unix: %w", err)
+		}
+		return nil
+	})
+
+	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
 
 	if err := g.Wait(); err != nil {
 		return fmt.Errorf("process terminated with error: %w", err)
