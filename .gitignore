@@ -33,3 +33,6 @@ venv/
 /rpm/RPMS
 /rpm/SOURCES/*.tar.gz
 /rpm/SRPMS
+
+# local configuration
+/config/*.yaml.local
