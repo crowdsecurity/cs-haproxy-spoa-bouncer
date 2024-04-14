@@ -18,6 +18,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/spoa"
 	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
 	"github.com/crowdsecurity/go-cs-lib/csdaemon"
@@ -136,6 +137,8 @@ func Execute() error {
 		}()
 	}
 
+	dataSet := dataset.New()
+
 	g.Go(func() error {
 		log.Infof("Processing new and deleted decisions . . .")
 
@@ -147,13 +150,19 @@ func Execute() error {
 				if decisions == nil {
 					continue
 				}
-
-				//TODO! Handle decisions
+				if len(decisions.New) > 0 {
+					log.Debugf("Processing %d new decisions", len(decisions.New))
+					dataSet.Add(decisions.New)
+				}
+				if len(decisions.Deleted) > 0 {
+					log.Debugf("Processing %d deleted decisions", len(decisions.Deleted))
+					dataSet.Remove(decisions.Deleted)
+				}
 			}
 		}
 	})
 
-	spoad, err := spoa.New(config)
+	spoad, err := spoa.New(config, dataSet)
 
 	if err != nil {
 		return fmt.Errorf("failed to create SPOA: %w", err)
