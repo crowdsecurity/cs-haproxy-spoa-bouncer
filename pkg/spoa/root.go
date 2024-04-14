@@ -40,6 +40,7 @@ func New(cfg *cfg.BouncerConfig) (*Spoa, error) {
 			if !os.IsNotExist(err) {
 				return nil, fmt.Errorf("failed to stat socket %s: %v", cfg.ListenSocket, err)
 			}
+		} else {
 			stat, ok := fileInfo.Sys().(*syscall.Stat_t)
 			if !ok {
 				return nil, fmt.Errorf("failed to get socket stat")
