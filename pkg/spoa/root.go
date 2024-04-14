@@ -124,12 +124,12 @@ func handlerWrapper(spoad *Spoa) func(req *request.Request) {
 			return
 		}
 
-		blocked := false
-		if spoad.DataSet.CheckIP(&ip) {
-			blocked = true
+		blocked := "allow"
+		if item := spoad.DataSet.CheckIP(&ip); item != nil && item.Remediation > 0 {
+			blocked = item.Remediation.String()
 		}
 
-		log.Printf("IP: %s, send score '%v'", ip.String(), blocked)
+		log.Printf("IP: %s, send score '%s'", ip.String(), blocked)
 
 		req.Actions.SetVar(action.ScopeTransaction, "ip_score", blocked)
 	}
