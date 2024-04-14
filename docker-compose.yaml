@@ -8,6 +8,8 @@ services:
       dockerfile: Dockerfile
     depends_on:
       - crowdsec
+    volumes:
+      - sockets:/run/
 
   whoami:
     image: traefik/whoami:latest
@@ -17,6 +19,7 @@ services:
     volumes:
       - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
       - ./config/crowdsec.cfg:/usr/local/etc/haproxy/crowdsec.cfg
+      - sockets:/run/
     ports:
       - "127.0.0.1:9090:9090"
     depends_on:
@@ -28,3 +31,7 @@ services:
     image: crowdsecurity/crowdsec:latest
     environment:
       - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
+
+volumes:
+  sockets:
+    driver: local
