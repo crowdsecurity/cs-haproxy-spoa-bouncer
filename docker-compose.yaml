@@ -10,6 +10,7 @@ services:
       - crowdsec
     volumes:
       - sockets:/run/
+      - ./config/crowdsec-spoa-bouncer.yaml.local:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml.local
 
   whoami:
     image: traefik/whoami:latest

@@ -2,12 +2,12 @@ package spoa
 
 import (
 	"fmt"
-	"math/rand"
 	"net"
 	"os"
 	"syscall"
 
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/negasus/haproxy-spoe-go/action"
 	"github.com/negasus/haproxy-spoe-go/agent"
 	"github.com/negasus/haproxy-spoe-go/request"
@@ -18,10 +18,13 @@ type Spoa struct {
 	ListenAddr   net.Listener
 	ListenSocket net.Listener
 	Server       *agent.Agent
+	DataSet      *dataset.DataSet
 }
 
-func New(cfg *cfg.BouncerConfig) (*Spoa, error) {
-	s := &Spoa{}
+func New(cfg *cfg.BouncerConfig, dataset *dataset.DataSet) (*Spoa, error) {
+	s := &Spoa{
+		DataSet: dataset,
+	}
 
 	if cfg.ListenAddr != "" {
 		addr, err := net.Listen("tcp", cfg.ListenAddr)
@@ -70,7 +73,7 @@ func New(cfg *cfg.BouncerConfig) (*Spoa, error) {
 		s.ListenSocket = addr
 	}
 
-	s.Server = agent.New(handler, log.StandardLogger())
+	s.Server = agent.New(handlerWrapper(s), log.StandardLogger())
 
 	return s, nil
 }
@@ -97,33 +100,37 @@ func (s *Spoa) ServeUnix() error {
 	return s.Server.Serve(s.ListenSocket)
 }
 
-func handler(req *request.Request) {
+func handlerWrapper(spoad *Spoa) func(req *request.Request) {
+	return func(req *request.Request) {
+		log.Printf("handle request EngineID: '%s', StreamID: '%d', FrameID: '%d' with %d messages\n", req.EngineID, req.StreamID, req.FrameID, req.Messages.Len())
 
-	log.Printf("handle request EngineID: '%s', StreamID: '%d', FrameID: '%d' with %d messages\n", req.EngineID, req.StreamID, req.FrameID, req.Messages.Len())
+		messageName := "crowdsec-req"
 
-	messageName := "crowdsec-req"
+		mes, err := req.Messages.GetByName(messageName)
+		if err != nil {
+			log.Printf("message %s not found: %v", messageName, err)
+			return
+		}
 
-	mes, err := req.Messages.GetByName(messageName)
-	if err != nil {
-		log.Printf("message %s not found: %v", messageName, err)
-		return
+		ipValue, ok := mes.KV.Get("src-ip")
+		if !ok {
+			log.Printf("var 'ip' not found in message")
+			return
+		}
+
+		ip, ok := ipValue.(net.IP)
+		if !ok {
+			log.Printf("var 'ip' has wrong type. expect IP addr")
+			return
+		}
+
+		blocked := false
+		if spoad.DataSet.CheckIP(&ip) {
+			blocked = true
+		}
+
+		log.Printf("IP: %s, send score '%v'", ip.String(), blocked)
+
+		req.Actions.SetVar(action.ScopeTransaction, "ip_score", blocked)
 	}
-
-	ipValue, ok := mes.KV.Get("src-ip")
-	if !ok {
-		log.Printf("var 'ip' not found in message")
-		return
-	}
-
-	ip, ok := ipValue.(net.IP)
-	if !ok {
-		log.Printf("var 'ip' has wrong type. expect IP addr")
-		return
-	}
-
-	ipScore := rand.Intn(100)
-
-	log.Printf("IP: %s, send score '%d'", ip.String(), ipScore)
-
-	req.Actions.SetVar(action.ScopeTransaction, "ip_score", ipScore)
 }
