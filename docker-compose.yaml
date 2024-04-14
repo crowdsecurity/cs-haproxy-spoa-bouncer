@@ -1,0 +1,30 @@
+version: 3.9
+
+services:
+  spoa:
+    image: crowdsecurity/crowdsec-spoa:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - crowdsec
+
+  whoami:
+    image: traefik/whoami:latest
+
+  haproxy:
+    image: haproxy:2.9.7-alpine
+    volumes:
+      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
+      - ./config/crowdsec.cfg:/usr/local/etc/haproxy/crowdsec.cfg
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - crowdsec
+      - spoa
+      - whoami
+  
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    environment:
+      - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws

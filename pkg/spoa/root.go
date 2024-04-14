@@ -78,6 +78,9 @@ func (s *Spoa) ServeTCP() error {
 	if s.ListenAddr == nil {
 		return nil
 	}
+
+	defer s.ListenAddr.Close()
+
 	log.Infof("Serving TCP server on %s", s.ListenAddr.Addr().String())
 	return s.Server.Serve(s.ListenAddr)
 }
@@ -87,6 +90,8 @@ func (s *Spoa) ServeUnix() error {
 		return nil
 	}
 
+	defer s.ListenSocket.Close()
+
 	log.Infof("Serving Unix server on %s", s.ListenSocket.Addr().String())
 	return s.Server.Serve(s.ListenSocket)
 }
@@ -95,7 +100,7 @@ func handler(req *request.Request) {
 
 	log.Printf("handle request EngineID: '%s', StreamID: '%d', FrameID: '%d' with %d messages\n", req.EngineID, req.StreamID, req.FrameID, req.Messages.Len())
 
-	messageName := "get-ip-reputation"
+	messageName := "crowdsec-req"
 
 	mes, err := req.Messages.GetByName(messageName)
 	if err != nil {
@@ -103,7 +108,7 @@ func handler(req *request.Request) {
 		return
 	}
 
-	ipValue, ok := mes.KV.Get("ip")
+	ipValue, ok := mes.KV.Get("src-ip")
 	if !ok {
 		log.Printf("var 'ip' not found in message")
 		return
@@ -119,5 +124,5 @@ func handler(req *request.Request) {
 
 	log.Printf("IP: %s, send score '%d'", ip.String(), ipScore)
 
-	req.Actions.SetVar(action.ScopeSession, "ip_score", ipScore)
+	req.Actions.SetVar(action.ScopeTransaction, "ip_score", ipScore)
 }
