@@ -11,9 +11,15 @@ services:
     volumes:
       - sockets:/run/
       - ./config/crowdsec-spoa-bouncer.yaml.local:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml.local
+    networks:
+      crowdsec:
+        ipv4_address: 10.5.5.254
+        
 
   whoami:
     image: traefik/whoami:latest
+    networks:
+      - crowdsec
 
   haproxy:
     image: haproxy:2.9.7-alpine
@@ -27,12 +33,24 @@ services:
       - crowdsec
       - spoa
       - whoami
+    networks:
+      - crowdsec
   
   crowdsec:
     image: crowdsecurity/crowdsec:latest
     environment:
       - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
+    networks:
+      - crowdsec
 
 volumes:
   sockets:
     driver: local
+
+networks:
+  crowdsec:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: "10.5.5.0/24"

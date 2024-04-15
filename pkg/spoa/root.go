@@ -1,6 +1,7 @@
 package spoa
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -9,16 +10,44 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/negasus/haproxy-spoe-go/action"
-	"github.com/negasus/haproxy-spoe-go/agent"
 	"github.com/negasus/haproxy-spoe-go/request"
+	"github.com/negasus/haproxy-spoe-go/worker"
 	log "github.com/sirupsen/logrus"
 )
 
 type Spoa struct {
 	ListenAddr   net.Listener
 	ListenSocket net.Listener
-	Server       *agent.Agent
+	Server       *_agent
 	DataSet      *dataset.DataSet
+}
+
+type _agent struct {
+	handler func(*request.Request)
+	logger  log.FieldLogger
+}
+
+func (a *_agent) Serve(listner net.Listener, ctx context.Context) error {
+	errorChan := make(chan error, 1)
+	go func() {
+		for {
+			conn, err := listner.Accept()
+			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Temporary() {
+					continue
+				}
+				errorChan <- err
+				return
+			}
+			go worker.Handle(conn, a.handler, a.logger)
+		}
+	}()
+	select {
+	case err := <-errorChan:
+		return err
+	case <-ctx.Done():
+		return nil
+	}
 }
 
 func New(cfg *cfg.BouncerConfig, dataset *dataset.DataSet) (*Spoa, error) {
@@ -73,12 +102,15 @@ func New(cfg *cfg.BouncerConfig, dataset *dataset.DataSet) (*Spoa, error) {
 		s.ListenSocket = addr
 	}
 
-	s.Server = agent.New(handlerWrapper(s), log.StandardLogger())
+	s.Server = &_agent{
+		handler: handlerWrapper(s),
+		logger:  log.StandardLogger(),
+	}
 
 	return s, nil
 }
 
-func (s *Spoa) ServeTCP() error {
+func (s *Spoa) ServeTCP(ctx context.Context) error {
 	if s.ListenAddr == nil {
 		return nil
 	}
@@ -86,10 +118,10 @@ func (s *Spoa) ServeTCP() error {
 	defer s.ListenAddr.Close()
 
 	log.Infof("Serving TCP server on %s", s.ListenAddr.Addr().String())
-	return s.Server.Serve(s.ListenAddr)
+	return s.Server.Serve(s.ListenAddr, ctx)
 }
 
-func (s *Spoa) ServeUnix() error {
+func (s *Spoa) ServeUnix(ctx context.Context) error {
 	if s.ListenSocket == nil {
 		return nil
 	}
@@ -97,7 +129,7 @@ func (s *Spoa) ServeUnix() error {
 	defer s.ListenSocket.Close()
 
 	log.Infof("Serving Unix server on %s", s.ListenSocket.Addr().String())
-	return s.Server.Serve(s.ListenSocket)
+	return s.Server.Serve(s.ListenSocket, ctx)
 }
 
 func handlerWrapper(spoad *Spoa) func(req *request.Request) {

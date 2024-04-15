@@ -3,6 +3,7 @@ module github.com/crowdsecurity/crowdsec-spoa
 go 1.22.2
 
 require (
+	github.com/crowdsecurity/crowdsec v1.5.5
 	github.com/crowdsecurity/go-cs-bouncer v0.0.13
 	github.com/crowdsecurity/go-cs-lib v0.0.8
 	github.com/negasus/haproxy-spoe-go v1.0.5
@@ -19,7 +20,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
-	github.com/crowdsecurity/crowdsec v1.5.5 // indirect
 	github.com/fatih/color v1.15.0 // indirect
 	github.com/go-openapi/analysis v0.21.4 // indirect
 	github.com/go-openapi/errors v0.20.4 // indirect
