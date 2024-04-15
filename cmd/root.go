@@ -169,14 +169,14 @@ func Execute() error {
 	}
 
 	g.Go(func() error {
-		if err := spoad.ServeTCP(); err != nil {
+		if err := spoad.ServeTCP(ctx); err != nil {
 			return fmt.Errorf("failed to serve TCP: %w", err)
 		}
 		return nil
 	})
 
 	g.Go(func() error {
-		if err := spoad.ServeUnix(); err != nil {
+		if err := spoad.ServeUnix(ctx); err != nil {
 			return fmt.Errorf("failed to serve Unix: %w", err)
 		}
 		return nil
@@ -187,6 +187,8 @@ func Execute() error {
 	if err := g.Wait(); err != nil {
 		return fmt.Errorf("process terminated with error: %w", err)
 	}
+
+	log.Info("Shutting down")
 
 	return nil
 }
