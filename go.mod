@@ -3,7 +3,7 @@ module github.com/crowdsecurity/crowdsec-spoa
 go 1.22.2
 
 require (
-	github.com/crowdsecurity/crowdsec v1.5.5
+	github.com/crowdsecurity/crowdsec v1.6.0
 	github.com/crowdsecurity/go-cs-bouncer v0.0.13
 	github.com/crowdsecurity/go-cs-lib v0.0.8
 	github.com/negasus/haproxy-spoe-go v1.0.5
@@ -31,6 +31,7 @@ require (
 	github.com/go-openapi/swag v0.22.4 // indirect
 	github.com/go-openapi/validate v0.22.1 // indirect
 	github.com/goccy/go-yaml v1.11.2 // indirect
+	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
@@ -38,7 +39,6 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
