@@ -89,6 +89,7 @@ func (s *Spoa) ServeTCP(ctx context.Context) error {
 	errorChan := make(chan error, 1)
 
 	go func() {
+		defer close(errorChan)
 		if err := s.Server.Serve(s.ListenAddr); err != nil {
 			errorChan <- err
 		}
@@ -111,6 +112,7 @@ func (s *Spoa) ServeUnix(ctx context.Context) error {
 	errorChan := make(chan error, 1)
 
 	go func() {
+		defer close(errorChan)
 		if err := s.Server.Serve(s.ListenAddr); err != nil {
 			errorChan <- err
 		}
