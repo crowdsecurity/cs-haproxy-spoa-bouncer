@@ -2,14 +2,16 @@ package dataset
 
 import (
 	"net"
+	"slices"
 
 	log "github.com/sirupsen/logrus"
 )
 
+// The order matters since we use slices.Max to get the max value
 const (
 	Unknown Remediation = iota
-	Ban     Remediation = iota
 	Captcha Remediation = iota
+	Ban     Remediation = iota
 )
 
 type Remediation int
@@ -115,13 +117,7 @@ func (s *RangeSet) Contains(ip *net.IP) Remediation {
 	for _, v := range s.Items {
 		if v.CIDR.Contains(*ip) {
 			// Loop over all remediations
-			for _, r := range v.Remediation {
-				remediation = r
-				// if remediation is Ban, return it
-				if remediation == Ban {
-					break
-				}
-			}
+			remediation = slices.Max(v.Remediation)
 			break
 		}
 	}
@@ -166,12 +162,7 @@ func (s *StringSet) Contains(toCheck string) Remediation {
 	log.Tracef("Checking %s, current items: %+v", toCheck, s.Items)
 	remediation := Unknown
 	if v, ok := s.Items[toCheck]; ok {
-		for _, r := range v {
-			remediation = r
-			if remediation == Ban {
-				break
-			}
-		}
+		remediation = slices.Max(v)
 	}
 	return remediation
 }
