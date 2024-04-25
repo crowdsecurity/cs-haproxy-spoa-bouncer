@@ -11,6 +11,7 @@ import (
 
 type DataSet struct {
 	CIDRSet *CIDRSet
+	IPSet   *IPSet
 	CNSet   *CNSet
 }
 
@@ -19,9 +20,12 @@ func New() *DataSet {
 	CIDRSet.Init()
 	CNSet := CNSet{}
 	CNSet.Init()
+	IPSet := IPSet{}
+	IPSet.Init()
 	return &DataSet{
 		CIDRSet: &CIDRSet,
 		CNSet:   &CNSet,
+		IPSet:   &IPSet,
 	}
 }
 
@@ -41,30 +45,26 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	}
 }
 
-func (d *DataSet) CheckIP(ip *net.IP) *Item[net.IPNet] {
+func (d *DataSet) CheckIP(ip *net.IP) Remediation {
+	ipCheck := d.IPSet.Contains(ip.String())
+	if ipCheck != Unknown {
+		return ipCheck
+	}
 	return d.CIDRSet.Contains(ip)
 }
 
-func (d *DataSet) CheckCN(cn *string) *Item[string] {
+func (d *DataSet) CheckCN(cn string) Remediation {
 	return d.CNSet.Contains(cn)
 }
 
 func (d *DataSet) RemoveDecision(decision *models.Decision) error {
 	switch strings.ToLower(*decision.Scope) {
 	case "ip":
-		ip := *decision.Value
-		parsedIP := parseIP(ip)
-		switch len(parsedIP) {
-		case net.IPv4len:
-			ip += "/32"
-		case net.IPv6len:
-			ip += "/128"
-		}
-		return d.RemoveCIDR(&ip, RemedationFromString(*decision.Type))
+		return d.RemoveIP(*decision.Value, RemedationFromString(*decision.Type))
 	case "range":
 		return d.RemoveCIDR(decision.Value, RemedationFromString(*decision.Type))
 	case "country":
-		return d.RemoveCN(decision.Value, RemedationFromString(*decision.Type))
+		return d.RemoveCN(*decision.Value, RemedationFromString(*decision.Type))
 	}
 	return fmt.Errorf("unknown scope %s", *decision.Scope)
 }
@@ -72,19 +72,11 @@ func (d *DataSet) RemoveDecision(decision *models.Decision) error {
 func (d *DataSet) AddDecision(decision *models.Decision) error {
 	switch strings.ToLower(*decision.Scope) {
 	case "ip":
-		ip := *decision.Value
-		parsedIP := parseIP(ip)
-		switch len(parsedIP) {
-		case net.IPv4len:
-			ip += "/32"
-		case net.IPv6len:
-			ip += "/128"
-		}
-		return d.AddCIDR(&ip, RemedationFromString(*decision.Type))
+		return d.AddIP(*decision.Value, RemedationFromString(*decision.Type))
 	case "range":
 		return d.AddCIDR(decision.Value, RemedationFromString(*decision.Type))
 	case "country":
-		return d.AddCN(decision.Value, RemedationFromString(*decision.Type))
+		return d.AddCN(*decision.Value, RemedationFromString(*decision.Type))
 	}
 	return fmt.Errorf("unknown scope %s", *decision.Scope)
 }
@@ -98,8 +90,16 @@ func (d *DataSet) AddCIDR(cidr *string, remediation Remediation) error {
 	return nil
 }
 
-func (d *DataSet) AddCN(cn *string, remediation Remediation) error {
-	if *cn == "" {
+func (d *DataSet) AddIP(ip string, remediation Remediation) error {
+	if ip == "" {
+		return fmt.Errorf("empty IP")
+	}
+	d.IPSet.Add(ip, remediation)
+	return nil
+}
+
+func (d *DataSet) AddCN(cn string, remediation Remediation) error {
+	if cn == "" {
 		return fmt.Errorf("empty CN")
 	}
 	d.CNSet.Add(cn, remediation)
@@ -115,18 +115,18 @@ func (d *DataSet) RemoveCIDR(cidr *string, remediation Remediation) error {
 	return nil
 }
 
-func (d *DataSet) RemoveCN(cn *string, remediation Remediation) error {
-	if *cn == "" {
+func (d *DataSet) RemoveCN(cn string, remediation Remediation) error {
+	if cn == "" {
 		return fmt.Errorf("empty CN")
 	}
 	d.CNSet.Remove(cn, remediation)
 	return nil
 }
 
-func parseIP(ip string) net.IP {
-	parsedIP := net.ParseIP(ip)
-	if ipv4 := parsedIP.To4(); ipv4 != nil {
-		return ipv4
+func (d *DataSet) RemoveIP(ip string, remediation Remediation) error {
+	if ip == "" {
+		return fmt.Errorf("empty IP")
 	}
-	return parsedIP
+	d.IPSet.Remove(ip, remediation)
+	return nil
 }

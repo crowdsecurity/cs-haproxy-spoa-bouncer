@@ -6,13 +6,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type BaseSetInt interface {
-	Init()
-	Add(interface{})
-	Remove(interface{})
-	Contains(interface{}) bool
-}
-
 const (
 	Unknown Remediation = iota
 	Ban     Remediation = iota
@@ -43,96 +36,81 @@ func RemedationFromString(s string) Remediation {
 	}
 }
 
-type Item[c net.IPNet | string] struct {
-	Value       *c
-	Remediation Remediation
+type StringSet struct {
+	Items map[string]Remediation
 }
 
-type Set[c net.IPNet | string] struct {
-	BaseSetInt
-	Items []Item[c]
+type RangeSet struct {
+	Items []struct {
+		CIDR        *net.IPNet
+		Remediation Remediation
+	}
 }
 
 type CIDRSet struct {
-	Set[net.IPNet]
+	RangeSet
+}
+
+type IPSet struct {
+	StringSet
 }
 
 type CNSet struct {
-	Set[string]
+	StringSet
 }
 
-func (s *CIDRSet) Init() {
-	s.Items = make([]Item[net.IPNet], 0)
+func (s *RangeSet) Init() {
+	s.Items = make([]struct {
+		CIDR        *net.IPNet
+		Remediation Remediation
+	}, 0)
 }
 
-func (s *CIDRSet) Add(cidr *net.IPNet, remediation Remediation) {
-	s.Items = append(s.Items, Item[net.IPNet]{Value: cidr, Remediation: remediation})
+func (s *RangeSet) Add(cidr *net.IPNet, remediation Remediation) {
+	s.Items = append(s.Items, struct {
+		CIDR        *net.IPNet
+		Remediation Remediation
+	}{
+		CIDR:        cidr,
+		Remediation: remediation,
+	})
 }
 
-func (s *CIDRSet) Remove(cidr *net.IPNet, remediation Remediation) {
-	comparable := cidr.String()
-	newItems := make([]Item[net.IPNet], 0, len(s.Items))
-	for _, v := range s.Items {
-		if v.Value == nil {
-			continue // skip nil values
-		}
-		if v.Value.String() != comparable || (v.Value.String() == comparable && v.Remediation != remediation) {
-			newItems = append(newItems, v)
+func (s *RangeSet) Remove(cidr *net.IPNet, remediation Remediation) {
+	for i, v := range s.Items {
+		if v.CIDR.String() == cidr.String() && v.Remediation == remediation {
+			s.Items = append(s.Items[:i], s.Items[i+1:]...)
+			break
 		}
 	}
-	s.Items = newItems
 }
 
-func (s *CIDRSet) Contains(ip *net.IP) *Item[net.IPNet] {
+func (s *RangeSet) Contains(ip *net.IP) Remediation {
 	log.Tracef("Checking IP %s, current items: %d", ip.String(), len(s.Items))
-	var ipNet *Item[net.IPNet]
 	for _, v := range s.Items {
-		if v.Value == nil {
-			continue // skip nil values
-		}
-		if v.Value.Contains(*ip) {
-			ipNet = &v
-			if v.Remediation == Ban {
-				break
-			}
+		if v.CIDR.Contains(*ip) {
+			return v.Remediation
 		}
 	}
-	return ipNet
+	return Unknown
 }
 
-func (s *CNSet) Init() {
-	s.Items = make([]Item[string], 0)
+func (s *StringSet) Init() {
+	s.Items = make(map[string]Remediation, 0)
 }
 
-func (s *CNSet) Add(cn *string, remediation Remediation) {
-	s.Items = append(s.Items, Item[string]{Value: cn, Remediation: remediation})
+func (s *StringSet) Add(toAdd string, remediation Remediation) {
+	s.Items[toAdd] = remediation
 }
 
-func (s *CNSet) Remove(cn *string, remediation Remediation) {
-	newItems := make([]Item[string], 0, len(s.Items))
-	for _, v := range s.Items {
-		if v.Value == nil {
-			continue // skip nil values
-		}
-		if *v.Value != *cn || (*v.Value == *cn && v.Remediation != remediation) {
-			newItems = append(newItems, v)
-		}
+func (s *StringSet) Remove(toRemove string, remediation Remediation) {
+	delete(s.Items, toRemove)
+}
+
+func (s *StringSet) Contains(toCheck string) Remediation {
+	log.Tracef("Checking CN %s, current items: %d", toCheck, len(s.Items))
+	if v, ok := s.Items[toCheck]; ok {
+		return v
 	}
-	s.Items = newItems
-}
-
-func (s *CNSet) Contains(cn *string) *Item[string] {
-	var Value *Item[string]
-	for _, v := range s.Items {
-		if v.Value == nil {
-			continue // skip nil values
-		}
-		if *v.Value == *cn {
-			Value = &v
-			if v.Remediation == Ban {
-				break
-			}
-		}
-	}
-	return Value
+	return Unknown
 }
