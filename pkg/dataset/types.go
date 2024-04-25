@@ -37,13 +37,13 @@ func RemedationFromString(s string) Remediation {
 }
 
 type StringSet struct {
-	Items map[string]Remediation
+	Items map[string][]Remediation
 }
 
 type RangeSet struct {
 	Items []struct {
 		CIDR        *net.IPNet
-		Remediation Remediation
+		Remediation []Remediation
 	}
 }
 
@@ -62,55 +62,116 @@ type CNSet struct {
 func (s *RangeSet) Init() {
 	s.Items = make([]struct {
 		CIDR        *net.IPNet
-		Remediation Remediation
+		Remediation []Remediation
 	}, 0)
 }
 
 func (s *RangeSet) Add(cidr *net.IPNet, remediation Remediation) {
+	for i := range s.Items {
+		if s.Items[i].CIDR.String() == cidr.String() {
+			s.Items[i].Remediation = append(s.Items[i].Remediation, remediation)
+			return
+		}
+	}
 	s.Items = append(s.Items, struct {
 		CIDR        *net.IPNet
-		Remediation Remediation
+		Remediation []Remediation
 	}{
 		CIDR:        cidr,
-		Remediation: remediation,
+		Remediation: []Remediation{remediation},
 	})
 }
 
 func (s *RangeSet) Remove(cidr *net.IPNet, remediation Remediation) {
 	for i, v := range s.Items {
-		if v.CIDR.String() == cidr.String() && v.Remediation == remediation {
-			s.Items = append(s.Items[:i], s.Items[i+1:]...)
+		if v.CIDR.String() == cidr.String() {
+			// if there's only one remediation, remove the whole entry
+			if len(v.Remediation) == 1 {
+				if i < len(s.Items)-1 {
+					s.Items = append(s.Items[:i], s.Items[i+1:]...)
+				} else {
+					s.Items = s.Items[:i]
+				}
+				return
+			}
+			// otherwise, remove the remediation
+			for i, r := range v.Remediation {
+				if r == remediation {
+					if i < len(v.Remediation)-1 {
+						s.Items[i].Remediation = append(v.Remediation[:i], v.Remediation[i+1:]...)
+					} else {
+						s.Items[i].Remediation = v.Remediation[:i]
+					}
+				}
+			}
 			break
 		}
 	}
 }
 
 func (s *RangeSet) Contains(ip *net.IP) Remediation {
-	log.Tracef("Checking IP %s, current items: %d", ip.String(), len(s.Items))
+	log.Tracef("Checking IP %s, current items: %+v", ip.String(), s.Items)
+	remediation := Unknown
 	for _, v := range s.Items {
 		if v.CIDR.Contains(*ip) {
-			return v.Remediation
+			// Loop over all remediations
+			for _, r := range v.Remediation {
+				remediation = r
+				// if remediation is Ban, return it
+				if remediation == Ban {
+					break
+				}
+			}
+			break
 		}
 	}
-	return Unknown
+	return remediation
 }
 
 func (s *StringSet) Init() {
-	s.Items = make(map[string]Remediation, 0)
+	s.Items = make(map[string][]Remediation, 0)
 }
 
 func (s *StringSet) Add(toAdd string, remediation Remediation) {
-	s.Items[toAdd] = remediation
+	if _, ok := s.Items[toAdd]; ok {
+		s.Items[toAdd] = append(s.Items[toAdd], remediation)
+		return
+	}
+	s.Items[toAdd] = []Remediation{remediation}
 }
 
 func (s *StringSet) Remove(toRemove string, remediation Remediation) {
-	delete(s.Items, toRemove)
+	if v, ok := s.Items[toRemove]; ok {
+		log.Tracef("Removing %s, current items: %+v", toRemove, s.Items)
+		// if there's only one remediation, remove the whole entry
+		if len(v) == 1 {
+			delete(s.Items, toRemove)
+			return
+		}
+		// otherwise, remove the remediation
+		for i, r := range v {
+			if r == remediation {
+				if i < len(v)-1 {
+					s.Items[toRemove] = append(v[:i], v[i+1:]...)
+				} else {
+					s.Items[toRemove] = v[:i]
+				}
+				break
+			}
+		}
+	}
 }
 
 func (s *StringSet) Contains(toCheck string) Remediation {
-	log.Tracef("Checking CN %s, current items: %d", toCheck, len(s.Items))
+	log.Tracef("Checking %s, current items: %+v", toCheck, s.Items)
+	remediation := Unknown
 	if v, ok := s.Items[toCheck]; ok {
-		return v
+		for _, r := range v {
+			remediation = r
+			if remediation == Ban {
+				break
+			}
+		}
 	}
-	return Unknown
+	return remediation
 }
