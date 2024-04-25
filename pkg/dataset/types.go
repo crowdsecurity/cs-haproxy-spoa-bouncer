@@ -85,14 +85,14 @@ func (s *RangeSet) Add(cidr *net.IPNet, remediation Remediation) {
 }
 
 func (s *RangeSet) Remove(cidr *net.IPNet, remediation Remediation) {
-	for i, v := range s.Items {
+	for index, v := range s.Items {
 		if v.CIDR.String() == cidr.String() {
 			// if there's only one remediation, remove the whole entry
 			if len(v.Remediation) == 1 {
-				if i < len(s.Items)-1 {
-					s.Items = append(s.Items[:i], s.Items[i+1:]...)
+				if index < len(s.Items)-1 {
+					s.Items = append(s.Items[:index], s.Items[index+1:]...)
 				} else {
-					s.Items = s.Items[:i]
+					s.Items = s.Items[:index]
 				}
 				return
 			}
@@ -100,13 +100,14 @@ func (s *RangeSet) Remove(cidr *net.IPNet, remediation Remediation) {
 			for i, r := range v.Remediation {
 				if r == remediation {
 					if i < len(v.Remediation)-1 {
-						s.Items[i].Remediation = append(v.Remediation[:i], v.Remediation[i+1:]...)
+						s.Items[index].Remediation = append(v.Remediation[:i], v.Remediation[i+1:]...)
 					} else {
-						s.Items[i].Remediation = v.Remediation[:i]
+						s.Items[index].Remediation = v.Remediation[:i]
 					}
+					break
 				}
 			}
-			break
+			return
 		}
 	}
 }
