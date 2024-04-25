@@ -20,6 +20,8 @@ services:
     image: traefik/whoami:latest
     networks:
       - crowdsec
+    command:
+       - --port=2020
 
   haproxy:
     image: haproxy:2.9.7-alpine

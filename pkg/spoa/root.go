@@ -151,8 +151,8 @@ func handlerWrapper(spoad *Spoa) func(req *request.Request) {
 		}
 
 		blocked := "allow"
-		if item := spoad.DataSet.CheckIP(&ip); item != nil && item.Remediation > 0 {
-			blocked = item.Remediation.String()
+		if remediation := spoad.DataSet.CheckIP(&ip); remediation > 0 {
+			blocked = remediation.String()
 		}
 
 		log.Printf("IP: %s, send score '%s'", ip.String(), blocked)
