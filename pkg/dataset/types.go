@@ -3,6 +3,7 @@ package dataset
 import (
 	"net"
 	"slices"
+	"sync"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -39,10 +40,12 @@ func RemedationFromString(s string) Remediation {
 }
 
 type StringSet struct {
+	sync.RWMutex
 	Items map[string][]Remediation
 }
 
 type RangeSet struct {
+	sync.RWMutex
 	Items []struct {
 		CIDR        *net.IPNet
 		Remediation []Remediation
@@ -69,6 +72,8 @@ func (s *RangeSet) Init() {
 }
 
 func (s *RangeSet) Add(cidr *net.IPNet, remediation Remediation) {
+	s.Lock()
+	defer s.Unlock()
 	for i := range s.Items {
 		if s.Items[i].CIDR.String() == cidr.String() {
 			s.Items[i].Remediation = append(s.Items[i].Remediation, remediation)
@@ -85,6 +90,8 @@ func (s *RangeSet) Add(cidr *net.IPNet, remediation Remediation) {
 }
 
 func (s *RangeSet) Remove(cidr *net.IPNet, remediation Remediation) {
+	s.Lock()
+	defer s.Unlock()
 	for index, v := range s.Items {
 		if v.CIDR.String() == cidr.String() {
 			// if there's only one remediation, remove the whole entry
@@ -113,6 +120,8 @@ func (s *RangeSet) Remove(cidr *net.IPNet, remediation Remediation) {
 }
 
 func (s *RangeSet) Contains(ip *net.IP) Remediation {
+	s.RLock()
+	defer s.RUnlock()
 	log.Tracef("Checking IP %s, current items: %+v", ip.String(), s.Items)
 	remediation := Unknown
 	for _, v := range s.Items {
@@ -130,6 +139,8 @@ func (s *StringSet) Init() {
 }
 
 func (s *StringSet) Add(toAdd string, remediation Remediation) {
+	s.Lock()
+	defer s.Unlock()
 	if _, ok := s.Items[toAdd]; ok {
 		s.Items[toAdd] = append(s.Items[toAdd], remediation)
 		return
@@ -138,6 +149,8 @@ func (s *StringSet) Add(toAdd string, remediation Remediation) {
 }
 
 func (s *StringSet) Remove(toRemove string, remediation Remediation) {
+	s.Lock()
+	defer s.Unlock()
 	if v, ok := s.Items[toRemove]; ok {
 		log.Tracef("Removing %s, current items: %+v", toRemove, s.Items)
 		// if there's only one remediation, remove the whole entry
@@ -160,6 +173,8 @@ func (s *StringSet) Remove(toRemove string, remediation Remediation) {
 }
 
 func (s *StringSet) Contains(toCheck string) Remediation {
+	s.RLock()
+	defer s.RUnlock()
 	log.Tracef("Checking %s, current items: %+v", toCheck, s.Items)
 	remediation := Unknown
 	if v, ok := s.Items[toCheck]; ok {
