@@ -17,11 +17,11 @@ type DataSet struct {
 
 func New() *DataSet {
 	CIDRSet := CIDRSet{}
-	CIDRSet.Init()
+	CIDRSet.Init("CIDRSet")
 	CNSet := CNSet{}
-	CNSet.Init()
+	CNSet.Init("CNSet")
 	IPSet := IPSet{}
-	IPSet.Init()
+	IPSet.Init("IPSet")
 	return &DataSet{
 		CIDRSet: &CIDRSet,
 		CNSet:   &CNSet,
