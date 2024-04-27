@@ -142,7 +142,9 @@ func (s *RangeSet) Contains(ip *net.IP) Remediation {
 			}
 		}
 	}
-	remediation = slices.Max(keys)
+	if len(keys) > 0 {
+		remediation = slices.Max(keys)
+	}
 	return remediation
 }
 
