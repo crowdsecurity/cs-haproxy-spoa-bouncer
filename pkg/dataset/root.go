@@ -60,11 +60,11 @@ func (d *DataSet) CheckCN(cn string) Remediation {
 func (d *DataSet) RemoveDecision(decision *models.Decision) error {
 	switch strings.ToLower(*decision.Scope) {
 	case "ip":
-		return d.RemoveIP(*decision.Value, RemedationFromString(*decision.Type))
+		return d.RemoveIP(*decision.Value, RemediationWithId{Remediation: RemedationFromString(*decision.Type), Id: decision.ID})
 	case "range":
-		return d.RemoveCIDR(decision.Value, RemedationFromString(*decision.Type))
+		return d.RemoveCIDR(decision.Value, RemediationWithId{Remediation: RemedationFromString(*decision.Type), Id: decision.ID})
 	case "country":
-		return d.RemoveCN(*decision.Value, RemedationFromString(*decision.Type))
+		return d.RemoveCN(*decision.Value, RemediationWithId{Remediation: RemedationFromString(*decision.Type), Id: decision.ID})
 	}
 	return fmt.Errorf("unknown scope %s", *decision.Scope)
 }
@@ -72,61 +72,61 @@ func (d *DataSet) RemoveDecision(decision *models.Decision) error {
 func (d *DataSet) AddDecision(decision *models.Decision) error {
 	switch strings.ToLower(*decision.Scope) {
 	case "ip":
-		return d.AddIP(*decision.Value, RemedationFromString(*decision.Type))
+		return d.AddIP(*decision.Value, RemediationWithId{Remediation: RemedationFromString(*decision.Type), Id: decision.ID})
 	case "range":
-		return d.AddCIDR(decision.Value, RemedationFromString(*decision.Type))
+		return d.AddCIDR(decision.Value, RemediationWithId{Remediation: RemedationFromString(*decision.Type), Id: decision.ID})
 	case "country":
-		return d.AddCN(*decision.Value, RemedationFromString(*decision.Type))
+		return d.AddCN(*decision.Value, RemediationWithId{Remediation: RemedationFromString(*decision.Type), Id: decision.ID})
 	}
 	return fmt.Errorf("unknown scope %s", *decision.Scope)
 }
 
-func (d *DataSet) AddCIDR(cidr *string, remediation Remediation) error {
+func (d *DataSet) AddCIDR(cidr *string, rid RemediationWithId) error {
 	_, ipnet, err := net.ParseCIDR(*cidr)
 	if err != nil {
 		return err
 	}
-	d.CIDRSet.Add(ipnet, remediation)
+	d.CIDRSet.Add(ipnet, rid)
 	return nil
 }
 
-func (d *DataSet) AddIP(ip string, remediation Remediation) error {
+func (d *DataSet) AddIP(ip string, rid RemediationWithId) error {
 	if ip == "" {
 		return fmt.Errorf("empty IP")
 	}
-	d.IPSet.Add(ip, remediation)
+	d.IPSet.Add(ip, rid)
 	return nil
 }
 
-func (d *DataSet) AddCN(cn string, remediation Remediation) error {
+func (d *DataSet) AddCN(cn string, rid RemediationWithId) error {
 	if cn == "" {
 		return fmt.Errorf("empty CN")
 	}
-	d.CNSet.Add(cn, remediation)
+	d.CNSet.Add(cn, rid)
 	return nil
 }
 
-func (d *DataSet) RemoveCIDR(cidr *string, remediation Remediation) error {
+func (d *DataSet) RemoveCIDR(cidr *string, rid RemediationWithId) error {
 	_, ipnet, err := net.ParseCIDR(*cidr)
 	if err != nil {
 		return err
 	}
-	d.CIDRSet.Remove(ipnet, remediation)
+	d.CIDRSet.Remove(ipnet, rid)
 	return nil
 }
 
-func (d *DataSet) RemoveCN(cn string, remediation Remediation) error {
+func (d *DataSet) RemoveCN(cn string, rid RemediationWithId) error {
 	if cn == "" {
 		return fmt.Errorf("empty CN")
 	}
-	d.CNSet.Remove(cn, remediation)
+	d.CNSet.Remove(cn, rid)
 	return nil
 }
 
-func (d *DataSet) RemoveIP(ip string, remediation Remediation) error {
+func (d *DataSet) RemoveIP(ip string, rid RemediationWithId) error {
 	if ip == "" {
 		return fmt.Errorf("empty IP")
 	}
-	d.IPSet.Remove(ip, remediation)
+	d.IPSet.Remove(ip, rid)
 	return nil
 }
