@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"fmt"
 	"net"
 	"slices"
 	"sync"
@@ -44,9 +45,57 @@ func RemedationFromString(s string) Remediation {
 	}
 }
 
+type RemediationIdsMap map[Remediation][]int64
+
+func (r *RemediationIdsMap) RemoveId(clog *log.Entry, remediation Remediation, id int64) error {
+	ids, ok := (*r)[remediation]
+	if !ok {
+		return fmt.Errorf("remediation %s not found", remediation.String())
+	}
+	index, ok := r.ContainsId(remediation, id)
+	if !ok {
+		return fmt.Errorf("id %d not found", id)
+	}
+	clog.Debugf("removing id %d", id)
+	if index < len(ids)-1 {
+		(*r)[remediation] = append(ids[:index], ids[index+1:]...)
+	} else {
+		(*r)[remediation] = ids[:index]
+	}
+
+	if len((*r)[remediation]) == 0 {
+		clog.Debugf("removing empty remediation %s", remediation.String())
+		delete(*r, remediation)
+	}
+
+	return nil
+}
+
+func (r *RemediationIdsMap) ContainsId(remediation Remediation, id int64) (int, bool) {
+	if ids, ok := (*r)[remediation]; ok {
+		for i, v := range ids {
+			if v == id {
+				return i, true
+			}
+		}
+	}
+	return -1, false
+}
+
+func (r *RemediationIdsMap) AddId(clog *log.Entry, remediation Remediation, id int64) {
+	ids, ok := (*r)[remediation]
+	if !ok {
+		clog.Debugf("remediation %s not found, creating", remediation.String())
+		(*r)[remediation] = []int64{id}
+		return
+	}
+	clog.Debugf("remediation %s found, appending id %d", remediation.String(), id)
+	(*r)[remediation] = append(ids, id)
+}
+
 type StringSet struct {
 	sync.RWMutex
-	Items  map[string]map[Remediation][]int64
+	Items  map[string]RemediationIdsMap
 	logger *log.Entry
 }
 
@@ -54,7 +103,7 @@ type RangeSet struct {
 	sync.RWMutex
 	Items []struct {
 		CIDR         *net.IPNet
-		Remediations map[Remediation][]int64
+		Remediations RemediationIdsMap
 	}
 	logger *log.Entry
 }
@@ -74,7 +123,7 @@ type CNSet struct {
 func (s *RangeSet) Init(logAlias string) {
 	s.Items = make([]struct {
 		CIDR         *net.IPNet
-		Remediations map[Remediation][]int64
+		Remediations RemediationIdsMap
 	}, 0)
 	s.logger = log.WithField("type", "range").WithField("alias", logAlias)
 	s.logger.Debugf("initialized")
@@ -88,13 +137,7 @@ func (s *RangeSet) Add(cidr *net.IPNet, rid RemediationWithId) {
 		if s.Items[i].CIDR.String() == cidr.String() {
 			s.Lock()
 			valueLog.Debug("already exists")
-			if _, ok := s.Items[i].Remediations[rid.Remediation]; ok {
-				valueLog.Debugf("already has %s appending id", rid.Remediation.String())
-				s.Items[i].Remediations[rid.Remediation] = append(s.Items[i].Remediations[rid.Remediation], rid.Id)
-				return
-			}
-			valueLog.Debugf("does not have %s creating and adding id", rid.Remediation.String())
-			s.Items[i].Remediations[rid.Remediation] = []int64{rid.Id}
+			s.Items[i].Remediations.AddId(valueLog, rid.Remediation, rid.Id)
 			return
 		}
 	}
@@ -102,7 +145,7 @@ func (s *RangeSet) Add(cidr *net.IPNet, rid RemediationWithId) {
 	valueLog.Debug("not found, creating new entry")
 	s.Items = append(s.Items, struct {
 		CIDR         *net.IPNet
-		Remediations map[Remediation][]int64
+		Remediations RemediationIdsMap
 	}{CIDR: cidr, Remediations: map[Remediation][]int64{rid.Remediation: {rid.Id}}})
 }
 
@@ -114,26 +157,12 @@ func (s *RangeSet) Remove(cidr *net.IPNet, rid RemediationWithId) {
 			s.Lock()
 			defer s.Unlock()
 			valueLog.Debug("found")
-			ids, ok := v.Remediations[rid.Remediation]
-			if !ok {
-				valueLog.Errorf("remediation %s not found", rid.Remediation.String())
+
+			if err := v.Remediations.RemoveId(valueLog, rid.Remediation, rid.Id); err != nil {
+				valueLog.Error(err)
 				return
 			}
-			for i, id := range ids {
-				if id == rid.Id {
-					valueLog.Debugf("found id %d", rid.Id)
-					if i < len(ids)-1 {
-						v.Remediations[rid.Remediation] = append(ids[:i], ids[i+1:]...)
-					} else {
-						v.Remediations[rid.Remediation] = ids[:i]
-					}
-					break
-				}
-			}
-			if len(v.Remediations[rid.Remediation]) == 0 {
-				valueLog.Debugf("removing empty remediation %s", rid.Remediation.String())
-				delete(v.Remediations, rid.Remediation)
-			}
+
 			if len(v.Remediations) == 0 {
 				valueLog.Debug("removing as it has no remediations")
 				if index < len(s.Items)-1 {
@@ -173,7 +202,7 @@ func (s *RangeSet) Contains(ip *net.IP) Remediation {
 }
 
 func (s *StringSet) Init(logAlias string) {
-	s.Items = make(map[string]map[Remediation][]int64, 0)
+	s.Items = make(map[string]RemediationIdsMap, 0)
 	s.logger = log.WithField("type", "string").WithField("alias", logAlias)
 	s.logger.Debugf("initialized")
 }
@@ -184,15 +213,9 @@ func (s *StringSet) Add(toAdd string, rid RemediationWithId) {
 	valueLog := s.logger.WithField("value", toAdd)
 	valueLog.Debug("adding")
 	s.logger.Tracef("current items: %+v", s.Items)
-	if _, ok := s.Items[toAdd]; ok {
+	if v, ok := s.Items[toAdd]; ok {
 		valueLog.Debug("already exists")
-		if _, ok := s.Items[toAdd][rid.Remediation]; ok {
-			valueLog.Debugf("already has %s appending id", rid.Remediation.String())
-			s.Items[toAdd][rid.Remediation] = append(s.Items[toAdd][rid.Remediation], rid.Id)
-			return
-		}
-		valueLog.Debugf("does not have %s creating and adding id", rid.Remediation.String())
-		s.Items[toAdd][rid.Remediation] = []int64{rid.Id}
+		v.AddId(valueLog, rid.Remediation, rid.Id)
 		return
 	}
 	valueLog.Debug("not found, creating new entry")
@@ -211,26 +234,12 @@ func (s *StringSet) Remove(toRemove string, rid RemediationWithId) {
 		return
 	}
 	valueLog.Debug("found")
-	ids, ok := v[rid.Remediation]
-	if !ok {
-		valueLog.Errorf("remediation %s not found", rid.Remediation.String())
+
+	if err := v.RemoveId(valueLog, rid.Remediation, rid.Id); err != nil {
+		valueLog.Error(err)
 		return
 	}
-	for i, id := range ids {
-		if id == rid.Id {
-			valueLog.Debugf("found id %d", rid.Id)
-			if i < len(ids)-1 {
-				s.Items[toRemove][rid.Remediation] = append(ids[:i], ids[i+1:]...)
-			} else {
-				s.Items[toRemove][rid.Remediation] = ids[:i]
-			}
-			break
-		}
-	}
-	if len(s.Items[toRemove][rid.Remediation]) == 0 {
-		valueLog.Debugf("removing empty remediation %s", rid.Remediation.String())
-		delete(s.Items[toRemove], rid.Remediation)
-	}
+
 	if len(s.Items[toRemove]) == 0 {
 		valueLog.Debugf("removing as it has no remediations")
 		delete(s.Items, toRemove)

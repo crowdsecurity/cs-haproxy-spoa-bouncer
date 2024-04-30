@@ -15,5 +15,6 @@ COPY --from=build /go/src/cs-spoa-bouncer/config/crowdsec-spoa-bouncer.yaml /etc
 
 ## Create a socket for the spoa to inherit root:haproxy user from official haproxy image
 RUN touch /run/crowdsec-spoa.sock && chown 0:99 /run/crowdsec-spoa.sock && chmod 660 /run/crowdsec-spoa.sock
+RUN mkdir /templates && chown 0:99 /templates && chmod 660 /templates
 
 ENTRYPOINT ["/usr/local/bin/crowdsec-spoa-bouncer", "-c", "/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml"]
