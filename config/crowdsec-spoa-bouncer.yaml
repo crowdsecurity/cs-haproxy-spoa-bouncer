@@ -17,12 +17,12 @@ insecure_skip_verify: false
 listen_addr: 127.0.0.1:9000
 #listen_socket: /run/crowdsec-spoa.sock
 
-hosts:
-  - host: *
-    captcha:
-      site_key: 123
-      secret_key: 123
-      provider: hcaptcha
+# hosts:
+#   - host: *
+#     captcha:
+#       site_key: 123
+#       secret_key: 123
+#       provider: hcaptcha
       # template: |
       #   can be string template
       # template_file: /path/to/template
