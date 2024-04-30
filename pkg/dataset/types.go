@@ -11,6 +11,7 @@ import (
 
 // The order matters since we use slices.Max to get the max value
 const (
+	None    Remediation = -1
 	Unknown Remediation = iota
 	Captcha Remediation = iota
 	Ban     Remediation = iota
@@ -29,8 +30,10 @@ func (r Remediation) String() string {
 		return "ban"
 	case Captcha:
 		return "captcha"
-	default:
+	case Unknown:
 		return "unknown"
+	default:
+		return "none"
 	}
 }
 
@@ -164,7 +167,7 @@ func (s *RangeSet) Remove(cidr *net.IPNet, rid RemediationWithId) {
 			}
 
 			if len(v.Remediations) == 0 {
-				valueLog.Debug("removing as it has no remediations")
+				valueLog.Debug("removing as it has no active remediations")
 				if index < len(s.Items)-1 {
 					s.Items = append(s.Items[:index], s.Items[index+1:]...)
 				} else {
@@ -183,7 +186,7 @@ func (s *RangeSet) Contains(ip *net.IP) Remediation {
 	valueLog := s.logger.WithField("value", ip.String())
 	valueLog.Debug("checking value")
 	s.logger.Tracef("current items: %+v", s.Items)
-	remediation := Unknown
+	remediation := None
 	keys := make([]Remediation, 0)
 	for _, v := range s.Items {
 		if v.CIDR.Contains(*ip) {
@@ -241,7 +244,7 @@ func (s *StringSet) Remove(toRemove string, rid RemediationWithId) {
 	}
 
 	if len(s.Items[toRemove]) == 0 {
-		valueLog.Debugf("removing as it has no remediations")
+		valueLog.Debugf("removing as it has no active remediations")
 		delete(s.Items, toRemove)
 	}
 }
@@ -252,7 +255,7 @@ func (s *StringSet) Contains(toCheck string) Remediation {
 	valueLog := s.logger.WithField("value", toCheck)
 	valueLog.Debug("checking value")
 	s.logger.Tracef("current items: %+v", s.Items)
-	remediation := Unknown
+	remediation := None
 	if v, ok := s.Items[toCheck]; ok {
 		valueLog.Debug("found")
 		keys := make([]Remediation, 0, len(v))

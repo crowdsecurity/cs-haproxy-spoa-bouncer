@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -185,10 +186,22 @@ func Execute() error {
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
 
 	if err := g.Wait(); err != nil {
-		return fmt.Errorf("process terminated with error: %w", err)
+		switch err.Error() {
+		case "received SIGTERM":
+			log.Info("Received SIGTERM, shutting down")
+		case "received interrupt":
+			log.Info("Received interrupt, shutting down")
+		default:
+			return err
+		}
 	}
 
-	log.Info("Shutting down")
+	cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := spoad.Shutdown(cancelCtx); err != nil {
+		return fmt.Errorf("failed to shutdown server: %s", err)
+	}
 
 	return nil
 }

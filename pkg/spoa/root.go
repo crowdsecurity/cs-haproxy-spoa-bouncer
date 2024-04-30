@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"syscall"
 
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
@@ -19,12 +20,19 @@ type Spoa struct {
 	ListenAddr   net.Listener
 	ListenSocket net.Listener
 	Server       *agent.Agent
+	HAWaitGroup  *sync.WaitGroup
 	DataSet      *dataset.DataSet
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
 func New(cfg *cfg.BouncerConfig, dataset *dataset.DataSet) (*Spoa, error) {
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Spoa{
-		DataSet: dataset,
+		DataSet:     dataset,
+		HAWaitGroup: &sync.WaitGroup{},
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 
 	if cfg.ListenAddr != "" {
@@ -85,7 +93,6 @@ func (s *Spoa) ServeTCP(ctx context.Context) error {
 	}
 	log.Infof("Serving TCP server on %s", s.ListenAddr.Addr().String())
 
-	defer s.ListenAddr.Close()
 	errorChan := make(chan error, 1)
 
 	go func() {
@@ -126,8 +133,39 @@ func (s *Spoa) ServeUnix(ctx context.Context) error {
 	}
 }
 
+func (s *Spoa) Shutdown(ctx context.Context) error {
+	log.Info("Shutting down SPOA")
+
+	doneChan := make(chan struct{})
+
+	if s.ListenAddr != nil {
+		s.ListenAddr.Close()
+	}
+
+	go func() {
+		s.cancel()
+		s.HAWaitGroup.Wait()
+		close(doneChan)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-doneChan:
+		return nil
+	}
+}
+
 func handlerWrapper(spoad *Spoa) func(req *request.Request) {
 	return func(req *request.Request) {
+		spoad.HAWaitGroup.Add(1)
+		defer spoad.HAWaitGroup.Done()
+
+		if spoad.ctx.Err() != nil {
+			log.Warn("context is done, skipping request")
+			return
+		}
+
 		log.Printf("handle request EngineID: '%s', StreamID: '%d', FrameID: '%d' with %d messages\n", req.EngineID, req.StreamID, req.FrameID, req.Messages.Len())
 
 		messageName := "crowdsec-req"
