@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -24,6 +26,7 @@ type Spoa struct {
 	DataSet      *dataset.DataSet
 	ctx          context.Context
 	cancel       context.CancelFunc
+	cfg          *cfg.BouncerConfig
 }
 
 func New(cfg *cfg.BouncerConfig, dataset *dataset.DataSet) (*Spoa, error) {
@@ -33,6 +36,7 @@ func New(cfg *cfg.BouncerConfig, dataset *dataset.DataSet) (*Spoa, error) {
 		HAWaitGroup: &sync.WaitGroup{},
 		ctx:         ctx,
 		cancel:      cancel,
+		cfg:         cfg,
 	}
 
 	if cfg.ListenAddr != "" {
@@ -188,13 +192,84 @@ func handlerWrapper(spoad *Spoa) func(req *request.Request) {
 			return
 		}
 
-		blocked := "allow"
-		if remediation := spoad.DataSet.CheckIP(&ip); remediation > 0 {
-			blocked = remediation.String()
+		remediation := spoad.DataSet.CheckIP(&ip)
+		hString, ok := mes.KV.Get("headers")
+		if !ok {
+			log.Printf("var 'headers' not found in message")
+			return
+		}
+		headers, err := readHeaders(hString.(string))
+		if err != nil {
+			log.Printf("failed to parse headers: %v", err)
+			return
+		}
+		host := spoad.cfg.Hosts.MatchFirstHost(headers.Get("Host"))
+		if host == nil {
+			log.Printf("host not found")
+			return
+		}
+		if remediation > 0 {
+			switch remediation {
+			case dataset.Ban:
+				//Handle ban
+				host.Ban.InjectKeyValues(&req.Actions)
+			case dataset.Captcha:
+				// Handle captcha
+				// Check if IP is within grace period
+				// host.Captcha.CheckGrace(&ip)
+				// We have to compile the request back together then check
+				// If within grace, revert to allow
+				// if not within grace we inject the key values
+				if err := host.Captcha.InjectKeyValues(&req.Actions); err != nil {
+					remediation = dataset.Ban // fallback to ban currently but we configure on host level
+				}
+			}
+			req.Actions.SetVar(action.ScopeTransaction, "remediation", remediation)
 		}
 
-		log.Printf("IP: %s, send score '%s'", ip.String(), blocked)
-
-		req.Actions.SetVar(action.ScopeTransaction, "ip_score", blocked)
+		// Check if remediation is allow || we invent a configuration option to check request against appsec
+		var body string
+		var method string
+		var url string
+		if method, ok := mes.KV.Get("method"); ok {
+			if _, ok := method.(string); ok {
+				method = strings.ToUpper(method.(string))
+			}
+		}
+		if body, ok := mes.KV.Get("body"); ok {
+			if _, ok := body.(string); ok {
+				body = body.(string)
+			}
+		}
+		if url, ok := mes.KV.Get("url"); ok {
+			if _, ok := url.(string); ok {
+				url = url.(string)
+			}
+		}
+		request, err := http.NewRequest(method, url, strings.NewReader(body))
+		if err != nil {
+			log.Printf("failed to create request: %v", err)
+			return
+		}
+		request.Header = headers
 	}
+}
+
+func readHeaders(headers string) (http.Header, error) {
+	h := http.Header{}
+	hs := strings.Split(headers, "\r\n")
+
+	for _, header := range hs {
+		if header == "" {
+			continue
+		}
+
+		kv := strings.SplitN(header, ":", 2)
+		if len(kv) != 2 {
+			return nil, fmt.Errorf("invalid header: %q", header)
+		}
+
+		h.Add(strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]))
+	}
+	return h, nil
 }

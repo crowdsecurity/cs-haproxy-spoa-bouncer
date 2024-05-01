@@ -16,7 +16,11 @@ COPY --from=build /go/src/cs-spoa-bouncer/docker/docker_start.sh /docker_start.s
 
 ## Create a socket for the spoa to inherit root:haproxy user from official haproxy image
 RUN touch /run/crowdsec-spoa.sock && chown 0:99 /run/crowdsec-spoa.sock && chmod 660 /run/crowdsec-spoa.sock
+
+## Copy templates
 RUN mkdir /templates && chown 0:99 /templates && chmod 660 /templates
+COPY --from=build /go/src/cs-spoa-bouncer/templates/* /templates/
+
 RUN chmod +x /docker_start.sh
 
 ENTRYPOINT ["/docker_start.sh"]
