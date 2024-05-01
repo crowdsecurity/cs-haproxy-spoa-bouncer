@@ -3,24 +3,21 @@ package captcha
 import (
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
+	"github.com/negasus/haproxy-spoe-go/action"
 	log "github.com/sirupsen/logrus"
 )
 
 type Captcha struct {
-	Provider     string             `yaml:"provider"`
-	SecretKey    string             `yaml:"secret_key"`
-	SiteKey      string             `yaml:"site_key"`
-	TemplatePath string             `yaml:"template_path"`
-	template     *template.Template `yaml:"-"`
-	logger       *log.Entry         `yaml:"-"`
-	client       *http.Client       `yaml:"-"`
+	Provider  string       `yaml:"provider"`
+	SecretKey string       `yaml:"secret_key"`
+	SiteKey   string       `yaml:"site_key"`
+	logger    *log.Entry   `yaml:"-"`
+	client    *http.Client `yaml:"-"`
 }
 
 func (c *Captcha) Init(logger *log.Entry) error {
@@ -36,32 +33,16 @@ func (c *Captcha) InitLogger(logger *log.Entry) {
 	c.logger = logger.WithField("type", "captcha")
 }
 
-func (c *Captcha) InitTemplate() error {
-	// check if user provided a custom template
-	if c.TemplatePath != "" {
-		b, err := os.ReadFile(c.TemplatePath)
-		if err != nil {
-			return err
-		}
-		c.template, err = template.New("captcha").Parse(string(b))
-		if err != nil {
-			return err
-		}
-	}
-
-	// if template is nil the user did not provide a template
-	if c.template == nil {
-		var err error
-		c.template, err = template.New("captcha").Parse(DefaultCaptchaTemplate)
-		if err != nil {
-			return err
-		}
-	}
+func (c *Captcha) InjectKeyValues(actions *action.Actions) error {
 
 	if err := c.IsValid(); err != nil {
-		c.template = nil
-		c.logger.WithError(err).Error("invalid captcha configuration")
+		c.logger.Error("invalid captcha configuration")
+		return err
 	}
+
+	actions.SetVar(action.ScopeTransaction, "captcha_site_key", c.SiteKey)
+	actions.SetVar(action.ScopeTransaction, "captcha_frontend_key", providers[c.Provider].key)
+	actions.SetVar(action.ScopeTransaction, "captcha_frontend_js", providers[c.Provider].js)
 
 	return nil
 }
@@ -122,19 +103,4 @@ func (c *Captcha) IsValid() error {
 	}
 
 	return nil
-}
-
-func (c *Captcha) Render(wr *os.File) error {
-	if c.template == nil {
-		c.logger.Debug("no template to render")
-		return nil
-	}
-
-	c.logger.Debug("rendering captcha template")
-
-	return c.template.ExecuteTemplate(wr, "captcha", map[string]string{
-		"SiteKey":     c.SiteKey,
-		"FrontendJS":  providers[c.Provider].js,
-		"FrontendKey": providers[c.Provider].key,
-	})
 }

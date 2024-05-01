@@ -1,7 +1,6 @@
 package host
 
 import (
-	"os"
 	"path/filepath"
 
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/ban"
@@ -22,6 +21,7 @@ func (h *Hosts) MatchFirstHost(toMatch string) *Host {
 	for _, host := range *h {
 		matched, err := filepath.Match(host.Host, toMatch)
 		if matched && err == nil {
+			host.logger.WithField("value", toMatch).Debug("matched host")
 			return host
 		}
 	}
@@ -39,37 +39,4 @@ func (h *Hosts) Init() {
 			host.logger.Error(err)
 		}
 	}
-}
-
-// Render pages initializes the templates for the hosts and renders the captcha and ban pages.
-func (h *Hosts) RenderPages(dir string) error {
-	for _, host := range *h {
-		if err := host.Ban.InitTemplate(); err != nil {
-			return err
-		}
-		if err := host.Captcha.InitTemplate(); err != nil {
-			return err
-		}
-		parentDir := filepath.Join(dir, host.Host)
-		if err := os.Mkdir(parentDir, 0755); err != nil {
-			return err
-		}
-		f, err := os.OpenFile(filepath.Join(parentDir, "captcha.html"), os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return err
-		}
-		if err := host.Captcha.Render(f); err != nil {
-			return err
-		}
-		f.Close()
-		f, err = os.OpenFile(filepath.Join(parentDir, "ban.html"), os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return err
-		}
-		if err := host.Ban.Render(f); err != nil {
-			return err
-		}
-		f.Close()
-	}
-	return nil
 }

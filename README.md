@@ -49,3 +49,8 @@ This outlines the goals of the project, and the current status of each.
   - [ ] AppSec
     - [ ] Documentation
     - [ ] Configuration File
+
+HAProxy response schema
+
+crowdsec.remediation = "captcha" | "ban" | "unknown" | "none"
+crowdsec.contact_us_url = ""
