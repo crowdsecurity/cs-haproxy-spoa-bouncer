@@ -55,6 +55,8 @@ func Execute() error {
 	flag.BoolVar(bouncerVersion, "version", *bouncerVersion, "display version and exit")
 	testConfig := flag.Bool("t", false, "test config and exit")
 	showConfig := flag.Bool("T", false, "show full config (.yaml + .yaml.local) and exit")
+	renderPages := flag.Bool("r", false, "render ban/captcha pages and exit")
+	renderPagesDir := flag.String("O", "/templates", "directory to render ban/captcha pages")
 
 	flag.Parse()
 
@@ -104,6 +106,18 @@ func Execute() error {
 
 	if *testConfig {
 		log.Info("config is valid")
+		return nil
+	}
+
+	config.Hosts.Init()
+
+	if *renderPages {
+		if *renderPagesDir == "" {
+			return errors.New("renderPagesDir is required")
+		}
+		if err := config.Hosts.RenderPages(*renderPagesDir); err != nil {
+			return fmt.Errorf("failed to render pages: %w", err)
+		}
 		return nil
 	}
 

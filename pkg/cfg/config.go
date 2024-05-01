@@ -6,6 +6,7 @@ import (
 
 	"gopkg.in/yaml.v2"
 
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/crowdsecurity/go-cs-lib/yamlpatch"
 )
 
@@ -19,6 +20,7 @@ type BouncerConfig struct {
 	Logging      LoggingConfig `yaml:",inline"`
 	ListenAddr   string        `yaml:"listen_addr"`
 	ListenSocket string        `yaml:"listen_socket"`
+	Hosts        host.Hosts    `yaml:"hosts"`
 
 	PrometheusConfig PrometheusConfig `yaml:"prometheus"`
 }
