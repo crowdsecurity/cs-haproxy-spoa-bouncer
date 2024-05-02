@@ -14,8 +14,13 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/negasus/haproxy-spoe-go/action"
 	"github.com/negasus/haproxy-spoe-go/agent"
+	"github.com/negasus/haproxy-spoe-go/message"
 	"github.com/negasus/haproxy-spoe-go/request"
 	log "github.com/sirupsen/logrus"
+)
+
+var (
+	message_names = []string{"crowdsec-http", "crowdsec-ip"}
 )
 
 type Spoa struct {
@@ -160,6 +165,104 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 	}
 }
 
+func (s *Spoa) handleHTTPRequest(_ *request.Request, mes *message.Message) {
+	remediation := dataset.None
+	rString, ok := mes.KV.Get("remediation")
+	if ok {
+		log.Debug("remediation: ", rString.(string))
+		remediation = dataset.RemedationFromString(rString.(string))
+	} else {
+		log.Printf("var 'remediation' not found in message")
+	}
+	hString, ok := mes.KV.Get("headers")
+	if !ok {
+		log.Printf("var 'headers' not found in message")
+	}
+	headers, err := readHeaders(hString.(string))
+	if err != nil {
+		log.Printf("failed to parse headers: %v", err)
+	}
+	if remediation > dataset.None {
+		return
+	}
+	var body string
+	var method string
+	var url string
+	if method, ok := mes.KV.Get("method"); ok {
+		if _, ok := method.(string); ok {
+			method = strings.ToUpper(method.(string))
+		}
+	}
+	if body, ok := mes.KV.Get("body"); ok {
+		if _, ok := body.(string); ok {
+			body = body.(string)
+		}
+	}
+	if url, ok := mes.KV.Get("url"); ok {
+		if _, ok := url.(string); ok {
+			url = url.(string)
+		}
+	}
+	request, err := http.NewRequest(method, url, strings.NewReader(body))
+	if err != nil {
+		log.Printf("failed to create request: %v", err)
+		return
+	}
+	request.Header = headers
+}
+
+func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
+	ipValue, ok := mes.KV.Get("src-ip")
+	if !ok {
+		log.Printf("var 'ip' not found in message")
+		return
+	}
+
+	ip, ok := ipValue.(net.IP)
+	if !ok {
+		log.Printf("var 'ip' has wrong type. expect IP addr")
+		return
+	}
+	remediation := s.DataSet.CheckIP(&ip)
+
+	// defer a function that always add the remediation to the request at end of processing
+	defer func() {
+		rString := remediation.String()
+		req.Actions.SetVar(action.ScopeTransaction, "remediation", rString)
+	}()
+
+	hString, ok := mes.KV.Get("headers")
+	if !ok {
+		log.Info("headers were not present in the message cannot issue remediation based on host")
+		return
+	}
+	headers, err := readHeaders(hString.(string))
+	if err != nil {
+		log.Printf("failed to parse headers: %v", err)
+		return
+	}
+	host := s.cfg.Hosts.MatchFirstHost(headers.Get("Host"))
+	if host == nil {
+		log.Printf("host not found")
+		return
+	}
+	switch remediation {
+	case dataset.Ban:
+		//Handle ban
+		host.Ban.InjectKeyValues(&req.Actions)
+	case dataset.Captcha:
+		// Handle captcha
+		// Check if IP is within grace period
+		// host.Captcha.CheckGrace(&ip)
+		// We have to compile the request back together then check
+		// If within grace, revert to allow
+		// if not within grace we inject the key values
+		if err := host.Captcha.InjectKeyValues(&req.Actions); err != nil {
+			remediation = dataset.Ban // fallback to ban currently but we configure on host level
+		}
+	}
+}
+
 func handlerWrapper(spoad *Spoa) func(req *request.Request) {
 	return func(req *request.Request) {
 		spoad.HAWaitGroup.Add(1)
@@ -170,88 +273,19 @@ func handlerWrapper(spoad *Spoa) func(req *request.Request) {
 			return
 		}
 
-		log.Printf("handle request EngineID: '%s', StreamID: '%d', FrameID: '%d' with %d messages\n", req.EngineID, req.StreamID, req.FrameID, req.Messages.Len())
-
-		messageName := "crowdsec-req"
-
-		mes, err := req.Messages.GetByName(messageName)
-		if err != nil {
-			log.Printf("message %s not found: %v", messageName, err)
-			return
-		}
-
-		ipValue, ok := mes.KV.Get("src-ip")
-		if !ok {
-			log.Printf("var 'ip' not found in message")
-			return
-		}
-
-		ip, ok := ipValue.(net.IP)
-		if !ok {
-			log.Printf("var 'ip' has wrong type. expect IP addr")
-			return
-		}
-
-		remediation := spoad.DataSet.CheckIP(&ip)
-		hString, ok := mes.KV.Get("headers")
-		if !ok {
-			log.Printf("var 'headers' not found in message")
-			return
-		}
-		headers, err := readHeaders(hString.(string))
-		if err != nil {
-			log.Printf("failed to parse headers: %v", err)
-			return
-		}
-		host := spoad.cfg.Hosts.MatchFirstHost(headers.Get("Host"))
-		if host == nil {
-			log.Printf("host not found")
-			return
-		}
-		if remediation > 0 {
-			switch remediation {
-			case dataset.Ban:
-				//Handle ban
-				host.Ban.InjectKeyValues(&req.Actions)
-			case dataset.Captcha:
-				// Handle captcha
-				// Check if IP is within grace period
-				// host.Captcha.CheckGrace(&ip)
-				// We have to compile the request back together then check
-				// If within grace, revert to allow
-				// if not within grace we inject the key values
-				if err := host.Captcha.InjectKeyValues(&req.Actions); err != nil {
-					remediation = dataset.Ban // fallback to ban currently but we configure on host level
-				}
+		for _, messageName := range message_names {
+			mes, err := req.Messages.GetByName(messageName)
+			if err != nil {
+				continue
 			}
-			req.Actions.SetVar(action.ScopeTransaction, "remediation", remediation)
-		}
-
-		// Check if remediation is allow || we invent a configuration option to check request against appsec
-		var body string
-		var method string
-		var url string
-		if method, ok := mes.KV.Get("method"); ok {
-			if _, ok := method.(string); ok {
-				method = strings.ToUpper(method.(string))
+			log.Debug("Received message: ", messageName)
+			switch messageName {
+			case "crowdsec-http":
+				spoad.handleHTTPRequest(req, mes)
+			case "crowdsec-ip":
+				spoad.handleIPRequest(req, mes)
 			}
 		}
-		if body, ok := mes.KV.Get("body"); ok {
-			if _, ok := body.(string); ok {
-				body = body.(string)
-			}
-		}
-		if url, ok := mes.KV.Get("url"); ok {
-			if _, ok := url.(string); ok {
-				url = url.(string)
-			}
-		}
-		request, err := http.NewRequest(method, url, strings.NewReader(body))
-		if err != nil {
-			log.Printf("failed to create request: %v", err)
-			return
-		}
-		request.Header = headers
 	}
 }
 

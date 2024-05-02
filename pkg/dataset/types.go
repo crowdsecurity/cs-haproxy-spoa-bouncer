@@ -43,6 +43,8 @@ func RemedationFromString(s string) Remediation {
 		return Ban
 	case "captcha":
 		return Captcha
+	case "none":
+		return None
 	default:
 		return Unknown
 	}
