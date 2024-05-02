@@ -36,7 +36,7 @@ func (c *Captcha) InitLogger(logger *log.Entry) {
 func (c *Captcha) InjectKeyValues(actions *action.Actions) error {
 
 	if err := c.IsValid(); err != nil {
-		c.logger.Error("invalid captcha configuration")
+		c.logger.Error("invalid captcha configuration using host fallback")
 		return err
 	}
 

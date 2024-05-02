@@ -47,7 +47,7 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 
 func (d *DataSet) CheckIP(ip *net.IP) Remediation {
 	ipCheck := d.IPSet.Contains(ip.String())
-	if ipCheck != Unknown {
+	if ipCheck > Unknown {
 		return ipCheck
 	}
 	return d.CIDRSet.Contains(ip)
