@@ -52,5 +52,15 @@ This outlines the goals of the project, and the current status of each.
 
 HAProxy response schema
 
-crowdsec.remediation = "captcha" | "ban" | "unknown" | "none"
-crowdsec.contact_us_url = ""
+```
+## Base variables
+txn.crowdsec.remediation = "captcha" | "ban" | "unknown" | "none"
+
+## Ban variables
+txn.crowdsec.contact_us_url = host.ban.contact_us_url
+
+## Captcha variables
+txn.crowdsec.captcha_site_key = host.captcha.site_key
+txn.crowdsec.captcha_frontend_key = providers[host.provider].frontend_key
+txn.crowdsec.captcha_frontend_js = providers[host.provider].frontend_js
+```
