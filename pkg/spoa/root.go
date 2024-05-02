@@ -167,13 +167,15 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 
 func (s *Spoa) handleHTTPRequest(_ *request.Request, mes *message.Message) {
 	remediation := dataset.None
+
 	rString, ok := mes.KV.Get("remediation")
 	if ok {
 		log.Debug("remediation: ", rString.(string))
 		remediation = dataset.RemedationFromString(rString.(string))
 	} else {
-		log.Printf("var 'remediation' not found in message")
+		log.Printf("ip remediation was not found in message, defaulting to none")
 	}
+
 	hString, ok := mes.KV.Get("headers")
 	if !ok {
 		log.Printf("var 'headers' not found in message")
@@ -182,9 +184,14 @@ func (s *Spoa) handleHTTPRequest(_ *request.Request, mes *message.Message) {
 	if err != nil {
 		log.Printf("failed to parse headers: %v", err)
 	}
-	if remediation > dataset.None {
+
+	host := s.cfg.Hosts.MatchFirstHost(headers.Get("Host"))
+
+	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
+	if remediation > dataset.Unknown && !host.AppSec.AlwaysSend {
 		return
 	}
+
 	var body string
 	var method string
 	var url string
@@ -225,23 +232,30 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	}
 	remediation := s.DataSet.CheckIP(&ip)
 
+	hString, ok := mes.KV.Get("host")
+
 	// defer a function that always add the remediation to the request at end of processing
 	defer func() {
+		if !ok && remediation == dataset.Captcha {
+			log.Info("headers were not present in the message cannot issue captcha remediation reverting to ban")
+			remediation = dataset.Ban
+		}
 		rString := remediation.String()
 		req.Actions.SetVar(action.ScopeTransaction, "remediation", rString)
 	}()
 
-	hString, ok := mes.KV.Get("headers")
 	if !ok {
-		log.Info("headers were not present in the message cannot issue remediation based on host")
 		return
 	}
-	headers, err := readHeaders(hString.(string))
-	if err != nil {
-		log.Printf("failed to parse headers: %v", err)
+
+	hstring, ok := hString.(string)
+
+	if !ok {
+		log.Printf("var 'host' has wrong type. expect string")
 		return
 	}
-	host := s.cfg.Hosts.MatchFirstHost(headers.Get("Host"))
+
+	host := s.cfg.Hosts.MatchFirstHost(hstring)
 	if host == nil {
 		log.Printf("host not found")
 		return
@@ -258,7 +272,7 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 		// If within grace, revert to allow
 		// if not within grace we inject the key values
 		if err := host.Captcha.InjectKeyValues(&req.Actions); err != nil {
-			remediation = dataset.Ban // fallback to ban currently but we configure on host level
+			remediation = dataset.RemedationFromString(host.Captcha.FallbackRemediation)
 		}
 	}
 }
@@ -292,6 +306,10 @@ func handlerWrapper(spoad *Spoa) func(req *request.Request) {
 func readHeaders(headers string) (http.Header, error) {
 	h := http.Header{}
 	hs := strings.Split(headers, "\r\n")
+
+	if len(hs) == 0 {
+		return nil, fmt.Errorf("no headers found")
+	}
 
 	for _, header := range hs {
 		if header == "" {

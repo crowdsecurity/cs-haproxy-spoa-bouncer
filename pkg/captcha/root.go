@@ -13,11 +13,14 @@ import (
 )
 
 type Captcha struct {
-	Provider  string       `yaml:"provider"`
-	SecretKey string       `yaml:"secret_key"`
-	SiteKey   string       `yaml:"site_key"`
-	logger    *log.Entry   `yaml:"-"`
-	client    *http.Client `yaml:"-"`
+	Provider            string               `yaml:"provider"`             // Captcha Provider
+	SecretKey           string               `yaml:"secret_key"`           // Captcha Provider Secret Key
+	SiteKey             string               `yaml:"site_key"`             // Captcha Provider Site Key
+	FallbackRemediation string               `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
+	logger              *log.Entry           `yaml:"-"`
+	client              *http.Client         `yaml:"-"`
+	GracePeriod         time.Duration        `yaml:"grace_period"`
+	GraceMap            map[string]time.Time `yaml:"-"`
 }
 
 func (c *Captcha) Init(logger *log.Entry) error {
@@ -25,6 +28,10 @@ func (c *Captcha) Init(logger *log.Entry) error {
 	c.client = &http.Client{
 		Transport: &http.Transport{MaxIdleConns: 10, IdleConnTimeout: 30 * time.Second},
 		Timeout:   5 * time.Second,
+	}
+	if c.FallbackRemediation == "" {
+		c.logger.Info("no fallback remediation specified defaulting to ban")
+		c.FallbackRemediation = "ban"
 	}
 	return nil
 }
