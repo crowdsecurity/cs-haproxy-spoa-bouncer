@@ -39,11 +39,11 @@ function M.table_len(table)
    return count
 end
 
-function M.accept_html(applet)
-   if applet.headers["accept"] == nil then
+function M.accept_html(headers)
+   if headers["accept"] == nil then
       return true
    end
-   for _, accept in pairs(applet.headers["accept"]) do
+   for _, accept in pairs(headers["accept"]) do
       for _, value in pairs({"*/*", "text", "html"}) do
          local found_min, found_max = string.find(accept, value)
          if found_min ~= nil then
@@ -54,11 +54,19 @@ function M.accept_html(applet)
    return false
 end
 
-function M.split(str, sep)
-   local sep, fields = sep or ":", {}
-   local pattern = string.format("([^%s]+)", sep)
-   str:gsub(pattern, function(c) fields[#fields+1] = c end)
-   return fields
+function M.trim(s)
+   return s:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+function M.split(str, delimiter)
+   local result = {}
+   local pattern = string.format("([^%s]+)", delimiter)
+
+   str:gsub(pattern, function(item)
+       table.insert(result, item)
+   end)
+
+   return result
 end
 
 return M
