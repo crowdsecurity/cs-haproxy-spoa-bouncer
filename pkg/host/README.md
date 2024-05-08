@@ -65,4 +65,4 @@ If no host is found for the incoming request, then the remediation will be sent 
 
 If the remediation is `captcha` and no host is found, then the remediation will be automatically changed to a `ban` since we have no way to display the captcha.
 
-This is why we recommend having a catch-all configuration for the `ban` remediation it will allow you to change the `fallback_remediation` to `none` or provide a `contact_us_url`. As this will impact user experience if they are not able to contact anyone for help.
+This is why we recommend having a catch-all configuration for the `ban` remediation it will allow you to change the `fallback_remediation` to `allow` or provide a `contact_us_url`. As this will impact user experience if they are not able to contact anyone for help.

@@ -11,7 +11,7 @@ import (
 
 // The order matters since we use slices.Max to get the max value
 const (
-	None    Remediation = -1
+	Allow   Remediation = -1
 	Unknown Remediation = iota
 	Captcha Remediation = iota
 	Ban     Remediation = iota
@@ -33,7 +33,7 @@ func (r Remediation) String() string {
 	case Unknown:
 		return "unknown"
 	default:
-		return "none"
+		return "allow"
 	}
 }
 
@@ -43,8 +43,8 @@ func RemedationFromString(s string) Remediation {
 		return Ban
 	case "captcha":
 		return Captcha
-	case "none":
-		return None
+	case "allow":
+		return Allow
 	default:
 		return Unknown
 	}
@@ -188,7 +188,7 @@ func (s *RangeSet) Contains(ip *net.IP) Remediation {
 	valueLog := s.logger.WithField("value", ip.String())
 	valueLog.Debug("checking value")
 	s.logger.Tracef("current items: %+v", s.Items)
-	remediation := None
+	remediation := Allow
 	keys := make([]Remediation, 0)
 	for _, v := range s.Items {
 		if v.CIDR.Contains(*ip) {
@@ -257,7 +257,7 @@ func (s *StringSet) Contains(toCheck string) Remediation {
 	valueLog := s.logger.WithField("value", toCheck)
 	valueLog.Debug("checking value")
 	s.logger.Tracef("current items: %+v", s.Items)
-	remediation := None
+	remediation := Allow
 	if v, ok := s.Items[toCheck]; ok {
 		valueLog.Debug("found")
 		keys := make([]Remediation, 0, len(v))

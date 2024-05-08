@@ -1,6 +1,7 @@
 package captcha
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,22 +9,31 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/cookie"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/negasus/haproxy-spoe-go/action"
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	Pending = iota
+	Valid   = iota
+)
+
 type Captcha struct {
-	Provider            string               `yaml:"provider"`             // Captcha Provider
-	SecretKey           string               `yaml:"secret_key"`           // Captcha Provider Secret Key
-	SiteKey             string               `yaml:"site_key"`             // Captcha Provider Site Key
-	FallbackRemediation string               `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
-	logger              *log.Entry           `yaml:"-"`
-	client              *http.Client         `yaml:"-"`
-	GracePeriod         time.Duration        `yaml:"grace_period"`
-	GraceMap            map[string]time.Time `yaml:"-"`
+	Provider            string                 `yaml:"provider"`             // Captcha Provider
+	SecretKey           string                 `yaml:"secret_key"`           // Captcha Provider Secret Key
+	SiteKey             string                 `yaml:"site_key"`             // Captcha Provider Site Key
+	FallbackRemediation string                 `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
+	GracePeriod         int                    `yaml:"grace_period"`
+	CookieGenerator     cookie.CookieGenerator `yaml:"cookie"`
+	sessions            session.Sessions       `yaml:"-"` // sessions that are being traced for captcha
+	logger              *log.Entry             `yaml:"-"`
+	client              *http.Client           `yaml:"-"`
 }
 
-func (c *Captcha) Init(logger *log.Entry) error {
+func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
 	c.InitLogger(logger)
 	c.client = &http.Client{
 		Transport: &http.Transport{MaxIdleConns: 10, IdleConnTimeout: 30 * time.Second},
@@ -33,6 +43,8 @@ func (c *Captcha) Init(logger *log.Entry) error {
 		c.logger.Info("no fallback remediation specified defaulting to ban")
 		c.FallbackRemediation = "ban"
 	}
+	go c.sessions.GarbageCollect(ctx)
+	c.CookieGenerator.Init(c.logger)
 	return nil
 }
 
@@ -107,6 +119,11 @@ func (c *Captcha) IsValid() error {
 
 	if c.SiteKey == "" {
 		return fmt.Errorf("empty captcha site key")
+	}
+
+	tRem := dataset.RemedationFromString(c.FallbackRemediation)
+	if tRem != dataset.Ban && tRem != dataset.Allow {
+		return fmt.Errorf("invalid fallback remediation %s", c.FallbackRemediation)
 	}
 
 	return nil
