@@ -1,11 +1,12 @@
 package host
 
 import (
+	"context"
 	"path/filepath"
 
-	"github.com/crowdsecurity/crowdsec-spoa/pkg/appsec"
-	"github.com/crowdsecurity/crowdsec-spoa/pkg/ban"
-	"github.com/crowdsecurity/crowdsec-spoa/pkg/captcha"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/ban"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -19,8 +20,8 @@ type Host struct {
 
 type Hosts []*Host
 
-func (h *Hosts) MatchFirstHost(toMatch string) *Host {
-	for _, host := range *h {
+func (h Hosts) MatchFirstHost(toMatch string) *Host {
+	for _, host := range h {
 		matched, err := filepath.Match(host.Host, toMatch)
 		if matched && err == nil {
 			host.logger.WithField("value", toMatch).Debug("matched host")
@@ -31,16 +32,16 @@ func (h *Hosts) MatchFirstHost(toMatch string) *Host {
 }
 
 // Init initializes the logger for the hosts
-func (h *Hosts) Init() {
+func (h *Hosts) Init(ctx context.Context) {
 	for _, host := range *h {
 		host.logger = log.WithField("host", host.Host)
-		if err := host.Captcha.Init(host.logger); err != nil {
+		if err := host.Captcha.Init(host.logger, ctx); err != nil {
 			host.logger.Error(err)
 		}
 		if err := host.Ban.Init(host.logger); err != nil {
 			host.logger.Error(err)
 		}
-		if err := host.AppSec.Init(host.logger); err != nil {
+		if err := host.AppSec.Init(host.logger, ctx); err != nil {
 			host.logger.Error(err)
 		}
 	}

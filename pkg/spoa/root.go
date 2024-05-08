@@ -12,6 +12,7 @@ import (
 
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/negasus/haproxy-spoe-go/action"
 	"github.com/negasus/haproxy-spoe-go/agent"
 	"github.com/negasus/haproxy-spoe-go/message"
@@ -165,101 +166,46 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (s *Spoa) handleHTTPRequest(_ *request.Request, mes *message.Message) {
-	remediation := dataset.None
+// Handles checking the http request which has 2 stages
+// First stage is to check the host header and determine if the remdiation from handleIpRequest is still valid
+// Second stage is to check if AppSec is enabled and then forward to the component if needed
+func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
+	remediation := dataset.Allow
 
-	rString, ok := mes.KV.Get("remediation")
-	if ok {
-		log.Debug("remediation: ", rString.(string))
-		remediation = dataset.RemedationFromString(rString.(string))
+	rstring, err := readKeyFromMessage[string](mes, "remediation")
+
+	if err == nil {
+		log.Debug("remediation: ", *rstring)
+		remediation = dataset.RemedationFromString(*rstring)
 	} else {
-		log.Printf("ip remediation was not found in message, defaulting to none")
+		log.Printf("ip remediation was not found in message, defaulting to allow")
 	}
 
-	hString, ok := mes.KV.Get("headers")
-	if !ok {
-		log.Printf("var 'headers' not found in message")
-	}
-	headers, err := readHeaders(hString.(string))
-	if err != nil {
-		log.Printf("failed to parse headers: %v", err)
-	}
+	hoststring, err := readKeyFromMessage[string](mes, "host")
 
-	host := s.cfg.Hosts.MatchFirstHost(headers.Get("Host"))
-
-	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
-	if remediation > dataset.Unknown && !host.AppSec.AlwaysSend {
-		return
-	}
-
-	var body string
-	var method string
-	var url string
-	if method, ok := mes.KV.Get("method"); ok {
-		if _, ok := method.(string); ok {
-			method = strings.ToUpper(method.(string))
-		}
-	}
-	if body, ok := mes.KV.Get("body"); ok {
-		if _, ok := body.(string); ok {
-			body = body.(string)
-		}
-	}
-	if url, ok := mes.KV.Get("url"); ok {
-		if _, ok := url.(string); ok {
-			url = url.(string)
-		}
-	}
-	request, err := http.NewRequest(method, url, strings.NewReader(body))
-	if err != nil {
-		log.Printf("failed to create request: %v", err)
-		return
-	}
-	request.Header = headers
-}
-
-func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
-	ipValue, ok := mes.KV.Get("src-ip")
-	if !ok {
-		log.Printf("var 'ip' not found in message")
-		return
-	}
-
-	ip, ok := ipValue.(net.IP)
-	if !ok {
-		log.Printf("var 'ip' has wrong type. expect IP addr")
-		return
-	}
-	remediation := s.DataSet.CheckIP(&ip)
-
-	hString, ok := mes.KV.Get("host")
+	var host *host.Host
 
 	// defer a function that always add the remediation to the request at end of processing
 	defer func() {
-		if !ok && remediation == dataset.Captcha {
-			log.Info("headers were not present in the message cannot issue captcha remediation reverting to ban")
+		if host == nil && remediation == dataset.Captcha {
+			log.Info("host was not found in the message cannot issue captcha remediation reverting to ban")
 			remediation = dataset.Ban
 		}
 		rString := remediation.String()
 		req.Actions.SetVar(action.ScopeTransaction, "remediation", rString)
 	}()
 
-	if !ok {
+	if err != nil {
 		return
 	}
 
-	hstring, ok := hString.(string)
+	host = s.cfg.Hosts.MatchFirstHost(*hoststring)
 
-	if !ok {
-		log.Printf("var 'host' has wrong type. expect string")
-		return
-	}
-
-	host := s.cfg.Hosts.MatchFirstHost(hstring)
+	// if the host is not found we cannot alter the remediation or do appsec checks
 	if host == nil {
-		log.Printf("host not found")
 		return
 	}
+
 	switch remediation {
 	case dataset.Ban:
 		//Handle ban
@@ -275,6 +221,72 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 			remediation = dataset.RemedationFromString(host.Captcha.FallbackRemediation)
 		}
 	}
+
+	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
+	if remediation > dataset.Unknown && !host.AppSec.AlwaysSend {
+		return
+	}
+
+	headersType, err := readKeyFromMessage[string](mes, "headers")
+
+	if err != nil {
+		log.Printf("failed to read headers: %v", err)
+		return
+	}
+
+	headers, err := readHeaders(*headersType)
+	if err != nil {
+		log.Printf("failed to parse headers: %v", err)
+	}
+
+	var body string
+	var method string
+	var url string
+
+	methodString, err := readKeyFromMessage[string](mes, "method")
+	if err != nil {
+		log.Printf("failed to read method: %v", err)
+		return
+	}
+	method = strings.ToUpper(*methodString)
+
+	bodyString, err := readKeyFromMessage[string](mes, "body")
+
+	if err != nil {
+		log.Printf("failed to read body: %v", err)
+		return
+	}
+	body = *bodyString
+
+	urlString, err := readKeyFromMessage[string](mes, "url")
+
+	if err != nil {
+		log.Printf("failed to read url: %v", err)
+		return
+	}
+	url = *urlString
+
+	request, err := http.NewRequest(method, url, strings.NewReader(body))
+	if err != nil {
+		log.Printf("failed to create request: %v", err)
+		return
+	}
+	request.Header = headers
+}
+
+// Handles checking the IP address against the dataset
+// !TODO add country code check
+func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
+	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
+
+	if err != nil {
+		log.Error(err)
+		return
+	}
+
+	remediation := s.DataSet.CheckIP(ipType)
+
+	req.Actions.SetVar(action.ScopeTransaction, "remediation", remediation.String())
 }
 
 func handlerWrapper(spoad *Spoa) func(req *request.Request) {
@@ -301,6 +313,19 @@ func handlerWrapper(spoad *Spoa) func(req *request.Request) {
 			}
 		}
 	}
+}
+
+// readKeyFromMessage reads a key from a message and returns it as the type T
+func readKeyFromMessage[T string | net.IP](msg *message.Message, key string) (*T, error) {
+	value, ok := msg.KV.Get(key)
+	if !ok {
+		return nil, fmt.Errorf("key %s not found", key)
+	}
+	s, ok := value.(T)
+	if !ok {
+		return nil, fmt.Errorf("key %s has wrong type", key)
+	}
+	return &s, nil
 }
 
 func readHeaders(headers string) (http.Header, error) {

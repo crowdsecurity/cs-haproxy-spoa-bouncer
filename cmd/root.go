@@ -102,18 +102,18 @@ func Execute() error {
 		return fmt.Errorf("unable to configure bouncer: %w", err)
 	}
 
+	g, ctx := errgroup.WithContext(context.Background())
+
+	config.Hosts.Init(ctx)
+
 	if *testConfig {
 		log.Info("config is valid")
 		return nil
 	}
 
-	config.Hosts.Init()
-
 	if bouncer.InsecureSkipVerify != nil {
 		log.Debugf("InsecureSkipVerify is set to %t", *bouncer.InsecureSkipVerify)
 	}
-
-	g, ctx := errgroup.WithContext(context.Background())
 
 	g.Go(func() error {
 		return HandleSignals(ctx)

@@ -54,7 +54,7 @@ HAProxy response schema
 
 ```
 ## Base variables
-txn.crowdsec.remediation = "captcha" | "ban" | "unknown" | "none"
+txn.crowdsec.remediation = "captcha" | "ban" | "unknown" | "allow"
 
 ## Ban variables
 txn.crowdsec.contact_us_url = host.ban.contact_us_url
