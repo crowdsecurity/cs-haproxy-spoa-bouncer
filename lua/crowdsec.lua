@@ -89,7 +89,7 @@ end
 -- Render the remediation page
 -- @param txn the transaction https://www.arpalert.org/src/haproxy-lua-api/2.9/index.html#txn-class
 -- @return nil
-function runtime.Render(txn)
+function runtime.Handle(txn)
     local remediation = get_txn_var(txn, "crowdsec.remediation")
     local reply = txn:reply({ status = 403, body = "" })
     
@@ -111,7 +111,7 @@ function runtime.Render(txn)
             return
         end
     end
-    
+
     if remediation == "captcha" then
         reply:set_status(200)
         reply:set_body(runtime.captcha.render({
@@ -145,4 +145,4 @@ end
 
 -- Registers
 core.register_init(init)
-core.register_action("crowdsec_render", {"http-req"}, runtime.Render)
+core.register_action("crowdsec_handle", {"http-req"}, runtime.Handle)
