@@ -9,7 +9,10 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
@@ -206,19 +209,132 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		return
 	}
 
+	var url *string
+	var method *string
+	var body *[]byte
+	var headers http.Header
+
 	switch remediation {
+	case dataset.Allow:
+		// !TODO Check if cookie is sent and session is valid if not valid then issue an unset cookie
 	case dataset.Ban:
 		//Handle ban
 		host.Ban.InjectKeyValues(&req.Actions)
 	case dataset.Captcha:
-		// Handle captcha
-		// Check if IP is within grace period
-		// host.Captcha.CheckGrace(&ip)
-		// We have to compile the request back together then check
-		// If within grace, revert to allow
-		// if not within grace we inject the key values
 		if err := host.Captcha.InjectKeyValues(&req.Actions); err != nil {
 			remediation = dataset.RemedationFromString(host.Captcha.FallbackRemediation)
+		}
+
+		cookieB64, cookieErr := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
+		var s *session.Session
+
+		if cookieB64 != nil {
+			log.Debugf("found session id in message %s", *cookieB64)
+			sessionValue, err := host.Captcha.CookieGenerator.ValidateCookie(*cookieB64)
+			if err == nil {
+				s = host.Captcha.Sessions.GetSession(sessionValue)
+
+				// if we cant find the session from the cookie provided we set it to nil
+				if s == nil {
+					cookieB64 = nil
+				}
+
+				// if the session is expired we set it to nil
+				if s != nil && s.IsExpired() {
+					s = nil
+				}
+			}
+		}
+
+		// if cookieB64 return an error or session is nil we create a new session
+		if cookieErr != nil || s == nil {
+			s, err = host.Captcha.Sessions.NewRandomSession(time.Now().Add(2 * time.Hour))
+			if err != nil {
+				// should we revert back to ban?
+				log.Error(err)
+				return
+			}
+		}
+
+		method, err = readKeyFromMessage[string](mes, "method")
+		if err != nil {
+			log.Printf("failed to read method: %v", err)
+			return
+		}
+
+		headersType, err := readKeyFromMessage[string](mes, "headers")
+
+		if err != nil {
+			log.Printf("failed to read headers: %v", err)
+			return
+		}
+
+		headers, err = readHeaders(*headersType)
+
+		if err != nil {
+			log.Printf("failed to parse headers: %v", err)
+		}
+
+		// Check if the request is a captcha validation request
+		if method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
+			body, err = readKeyFromMessage[[]byte](mes, "body")
+
+			if err != nil {
+				log.Printf("failed to read body: %v", err)
+				return
+			}
+			valid, err := host.Captcha.Validate(s, string(*body))
+			if err != nil {
+				log.Error(err)
+			}
+			if valid {
+				s.Set(session.CAPTCHA_STATUS, captcha.Valid)
+			}
+		}
+
+		url, err = readKeyFromMessage[string](mes, "url")
+
+		if err != nil {
+			log.Printf("failed to read url: %v", err)
+			return
+		}
+
+		// if captcha is not valid then update the url in the session
+		if s.Get(session.CAPTCHA_STATUS) != captcha.Valid {
+			// Update the incoming url if it is different from the stored url for the session ignore favicon requests
+			if storedUrl := s.Get(session.URI); (storedUrl == nil || url != nil && *url != storedUrl.(string)) && !strings.HasSuffix(*url, ".ico") {
+				log.WithField("session", s.Uuid).Debugf("updating stored url %s", *url)
+				s.Set(session.URI, *url)
+			} // !TODO we should ignore static files also
+		}
+
+		// if original cookie is not found we send a new cookie to haproxy
+		if cookieB64 == nil {
+			ssl, err := readKeyFromMessage[bool](mes, "ssl")
+
+			if err != nil {
+				log.Error(err)
+			}
+			cookie, err := host.Captcha.CookieGenerator.GenerateCookie(s, ssl)
+			if err != nil {
+				// should we revert back to ban?
+				log.Error(err)
+				return
+			}
+
+			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
+		}
+
+		if s.Get(session.CAPTCHA_STATUS) == captcha.Valid {
+			remediation = dataset.Allow
+			storedUrl := s.Get(session.URI)
+			if storedUrl != nil {
+				if uriString, ok := storedUrl.(string); ok {
+					log.Debug("redirecting to: ", uriString)
+					req.Actions.SetVar(action.ScopeTransaction, "redirect", uriString)
+					s.Delete(session.URI)
+				}
+			}
 		}
 	}
 
@@ -226,52 +342,19 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	if remediation > dataset.Unknown && !host.AppSec.AlwaysSend {
 		return
 	}
+	// !TODO APPSEC STUFF
 
-	headersType, err := readKeyFromMessage[string](mes, "headers")
+	// headers, err := readHeaders(*headersType)
+	// if err != nil {
+	// 	log.Printf("failed to parse headers: %v", err)
+	// }
 
-	if err != nil {
-		log.Printf("failed to read headers: %v", err)
-		return
-	}
-
-	headers, err := readHeaders(*headersType)
-	if err != nil {
-		log.Printf("failed to parse headers: %v", err)
-	}
-
-	var body string
-	var method string
-	var url string
-
-	methodString, err := readKeyFromMessage[string](mes, "method")
-	if err != nil {
-		log.Printf("failed to read method: %v", err)
-		return
-	}
-	method = strings.ToUpper(*methodString)
-
-	bodyString, err := readKeyFromMessage[string](mes, "body")
-
-	if err != nil {
-		log.Printf("failed to read body: %v", err)
-		return
-	}
-	body = *bodyString
-
-	urlString, err := readKeyFromMessage[string](mes, "url")
-
-	if err != nil {
-		log.Printf("failed to read url: %v", err)
-		return
-	}
-	url = *urlString
-
-	request, err := http.NewRequest(method, url, strings.NewReader(body))
-	if err != nil {
-		log.Printf("failed to create request: %v", err)
-		return
-	}
-	request.Header = headers
+	// request, err := http.NewRequest(method, url, strings.NewReader(body))
+	// if err != nil {
+	// 	log.Printf("failed to create request: %v", err)
+	// 	return
+	// }
+	// request.Header = headers
 }
 
 // Handles checking the IP address against the dataset
@@ -316,7 +399,7 @@ func handlerWrapper(spoad *Spoa) func(req *request.Request) {
 }
 
 // readKeyFromMessage reads a key from a message and returns it as the type T
-func readKeyFromMessage[T string | net.IP](msg *message.Message, key string) (*T, error) {
+func readKeyFromMessage[T string | net.IP | bool | []byte](msg *message.Message, key string) (*T, error) {
 	value, ok := msg.KV.Get(key)
 	if !ok {
 		return nil, fmt.Errorf("key %s not found", key)

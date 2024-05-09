@@ -94,14 +94,24 @@ function runtime.Render(txn)
     local reply = txn:reply({ status = 403, body = "" })
     
     if remediation == "" then
-        logger.error("No remediation found")
+        runtime.logger.error("No remediation found")
         return
     end
-
+    
     -- Always disable cache
     reply:add_header("cache-control", "no-cache")
     reply:add_header("cache-control", "no-store")
-
+    
+    if remediation == "allow" then
+        local redirect_uri = get_txn_var(txn, "crowdsec.redirect")
+        if redirect_uri ~= "" then
+            reply:set_status(302)
+            reply:add_header("Location", redirect_uri)
+        else
+            return
+        end
+    end
+    
     if remediation == "captcha" then
         reply:set_status(200)
         reply:set_body(runtime.captcha.render({
@@ -109,6 +119,10 @@ function runtime.Render(txn)
             ["captcha_frontend_key"]=get_txn_var(txn, "crowdsec.captcha_frontend_key"),
             ["captcha_frontend_js"]=get_txn_var(txn, "crowdsec.captcha_frontend_js"),
         }))
+        local cookie = get_txn_var(txn, "crowdsec.captcha_cookie")
+        if cookie ~= "" then
+            reply:add_header("Set-Cookie", cookie)
+        end
     end
 
     if remediation == "ban" then
@@ -116,6 +130,7 @@ function runtime.Render(txn)
             ["contact_us_url"]=get_txn_var(txn, "crowdsec.contact_us_url"),
         }))
     end
+
     
     local hdr = txn.http:req_get_headers()
     if hdr ~= nil and utils.accept_html(hdr) == false then
