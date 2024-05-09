@@ -16,7 +16,7 @@ func (b *Ban) Init(logger *log.Entry) error {
 }
 
 func (b *Ban) InitLogger(logger *log.Entry) {
-	b.logger = logger.WithField("type", "ban")
+	b.logger = logger.WithField("module", "ban")
 }
 
 func (b *Ban) InjectKeyValues(actions *action.Actions) {

@@ -46,6 +46,7 @@ services:
     image: crowdsecurity/crowdsec:latest
     environment:
       - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
+      - DISABLE_ONLINE_API=true
     networks:
       - crowdsec
 

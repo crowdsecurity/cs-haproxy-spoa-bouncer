@@ -22,15 +22,15 @@ const (
 )
 
 type Captcha struct {
-	Provider            string                 `yaml:"provider"`             // Captcha Provider
-	SecretKey           string                 `yaml:"secret_key"`           // Captcha Provider Secret Key
-	SiteKey             string                 `yaml:"site_key"`             // Captcha Provider Site Key
-	FallbackRemediation string                 `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
-	GracePeriod         int                    `yaml:"grace_period"`
-	CookieGenerator     cookie.CookieGenerator `yaml:"cookie"`
-	sessions            session.Sessions       `yaml:"-"` // sessions that are being traced for captcha
-	logger              *log.Entry             `yaml:"-"`
-	client              *http.Client           `yaml:"-"`
+	Provider            string `yaml:"provider"`             // Captcha Provider
+	SecretKey           string `yaml:"secret_key"`           // Captcha Provider Secret Key
+	SiteKey             string `yaml:"site_key"`             // Captcha Provider Site Key
+	FallbackRemediation string `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
+	// SessionTokenDuraton int                    `yaml:"session_token_duration"` // Duration of the session token
+	CookieGenerator cookie.CookieGenerator `yaml:"cookie"` // CookieGenerator to generate cookies from sessions
+	Sessions        session.Sessions       `yaml:"-"`      // sessions that are being traced for captcha
+	logger          *log.Entry             `yaml:"-"`
+	client          *http.Client           `yaml:"-"`
 }
 
 func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
@@ -43,13 +43,13 @@ func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
 		c.logger.Info("no fallback remediation specified defaulting to ban")
 		c.FallbackRemediation = "ban"
 	}
-	go c.sessions.GarbageCollect(ctx)
-	c.CookieGenerator.Init(c.logger)
+	go c.Sessions.GarbageCollect(ctx)
+	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie", c.SecretKey)
 	return nil
 }
 
 func (c *Captcha) InitLogger(logger *log.Entry) {
-	c.logger = logger.WithField("type", "captcha")
+	c.logger = logger.WithField("module", "captcha")
 }
 
 func (c *Captcha) InjectKeyValues(actions *action.Actions) error {
@@ -70,12 +70,17 @@ type CaptchaResponse struct {
 	Success bool `json:"success"`
 }
 
-func (c *Captcha) Validate(r *http.Request) (bool, error) {
-	if r.Method != http.MethodPost {
-		c.logger.Debug("invalid method")
+func (c *Captcha) Validate(session *session.Session, toParse string) (bool, error) {
+	if len(toParse) == 0 {
 		return false, nil
 	}
-	response := r.FormValue(fmt.Sprintf("%s-response", providers[c.Provider].key))
+
+	values, err := url.ParseQuery(toParse)
+	if err != nil {
+		return false, err
+	}
+
+	response := values.Get(fmt.Sprintf("%s-response", providers[c.Provider].key))
 	if response == "" {
 		c.logger.Debug("empty response")
 		return false, nil
@@ -100,6 +105,7 @@ func (c *Captcha) Validate(r *http.Request) (bool, error) {
 	if err := json.NewDecoder(res.Body).Decode(captchaRes); err != nil {
 		return false, err
 	}
+	c.logger.WithField("session", session.Uuid).WithField("response", captchaRes.Success).Debug("captcha response")
 	return captchaRes.Success, nil
 }
 

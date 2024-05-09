@@ -5,6 +5,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
+)
+
+// Known keys for the session KV store
+const (
+	URI            = "URI"
+	CAPTCHA_STATUS = "CAPTCHA_STATUS"
 )
 
 func NewSession(expiryTime time.Time) (*Session, error) {
@@ -17,7 +24,7 @@ func NewSessionWithUUID(uuid string, expiryTime time.Time) *Session {
 		Uuid:       uuid,
 		KV:         make(map[string]interface{}),
 		UpdateTime: time.Now().UTC(),
-		ExpiryTime: expiryTime,
+		ExpiryTime: expiryTime.Unix(),
 	}
 }
 
@@ -25,7 +32,7 @@ type Session struct {
 	Uuid       string                 // UUID of the session
 	KV         map[string]interface{} // Key-Value store for the session
 	UpdateTime time.Time              // Update time of the session (might be used for garbage collection in future)
-	ExpiryTime time.Time              // Expiry time of the session used for cookie max age and garbage collection
+	ExpiryTime int64                  // Expiry time of the session used for cookie max age and garbage collection
 }
 
 func (s *Session) Get(key string) interface{} {
@@ -44,11 +51,11 @@ func (s *Session) Delete(key string) {
 }
 
 func (s *Session) IsExpired() bool {
-	return time.Now().UTC().After(s.ExpiryTime)
+	return time.Now().UTC().Unix() > s.ExpiryTime
 }
 
 func (s *Session) RenewExpiryTime(expiryTime time.Time) {
-	s.ExpiryTime = expiryTime
+	s.ExpiryTime = expiryTime.Unix()
 }
 
 type Sessions []*Session
@@ -97,6 +104,7 @@ func (s *Sessions) GarbageCollect(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if len(*s) == 0 {
+				log.Trace("no sessions to garbage collect")
 				continue
 			}
 
@@ -106,6 +114,12 @@ func (s *Sessions) GarbageCollect(ctx context.Context) {
 					tSessions = append(tSessions, session)
 				}
 			}
+
+			if len(*s)-len(tSessions) == 0 {
+				continue // No sessions to garbage collect
+			}
+
+			log.Tracef("flushed %d sessions", len(*s)-len(tSessions))
 			*s = tSessions
 		}
 	}
