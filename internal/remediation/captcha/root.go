@@ -52,6 +52,7 @@ func (c *Captcha) InitLogger(logger *log.Entry) {
 	c.logger = logger.WithField("module", "captcha")
 }
 
+// Inject key values injects the captcha provider key values into the HAProxy transaction
 func (c *Captcha) InjectKeyValues(actions *action.Actions) error {
 
 	if err := c.IsValid(); err != nil {
@@ -70,6 +71,7 @@ type CaptchaResponse struct {
 	Success bool `json:"success"`
 }
 
+// Validate tries to validate the captcha response and sets the session status to valid if the captcha is valid
 func (c *Captcha) Validate(s *session.Session, toParse string) {
 	clog := c.logger.WithField("session", s.Uuid)
 	if len(toParse) == 0 {
