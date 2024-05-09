@@ -71,20 +71,21 @@ type CaptchaResponse struct {
 }
 
 func (c *Captcha) Validate(s *session.Session, toParse string) {
+	clog := c.logger.WithField("session", s.Uuid)
 	if len(toParse) == 0 {
 		return
 	}
 
 	values, err := url.ParseQuery(toParse)
 	if err != nil {
-		c.logger.WithError(err).Error("failed to parse captcha response")
+		clog.WithError(err).Error("failed to parse captcha response")
 		return
 	}
 
 	response := values.Get(fmt.Sprintf("%s-response", providers[c.Provider].key))
 
 	if response == "" {
-		c.logger.Debug("empty response")
+		clog.Debug("user submitted empty captcha response")
 		return
 	}
 
@@ -95,28 +96,28 @@ func (c *Captcha) Validate(s *session.Session, toParse string) {
 	res, err := c.client.PostForm(providers[c.Provider].validate, body)
 
 	if err != nil {
-		c.logger.WithError(err).Error("failed to validate captcha")
+		clog.WithError(err).Error("failed to validate captcha")
 		return
 	}
 
 	defer func() {
 		if err = res.Body.Close(); err != nil {
-			c.logger.WithError(err).Error("failed to close response body")
+			clog.WithError(err).Error("failed to close response body")
 		}
 	}()
 
 	if !strings.Contains(res.Header.Get("Content-Type"), "application/json") {
-		c.logger.Debug("invalid response content type")
+		clog.Debug("invalid response content type")
 		return
 	}
 
 	captchaRes := &CaptchaResponse{}
 	if err := json.NewDecoder(res.Body).Decode(captchaRes); err != nil {
-		c.logger.WithError(err).Error("failed to decode captcha response")
+		clog.WithError(err).Error("failed to decode captcha response")
 		return
 	}
 
-	c.logger.WithField("session", s.Uuid).WithField("response", captchaRes.Success).Debug("captcha response")
+	clog.WithField("response", captchaRes.Success).Debug("captcha response")
 
 	if captchaRes.Success {
 		s.Set(session.CAPTCHA_STATUS, Valid)
