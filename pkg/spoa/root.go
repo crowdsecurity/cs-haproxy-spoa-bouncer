@@ -283,13 +283,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				log.Printf("failed to read body: %v", err)
 				return
 			}
-			valid, err := host.Captcha.Validate(s, string(*body))
-			if err != nil {
-				log.Error(err)
-			}
-			if valid {
-				s.Set(session.CAPTCHA_STATUS, captcha.Valid)
-			}
+			host.Captcha.Validate(s, string(*body))
 		}
 
 		url, err = readKeyFromMessage[string](mes, "url")
