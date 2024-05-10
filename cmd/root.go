@@ -104,7 +104,8 @@ func Execute() error {
 
 	g, ctx := errgroup.WithContext(context.Background())
 
-	config.Hosts.Init(ctx)
+	config.Hosts.Init(ctx, &config.Logging)
+	config.Geo.Init(ctx)
 
 	if *testConfig {
 		log.Info("config is valid")

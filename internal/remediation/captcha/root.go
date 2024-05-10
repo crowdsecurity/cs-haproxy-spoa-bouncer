@@ -10,27 +10,28 @@ import (
 	"time"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/cookie"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
-	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/negasus/haproxy-spoe-go/action"
 	log "github.com/sirupsen/logrus"
 )
 
 const (
-	Pending = iota
-	Valid   = iota
+	Pending CaptchaStatus = iota
+	Valid
 )
 
+type CaptchaStatus uint8
+
 type Captcha struct {
-	Provider            string `yaml:"provider"`             // Captcha Provider
-	SecretKey           string `yaml:"secret_key"`           // Captcha Provider Secret Key
-	SiteKey             string `yaml:"site_key"`             // Captcha Provider Site Key
-	FallbackRemediation string `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
-	// SessionTokenDuraton int                    `yaml:"session_token_duration"` // Duration of the session token
-	CookieGenerator cookie.CookieGenerator `yaml:"cookie"` // CookieGenerator to generate cookies from sessions
-	Sessions        session.Sessions       `yaml:"-"`      // sessions that are being traced for captcha
-	logger          *log.Entry             `yaml:"-"`
-	client          *http.Client           `yaml:"-"`
+	Provider            string                 `yaml:"provider"`             // Captcha Provider
+	SecretKey           string                 `yaml:"secret_key"`           // Captcha Provider Secret Key
+	SiteKey             string                 `yaml:"site_key"`             // Captcha Provider Site Key
+	FallbackRemediation string                 `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
+	CookieGenerator     cookie.CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies from sessions
+	Sessions            session.Sessions       `yaml:",inline"`              // sessions that are being traced for captcha
+	logger              *log.Entry             `yaml:"-"`
+	client              *http.Client           `yaml:"-"`
 }
 
 func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
@@ -43,7 +44,7 @@ func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
 		c.logger.Info("no fallback remediation specified defaulting to ban")
 		c.FallbackRemediation = "ban"
 	}
-	go c.Sessions.GarbageCollect(ctx)
+	c.Sessions.Init(c.logger, ctx)
 	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie", c.SecretKey)
 	return nil
 }
@@ -89,6 +90,12 @@ func (c *Captcha) Validate(s *session.Session, toParse string) {
 	if response == "" {
 		clog.Debug("user submitted empty captcha response")
 		return
+	}
+
+	if tries := s.Get(session.CAPTCHA_TRIES); tries != nil {
+		s.Set(session.CAPTCHA_TRIES, tries.(int)+1)
+	} else {
+		s.Set(session.CAPTCHA_TRIES, 1)
 	}
 
 	body := url.Values{}
@@ -144,8 +151,8 @@ func (c *Captcha) IsValid() error {
 		return fmt.Errorf("empty captcha site key")
 	}
 
-	tRem := dataset.RemedationFromString(c.FallbackRemediation)
-	if tRem != dataset.Ban && tRem != dataset.Allow {
+	tRem := remediation.FromString(c.FallbackRemediation)
+	if tRem != remediation.Ban && tRem != remediation.Allow {
 		return fmt.Errorf("invalid fallback remediation %s", c.FallbackRemediation)
 	}
 

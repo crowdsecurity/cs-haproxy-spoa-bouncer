@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
 	log "github.com/sirupsen/logrus"
@@ -69,7 +68,7 @@ func (c *CookieGenerator) GenerateCookie(session *session.Session, ssl *bool) (*
 	cookie := &http.Cookie{
 		Name:     c.Name,
 		Value:    session.Uuid,
-		MaxAge:   int(time.Until(time.Unix(session.ExpiryTime, 0)).Seconds()),
+		MaxAge:   0,
 		HttpOnly: *c.HttpOnly,
 		Secure:   false,
 		SameSite: http.SameSiteStrictMode,
@@ -93,12 +92,15 @@ func (c *CookieGenerator) GenerateCookie(session *session.Session, ssl *bool) (*
 }
 
 func (c *CookieGenerator) ValidateCookie(b64Value string) (string, error) {
+	c.logger.Tracef("validating cookie %s", b64Value)
 	value, err := base64.URLEncoding.DecodeString(b64Value)
 	if err != nil {
+		c.logger.Error("failed to decode cookie value, user submitted invalid cookie")
 		return "", err
 	}
 
 	if c.SignCookies != nil && *c.SignCookies {
+		c.logger.Tracef("validating signed cookie %s", string(value))
 		return c.validateSignedCookieValue(string(value))
 	}
 

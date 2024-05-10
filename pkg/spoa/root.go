@@ -2,6 +2,7 @@ package spoa
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -9,8 +10,9 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
@@ -173,13 +175,13 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 // First stage is to check the host header and determine if the remdiation from handleIpRequest is still valid
 // Second stage is to check if AppSec is enabled and then forward to the component if needed
 func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
-	remediation := dataset.Allow
+	r := remediation.Allow
 
 	rstring, err := readKeyFromMessage[string](mes, "remediation")
 
 	if err == nil {
 		log.Debug("remediation: ", *rstring)
-		remediation = dataset.RemedationFromString(*rstring)
+		r = remediation.FromString(*rstring)
 	} else {
 		log.Printf("ip remediation was not found in message, defaulting to allow")
 	}
@@ -190,11 +192,11 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	// defer a function that always add the remediation to the request at end of processing
 	defer func() {
-		if host == nil && remediation == dataset.Captcha {
+		if host == nil && r == remediation.Captcha {
 			log.Info("host was not found in the message cannot issue captcha remediation reverting to ban")
-			remediation = dataset.Ban
+			r = remediation.Ban
 		}
-		rString := remediation.String()
+		rString := r.String()
 		req.Actions.SetVar(action.ScopeTransaction, "remediation", rString)
 	}()
 
@@ -214,22 +216,21 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	var body *[]byte
 	var headers http.Header
 
-	switch remediation {
-	case dataset.Allow:
+	switch r {
+	case remediation.Allow:
 		// !TODO Check if cookie is sent and session is valid if not valid then issue an unset cookie
-	case dataset.Ban:
+	case remediation.Ban:
 		//Handle ban
 		host.Ban.InjectKeyValues(&req.Actions)
-	case dataset.Captcha:
+	case remediation.Captcha:
 		if err := host.Captcha.InjectKeyValues(&req.Actions); err != nil {
-			remediation = dataset.RemedationFromString(host.Captcha.FallbackRemediation)
+			r = remediation.FromString(host.Captcha.FallbackRemediation)
 		}
 
 		cookieB64, cookieErr := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
 		var s *session.Session
 
 		if cookieB64 != nil {
-			log.Debugf("found session id in message %s", *cookieB64)
 			sessionValue, err := host.Captcha.CookieGenerator.ValidateCookie(*cookieB64)
 			if err == nil {
 				s = host.Captcha.Sessions.GetSession(sessionValue)
@@ -238,22 +239,18 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				if s == nil {
 					cookieB64 = nil
 				}
-
-				// if the session is expired we set it to nil
-				if s != nil && s.IsExpired() {
-					s = nil
-				}
 			}
 		}
 
 		// if cookieB64 return an error or session is nil we create a new session
 		if cookieErr != nil || s == nil {
-			s, err = host.Captcha.Sessions.NewRandomSession(time.Now().Add(2 * time.Hour))
+			s, err = host.Captcha.Sessions.NewRandomSession()
 			if err != nil {
 				// should we revert back to ban?
 				log.Error(err)
 				return
 			}
+			s.Set(session.CAPTCHA_STATUS, captcha.Pending)
 		}
 
 		method, err = readKeyFromMessage[string](mes, "method")
@@ -276,7 +273,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 
 		// Check if the request is a captcha validation request
-		if method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
+		if s.Get(session.CAPTCHA_STATUS) != captcha.Valid && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
 			body, err = readKeyFromMessage[[]byte](mes, "body")
 
 			if err != nil {
@@ -302,7 +299,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			} // !TODO we should ignore static files also
 		}
 
-		// if original cookie is not found we send a new cookie to haproxy
+		// if original cookie is not found or we set it to nil we send a new cookie to haproxy
 		if cookieB64 == nil {
 			ssl, err := readKeyFromMessage[bool](mes, "ssl")
 
@@ -319,13 +316,16 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
 		}
 
+		// if the session has a valid captcha status we allow the request
 		if s.Get(session.CAPTCHA_STATUS) == captcha.Valid {
-			remediation = dataset.Allow
+			r = remediation.Allow
 			storedUrl := s.Get(session.URI)
+			// On first valid captcha we redirect to the stored url
 			if storedUrl != nil {
 				if uriString, ok := storedUrl.(string); ok {
 					log.Debug("redirecting to: ", uriString)
 					req.Actions.SetVar(action.ScopeTransaction, "redirect", uriString)
+					// Delete the URI from the session so we dont redirect loop
 					s.Delete(session.URI)
 				}
 			}
@@ -333,7 +333,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	}
 
 	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
-	if remediation > dataset.Unknown && !host.AppSec.AlwaysSend {
+	if r > remediation.Unknown && !host.AppSec.AlwaysSend {
 		return
 	}
 	// !TODO APPSEC STUFF
@@ -352,7 +352,6 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 }
 
 // Handles checking the IP address against the dataset
-// !TODO add country code check
 func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
 
@@ -361,9 +360,22 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 		return
 	}
 
-	remediation := s.DataSet.CheckIP(ipType)
+	r := s.DataSet.CheckIP(ipType)
 
-	req.Actions.SetVar(action.ScopeTransaction, "remediation", remediation.String())
+	if r < remediation.Unknown {
+		record, err := s.cfg.Geo.GetCity(ipType)
+		if err == nil {
+			country := geo.GetIsoCodeFromRecord(record)
+			if country != "" {
+				r = s.DataSet.CheckCN(country)
+			}
+		}
+		if !errors.Is(err, geo.NOT_VALID_CONFIG) {
+			log.Error(err)
+		}
+	}
+
+	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
 }
 
 func handlerWrapper(spoad *Spoa) func(req *request.Request) {
