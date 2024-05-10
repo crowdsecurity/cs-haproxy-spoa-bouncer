@@ -69,12 +69,13 @@ func (s *Session) HasMaxTime(ss *Sessions) bool {
 }
 
 type Sessions struct {
-	s                  []*Session    `yaml:"-"`                    // underlying sessions slice
-	SessionIdleTimeout string        `yaml:"session_idle_timeout"` // Max session idle timeout as a GoLang duration string EG: "2h"
-	SessionMaxTime     string        `yaml:"session_max_time"`     // Max session time as a GoLang duration string EG: "24h"
-	parsedIdleTimeout  time.Duration `yaml:"-"`                    // Parsed session timeout
-	parsedMaxTime      time.Duration `yaml:"-"`                    // Parsed max session time
-	logger             *log.Entry    `yaml:"-"`                    // logger passed from the remediation
+	s                     []*Session    `yaml:"-"`                       // underlying sessions slice
+	SessionIdleTimeout    string        `yaml:"session_idle_timeout"`    // Max session idle timeout as a GoLang duration string EG: "2h"
+	SessionMaxTime        string        `yaml:"session_max_time"`        // Max session time as a GoLang duration string EG: "24h"
+	SessionGarbageSeconds uint16        `yaml:"session_garbage_seconds"` // How often to garbage collect sessions
+	parsedIdleTimeout     time.Duration `yaml:"-"`                       // Parsed session timeout
+	parsedMaxTime         time.Duration `yaml:"-"`                       // Parsed max session time
+	logger                *log.Entry    `yaml:"-"`                       // logger passed from the remediation
 }
 
 func (s *Sessions) Init(log *log.Entry, ctx context.Context) {
@@ -103,6 +104,11 @@ func (s *Sessions) Init(log *log.Entry, ctx context.Context) {
 	}
 
 	s.logger = log.WithField("type", "sessions")
+
+	if s.SessionGarbageSeconds == 0 {
+		s.SessionGarbageSeconds = 60
+	}
+
 	go s.GarbageCollect(ctx)
 }
 
@@ -152,7 +158,7 @@ func (s *Sessions) RemoveSession(session *Session) {
 func (s *Sessions) GarbageCollect(ctx context.Context) {
 	s.logger.Debug("starting session garbage collection goroutine")
 	// Currently not configurable but can be made configurable in future
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(time.Duration(s.SessionGarbageSeconds) * time.Second)
 	for {
 		select {
 		case <-ctx.Done():

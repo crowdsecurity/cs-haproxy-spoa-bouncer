@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	NOT_VALID_CONFIG = fmt.Errorf("geo database is not initialized")
+	NotValidConfig = fmt.Errorf("geo database is not initialized")
 )
 
 type GeoDatabase struct {
@@ -86,7 +86,7 @@ func (g *GeoDatabase) IsValid() bool {
 func (g *GeoDatabase) GetASN(ip *net.IP) (*geoip2.ASN, error) {
 
 	if !g.IsValid() {
-		return nil, NOT_VALID_CONFIG
+		return nil, NotValidConfig
 	}
 
 	g.RLock()
@@ -104,7 +104,7 @@ func (g *GeoDatabase) GetASN(ip *net.IP) (*geoip2.ASN, error) {
 func (g *GeoDatabase) GetCity(ip *net.IP) (*geoip2.City, error) {
 
 	if !g.IsValid() {
-		return nil, NOT_VALID_CONFIG
+		return nil, NotValidConfig
 	}
 
 	g.RLock()
@@ -137,10 +137,6 @@ func GetIsoCodeFromRecord(record *geoip2.City) string {
 // Primarily written to stop the errors that were present in CrowdSec codebase
 // !TODO we should maybe extend this to use fsnotify if the user filesystem supports it
 func (g *GeoDatabase) WatchFiles(ctx context.Context) {
-	// If both are nil then there is no need to watch
-	if g.asnReader == nil && g.cityReader == nil {
-		return
-	}
 
 	ticker := time.NewTicker(1 * time.Minute)
 	for {
