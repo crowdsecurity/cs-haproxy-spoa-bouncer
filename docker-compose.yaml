@@ -58,6 +58,8 @@ volumes:
     driver: local
   templates:
     driver: local
+  geodb:
+    driver: local
 
 networks:
   crowdsec:
