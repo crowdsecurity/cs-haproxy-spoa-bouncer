@@ -1,4 +1,4 @@
-package cfg
+package cslogging
 
 import (
 	"errors"
@@ -13,6 +13,8 @@ import (
 
 	"github.com/crowdsecurity/go-cs-lib/ptr"
 )
+
+var DEFAULT_LOG_FILE = ""
 
 type LoggingConfig struct {
 	LogLevel     *log.Level `yaml:"log_level"`
@@ -81,13 +83,7 @@ func (c *LoggingConfig) validate() error {
 	return nil
 }
 
-func (c *LoggingConfig) setup(fileName string) error {
-	c.setDefaults()
-
-	if err := c.validate(); err != nil {
-		return err
-	}
-
+func (c *LoggingConfig) ConfigureLogger(clog *log.Logger) error {
 	log.SetLevel(*c.LogLevel)
 
 	if c.LogMode == "stdout" {
@@ -96,7 +92,7 @@ func (c *LoggingConfig) setup(fileName string) error {
 
 	log.SetFormatter(&log.TextFormatter{TimestampFormat: time.RFC3339, FullTimestamp: true})
 
-	logger, err := c.LoggerForFile(fileName)
+	logger, err := c.LoggerForFile(DEFAULT_LOG_FILE)
 	if err != nil {
 		return err
 	}
@@ -112,6 +108,23 @@ func (c *LoggingConfig) setup(fileName string) error {
 			log.FatalLevel,
 		},
 	})
+
+	return nil
+}
+
+func (c *LoggingConfig) Setup(fileName string) error {
+	// Not great but we need to set the default log file for the logger
+	DEFAULT_LOG_FILE = fileName
+
+	c.setDefaults()
+
+	if err := c.validate(); err != nil {
+		return err
+	}
+
+	if err := c.ConfigureLogger(log.New()); err != nil {
+		return err
+	}
 
 	return nil
 }

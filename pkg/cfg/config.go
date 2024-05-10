@@ -6,7 +6,9 @@ import (
 
 	"gopkg.in/yaml.v2"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
+	cslogging "github.com/crowdsecurity/crowdsec-spoa/pkg/logging"
 	"github.com/crowdsecurity/go-cs-lib/yamlpatch"
 )
 
@@ -17,10 +19,11 @@ type PrometheusConfig struct {
 }
 
 type BouncerConfig struct {
-	Logging      LoggingConfig `yaml:",inline"`
-	ListenAddr   string        `yaml:"listen_addr"`
-	ListenSocket string        `yaml:"listen_socket"`
-	Hosts        host.Hosts    `yaml:"hosts"`
+	Logging      cslogging.LoggingConfig `yaml:",inline"`
+	ListenAddr   string                  `yaml:"listen_addr"`
+	ListenSocket string                  `yaml:"listen_socket"`
+	Hosts        host.Hosts              `yaml:"hosts"`
+	Geo          geo.GeoDatabase         `yaml:",inline"`
 
 	PrometheusConfig PrometheusConfig `yaml:"prometheus"`
 }
@@ -50,7 +53,7 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 		return nil, fmt.Errorf("failed to unmarshal: %w", err)
 	}
 
-	if err = config.Logging.setup("crowdsec-spoa-bouncer.log"); err != nil {
+	if err = config.Logging.Setup("crowdsec-spoa-bouncer.log"); err != nil {
 		return nil, fmt.Errorf("failed to setup logging: %w", err)
 	}
 
