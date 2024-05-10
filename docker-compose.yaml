@@ -1,5 +1,3 @@
-version: 3.9
-
 services:
   spoa:
     image: crowdsecurity/crowdsec-spoa:latest
@@ -35,7 +33,7 @@ services:
       - templates:/var/lib/crowdsec/lua/haproxy/templates/
       - lua:/usr/local/crowdsec/lua/haproxy/
     ports:
-      - "127.0.0.1:9090:9090"
+      - "9090:9090"
     depends_on:
       - crowdsec
       - spoa
@@ -49,7 +47,7 @@ services:
       - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
       - DISABLE_ONLINE_API=true
     volumes:
-      - geodb:/var/lib/crowdsec/data/
+      - geodb:/staging/var/lib/crowdsec/data/
     networks:
       - crowdsec
 
@@ -59,8 +57,6 @@ volumes:
   sockets:
     driver: local
   templates:
-    driver: local
-  geodb:
     driver: local
 
 networks:

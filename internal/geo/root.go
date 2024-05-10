@@ -36,6 +36,8 @@ func (g *GeoDatabase) Init(ctx context.Context) {
 		log.Errorf("failed to open databases: %s", err)
 	}
 
+	g.lastModTime = make(map[string]time.Time)
+
 	go g.WatchFiles(ctx)
 }
 
