@@ -361,20 +361,19 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	}
 
 	r := s.DataSet.CheckIP(ipType)
-
+	var country string
 	if r < remediation.Unknown {
 		record, err := s.cfg.Geo.GetCity(ipType)
-		if err == nil {
-			country := geo.GetIsoCodeFromRecord(record)
-			if country != "" {
-				r = s.DataSet.CheckCN(country)
-			}
-		}
-		if !errors.Is(err, geo.NotValidConfig) {
+		if err != nil && !errors.Is(err, geo.NotValidConfig) {
 			log.Error(err)
+		}
+		country = geo.GetIsoCodeFromRecord(record)
+		if country != "" {
+			r = s.DataSet.CheckCN(country)
 		}
 	}
 
+	req.Actions.SetVar(action.ScopeTransaction, "isocode", country)
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
 }
 
