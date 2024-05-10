@@ -12,6 +12,7 @@ services:
       - sockets:/run/
       - templates:/var/lib/crowdsec/lua/haproxy/templates/
       - lua:/usr/local/crowdsec/lua/haproxy/
+      - geodb:/var/lib/crowdsec/data/
       - ./config/crowdsec-spoa-bouncer.yaml.local:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml.local
     networks:
       crowdsec:
@@ -47,6 +48,8 @@ services:
     environment:
       - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
       - DISABLE_ONLINE_API=true
+    volumes:
+      - geodb:/var/lib/crowdsec/data/
     networks:
       - crowdsec
 
@@ -56,6 +59,8 @@ volumes:
   sockets:
     driver: local
   templates:
+    driver: local
+  geodb:
     driver: local
 
 networks:

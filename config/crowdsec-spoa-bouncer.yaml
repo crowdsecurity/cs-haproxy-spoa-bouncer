@@ -15,6 +15,8 @@ insecure_skip_verify: false
 
 ## SPOA configuration
 listen_addr: 127.0.0.1:9000
+# asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
+# city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
 #listen_socket: /run/crowdsec-spoa.sock
 
 prometheus:

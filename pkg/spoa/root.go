@@ -370,7 +370,7 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 				r = s.DataSet.CheckCN(country)
 			}
 		}
-		if !errors.Is(err, geo.NOT_VALID_CONFIG) {
+		if !errors.Is(err, geo.NotValidConfig) {
 			log.Error(err)
 		}
 	}
