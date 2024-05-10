@@ -370,10 +370,10 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 		country = geo.GetIsoCodeFromRecord(record)
 		if country != "" {
 			r = s.DataSet.CheckCN(country)
+			req.Actions.SetVar(action.ScopeTransaction, "isocode", country)
 		}
 	}
 
-	req.Actions.SetVar(action.ScopeTransaction, "isocode", country)
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
 }
 
