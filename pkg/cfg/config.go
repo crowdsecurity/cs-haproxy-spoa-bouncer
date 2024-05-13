@@ -3,10 +3,13 @@ package cfg
 import (
 	"fmt"
 	"io"
+	"os/user"
+	"strconv"
 
 	"gopkg.in/yaml.v2"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	cslogging "github.com/crowdsecurity/crowdsec-spoa/pkg/logging"
 	"github.com/crowdsecurity/go-cs-lib/yamlpatch"
@@ -19,13 +22,16 @@ type PrometheusConfig struct {
 }
 
 type BouncerConfig struct {
-	Logging      cslogging.LoggingConfig `yaml:",inline"`
-	ListenAddr   string                  `yaml:"listen_addr"`
-	ListenSocket string                  `yaml:"listen_socket"`
-	Hosts        host.Hosts              `yaml:"hosts"`
-	Geo          geo.GeoDatabase         `yaml:",inline"`
-
-	PrometheusConfig PrometheusConfig `yaml:"prometheus"`
+	Logging          cslogging.LoggingConfig `yaml:",inline"`
+	Hosts            host.Hosts              `yaml:"hosts"`
+	HostsFolder      string                  `yaml:"hosts_folder"`
+	Geo              geo.GeoDatabase         `yaml:",inline"`
+	Workers          []*worker.Worker        `yaml:"workers"`
+	WorkerUser       string                  `yaml:"worker_user"`
+	WorkerGroup      string                  `yaml:"worker_group"`
+	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
+	WorkerUid        int                     `yaml:"-"`
+	WorkerGid        int                     `yaml:"-"`
 }
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).
@@ -57,8 +63,29 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 		return nil, fmt.Errorf("failed to setup logging: %w", err)
 	}
 
-	if config.ListenAddr == "" && config.ListenSocket == "" {
-		return nil, fmt.Errorf("listen_addr or listen_socket must be set")
+	u, err := user.Lookup(config.WorkerUser)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lookup user %s: %w", config.WorkerUser, err)
+	}
+
+	config.WorkerUid, err = strconv.Atoi(u.Uid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert uid %s: %w", u.Uid, err)
+	}
+
+	g, err := user.LookupGroup(config.WorkerGroup)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lookup group %s: %w", config.WorkerGroup, err)
+	}
+
+	config.WorkerGid, err = strconv.Atoi(g.Gid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert gid %s: %w", g.Gid, err)
+	}
+
+	for i := range config.Workers {
+		config.Workers[i].Uid = config.WorkerUid
+		config.Workers[i].Gid = config.WorkerGid
 	}
 
 	return config, nil

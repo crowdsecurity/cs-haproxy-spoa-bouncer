@@ -2,7 +2,6 @@ package spoa
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,12 +10,9 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
-	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
-	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/negasus/haproxy-spoe-go/action"
 	"github.com/negasus/haproxy-spoe-go/agent"
@@ -34,38 +30,40 @@ type Spoa struct {
 	ListenSocket net.Listener
 	Server       *agent.Agent
 	HAWaitGroup  *sync.WaitGroup
-	DataSet      *dataset.DataSet
 	ctx          context.Context
 	cancel       context.CancelFunc
-	cfg          *cfg.BouncerConfig
+	logger       *log.Entry
 }
 
-func New(cfg *cfg.BouncerConfig, dataset *dataset.DataSet) (*Spoa, error) {
+func New(tcpAddr, unixAddr string) (*Spoa, error) {
+	name, _ := os.LookupEnv("WORKERNAME") // worker name set by parent process
+
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Spoa{
-		DataSet:     dataset,
 		HAWaitGroup: &sync.WaitGroup{},
 		ctx:         ctx,
 		cancel:      cancel,
-		cfg:         cfg,
+		logger:      log.New().WithField("worker", name),
 	}
 
-	if cfg.ListenAddr != "" {
-		addr, err := net.Listen("tcp", cfg.ListenAddr)
+	if tcpAddr != "" {
+		addr, err := net.Listen("tcp", tcpAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", cfg.ListenAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %v", tcpAddr, err)
 		}
 		s.ListenAddr = addr
 	}
 
-	if cfg.ListenSocket != "" {
-		// Get current gid
+	if unixAddr != "" {
+		// Get current process uid/gid usually worker node
+		uid := os.Getuid()
 		gid := os.Getgid()
+
 		// Get existing socket stat
-		fileInfo, err := os.Stat(cfg.ListenSocket)
+		fileInfo, err := os.Stat(unixAddr)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to stat socket %s: %v", cfg.ListenSocket, err)
+				return nil, fmt.Errorf("failed to stat socket %s: %v", unixAddr, err)
 			}
 		} else {
 			stat, ok := fileInfo.Sys().(*syscall.Stat_t)
@@ -76,28 +74,33 @@ func New(cfg *cfg.BouncerConfig, dataset *dataset.DataSet) (*Spoa, error) {
 			gid = int(stat.Gid)
 		}
 
-		if err := os.Remove(cfg.ListenSocket); err != nil {
+		// Remove existing socket
+		if err := os.Remove(unixAddr); err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to remove socket %s: %v", cfg.ListenSocket, err)
+				return nil, fmt.Errorf("failed to remove socket %s: %v", unixAddr, err)
 			}
 		}
 
+		// Set umask to 0o777
 		origUmask := syscall.Umask(0o777)
 
-		addr, err := net.Listen("unix", cfg.ListenSocket)
+		// Create new socket
+		addr, err := net.Listen("unix", unixAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", cfg.ListenSocket, err)
+			return nil, fmt.Errorf("failed to listen on %s: %v", unixAddr, err)
 		}
 
+		// Reset umask
 		syscall.Umask(origUmask)
 
-		os.Chown(cfg.ListenSocket, 0, gid)
-		os.Chmod(cfg.ListenSocket, 0o660)
+		// Change socket owner and permissions
+		os.Chown(unixAddr, uid, gid)
+		os.Chmod(unixAddr, 0o660)
 
 		s.ListenSocket = addr
 	}
 
-	s.Server = agent.New(handlerWrapper(s), log.StandardLogger())
+	s.Server = agent.New(handlerWrapper(s), s.logger)
 
 	return s, nil
 }
@@ -106,7 +109,7 @@ func (s *Spoa) ServeTCP(ctx context.Context) error {
 	if s.ListenAddr == nil {
 		return nil
 	}
-	log.Infof("Serving TCP server on %s", s.ListenAddr.Addr().String())
+	s.logger.Infof("Serving TCP server on %s", s.ListenAddr.Addr().String())
 
 	errorChan := make(chan error, 1)
 
@@ -129,7 +132,8 @@ func (s *Spoa) ServeUnix(ctx context.Context) error {
 	if s.ListenSocket == nil {
 		return nil
 	}
-	log.Infof("Serving Unix server on %s", s.ListenSocket.Addr().String())
+
+	s.logger.Infof("Serving Unix server on %s", s.ListenSocket.Addr().String())
 
 	errorChan := make(chan error, 1)
 
@@ -149,13 +153,15 @@ func (s *Spoa) ServeUnix(ctx context.Context) error {
 }
 
 func (s *Spoa) Shutdown(ctx context.Context) error {
-	log.Info("Shutting down SPOA")
+	s.logger.Info("Shutting down")
 
 	doneChan := make(chan struct{})
 
+	// Close TCP listener
 	if s.ListenAddr != nil {
 		s.ListenAddr.Close()
 	}
+	// We don't close the unix socket as we want to persist permissions
 
 	go func() {
 		s.cancel()
@@ -172,7 +178,7 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 }
 
 // Handles checking the http request which has 2 stages
-// First stage is to check the host header and determine if the remdiation from handleIpRequest is still valid
+// First stage is to check the host header and determine if the remediation from handleIpRequest is still valid
 // Second stage is to check if AppSec is enabled and then forward to the component if needed
 func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	r := remediation.Allow
@@ -186,7 +192,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		log.Printf("ip remediation was not found in message, defaulting to allow")
 	}
 
-	hoststring, err := readKeyFromMessage[string](mes, "host")
+	// hoststring, err := readKeyFromMessage[string](mes, "host")
 
 	var host *host.Host
 
@@ -204,7 +210,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		return
 	}
 
-	host = s.cfg.Hosts.MatchFirstHost(*hoststring)
+	//host = s.cfg.Hosts.MatchFirstHost(*hoststring)
 
 	// if the host is not found we cannot alter the remediation or do appsec checks
 	if host == nil {
@@ -353,26 +359,27 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 // Handles checking the IP address against the dataset
 func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
-	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
+	// ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
 
-	if err != nil {
-		log.Error(err)
-		return
-	}
+	// if err != nil {
+	// 	log.Error(err)
+	// 	return
+	// }
 
-	r := s.DataSet.CheckIP(ipType)
-	var country string
-	if r < remediation.Unknown {
-		record, err := s.cfg.Geo.GetCity(ipType)
-		if err != nil && !errors.Is(err, geo.NotValidConfig) {
-			log.Error(err)
-		}
-		country = geo.GetIsoCodeFromRecord(record)
-		if country != "" {
-			r = s.DataSet.CheckCN(country)
-			req.Actions.SetVar(action.ScopeTransaction, "isocode", country)
-		}
-	}
+	r := remediation.Allow
+	// s.DataSet.CheckIP(ipType)
+	// var country string
+	// if r < remediation.Unknown {
+	// 	record, err := s.cfg.Geo.GetCity(ipType)
+	// 	if err != nil && !errors.Is(err, geo.NotValidConfig) {
+	// 		log.Error(err)
+	// 	}
+	// 	country = geo.GetIsoCodeFromRecord(record)
+	// 	if country != "" {
+	// 		r = s.DataSet.CheckCN(country)
+	// 		req.Actions.SetVar(action.ScopeTransaction, "isocode", country)
+	// 	}
+	// }
 
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
 }
