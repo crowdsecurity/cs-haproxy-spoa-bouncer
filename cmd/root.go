@@ -18,6 +18,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/spoa"
@@ -49,6 +50,7 @@ func HandleSignals(ctx context.Context) error {
 }
 
 func Execute() error {
+	// Parent flags
 	configPath := flag.String("c", "", "path to crowdsec-spoa-bouncer.yaml")
 	verbose := flag.Bool("v", false, "set verbose mode")
 	bouncerVersion := flag.Bool("V", false, "display version and exit (deprecated)")
@@ -56,7 +58,23 @@ func Execute() error {
 	testConfig := flag.Bool("t", false, "test config and exit")
 	showConfig := flag.Bool("T", false, "show full config (.yaml + .yaml.local) and exit")
 
+	// Worker flags
+	tcpAddr := flag.String("tcp", "", "tcp listener address")
+	unixAddr := flag.String("unix", "", "unix listener address")
+	workerMode := flag.Bool("worker", false, "run as worker")
+
 	flag.Parse()
+
+	if !*workerMode && (*tcpAddr != "" || *unixAddr != "") {
+		return fmt.Errorf("parent process cannot have listener address")
+	}
+
+	if *workerMode {
+		if *tcpAddr == "" && *unixAddr == "" {
+			return fmt.Errorf("worker process must have one listener address")
+		}
+		return WorkerExecute(*tcpAddr, *unixAddr)
+	}
 
 	if *bouncerVersion {
 		fmt.Print(version.FullString())
@@ -166,7 +184,38 @@ func Execute() error {
 		}
 	})
 
-	spoad, err := spoa.New(config, dataSet)
+	workerManager := worker.NewManager(ctx)
+	go workerManager.Run()
+
+	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
+
+	for _, worker := range config.Workers {
+		workerManager.CreateChan <- worker
+	}
+
+	if err := g.Wait(); err != nil {
+		switch err.Error() {
+		case "received SIGTERM":
+			log.Info("Received SIGTERM, shutting down")
+		case "received interrupt":
+			log.Info("Received interrupt, shutting down")
+		default:
+			return err
+		}
+	}
+
+	return nil
+}
+
+func WorkerExecute(tcpAddr, unixAddr string) error {
+
+	g, ctx := errgroup.WithContext(context.Background())
+
+	g.Go(func() error {
+		return HandleSignals(ctx)
+	})
+
+	spoad, err := spoa.New(tcpAddr, unixAddr)
 
 	if err != nil {
 		return fmt.Errorf("failed to create SPOA: %w", err)
@@ -186,14 +235,10 @@ func Execute() error {
 		return nil
 	})
 
-	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
-
 	if err := g.Wait(); err != nil {
 		switch err.Error() {
 		case "received SIGTERM":
-			log.Info("Received SIGTERM, shutting down")
 		case "received interrupt":
-			log.Info("Received interrupt, shutting down")
 		default:
 			return err
 		}

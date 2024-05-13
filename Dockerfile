@@ -16,9 +16,12 @@ COPY --from=build /go/src/cs-spoa-bouncer/docker/docker_start.sh /docker_start.s
 
 ## Add the same haproxy user as the official haproxy image
 RUN addgroup -g 99 -S haproxy && adduser -S -D -H -u 99 -h /var/lib/haproxy -s /sbin/nologin -G haproxy -g haproxy haproxy
+## Add worker user
+RUN addgroup -S crowdsec-spoa && adduser -S -D -H -s /usr/sbin/nologin -g crowdsec-spoa crowdsec-spoa
 
-## Create a socket for the spoa to inherit root:haproxy user from official haproxy image
-RUN touch /run/crowdsec-spoa.sock && chown 0:99 /run/crowdsec-spoa.sock && chmod 660 /run/crowdsec-spoa.sock
+## Create a socket for the spoa to inherit crowdsec-spoa:haproxy user from official haproxy image
+RUN mkdir -p /run/crowdsec-spoa/ && chown crowdsec-spoa:haproxy /run/crowdsec-spoa/ && chmod 770 /run/crowdsec-spoa/
+RUN touch /run/crowdsec-spoa/spoa-1.sock && chown crowdsec-spoa:haproxy /run/crowdsec-spoa/spoa-1.sock && chmod 660 /run/crowdsec-spoa/spoa-1.sock
 
 ## Copy templates
 RUN mkdir -p /var/lib/crowdsec/lua/haproxy/templates/
