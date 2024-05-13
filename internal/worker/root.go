@@ -6,15 +6,18 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type Worker struct {
-	Name         string    `yaml:"name"`
-	ListenAddr   string    `yaml:"listen_addr"`
-	ListenSocket string    `yaml:"listen_socket"`
-	Uid          int       `yaml:"-"`
-	Gid          int       `yaml:"-"`
-	Command      *exec.Cmd `yaml:"-"`
+	Name         string     `yaml:"name"`
+	ListenAddr   string     `yaml:"listen_addr"`
+	ListenSocket string     `yaml:"listen_socket"`
+	LogLevel     *log.Level `yaml:"log_level"`
+	Uid          int        `yaml:"-"`
+	Gid          int        `yaml:"-"`
+	Command      *exec.Cmd  `yaml:"-"`
 }
 
 func (w *Worker) Run() error {
@@ -28,9 +31,15 @@ func (w *Worker) Run() error {
 		args = append(args, "-unix", w.ListenSocket)
 	}
 	command := exec.Command(os.Args[0], args...)
+
 	command.Env = []string{
 		"WORKERNAME=" + w.Name,
 	}
+
+	if w.LogLevel != nil {
+		command.Env = append(command.Env, "LOG_LEVEL="+w.LogLevel.String())
+	}
+
 	command.SysProcAttr = &syscall.SysProcAttr{}
 	command.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(w.Uid), Gid: uint32(w.Gid)}
 	// !TODO worker should have there own log files

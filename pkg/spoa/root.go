@@ -36,14 +36,22 @@ type Spoa struct {
 }
 
 func New(tcpAddr, unixAddr string) (*Spoa, error) {
+	clog := log.New()
 	name, _ := os.LookupEnv("WORKERNAME") // worker name set by parent process
+	logLevel, err := log.ParseLevel(os.Getenv("LOG_LEVEL"))
+
+	if err != nil {
+		logLevel = clog.Level
+	}
+
+	clog.SetLevel(logLevel)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Spoa{
 		HAWaitGroup: &sync.WaitGroup{},
 		ctx:         ctx,
 		cancel:      cancel,
-		logger:      log.New().WithField("worker", name),
+		logger:      clog.WithField("worker", name),
 	}
 
 	if tcpAddr != "" {
@@ -384,12 +392,12 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
 }
 
-func handlerWrapper(spoad *Spoa) func(req *request.Request) {
+func handlerWrapper(s *Spoa) func(req *request.Request) {
 	return func(req *request.Request) {
-		spoad.HAWaitGroup.Add(1)
-		defer spoad.HAWaitGroup.Done()
+		s.HAWaitGroup.Add(1)
+		defer s.HAWaitGroup.Done()
 
-		if spoad.ctx.Err() != nil {
+		if s.ctx.Err() != nil {
 			log.Warn("context is done, skipping request")
 			return
 		}
@@ -399,12 +407,12 @@ func handlerWrapper(spoad *Spoa) func(req *request.Request) {
 			if err != nil {
 				continue
 			}
-			log.Debug("Received message: ", messageName)
+			s.logger.Trace("Received message: ", messageName)
 			switch messageName {
 			case "crowdsec-http":
-				spoad.handleHTTPRequest(req, mes)
+				s.handleHTTPRequest(req, mes)
 			case "crowdsec-ip":
-				spoad.handleIPRequest(req, mes)
+				s.handleIPRequest(req, mes)
 			}
 		}
 	}
