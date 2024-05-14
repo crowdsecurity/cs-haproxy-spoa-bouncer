@@ -23,13 +23,15 @@ type PrometheusConfig struct {
 
 type BouncerConfig struct {
 	Logging          cslogging.LoggingConfig `yaml:",inline"`
-	Hosts            host.Hosts              `yaml:"hosts"`
+	Hosts            []*host.Host            `yaml:"hosts"`
 	HostsFolder      string                  `yaml:"hosts_folder"`
 	Geo              geo.GeoDatabase         `yaml:",inline"`
 	Workers          []*worker.Worker        `yaml:"workers"`
 	WorkerUser       string                  `yaml:"worker_user"`
 	WorkerGroup      string                  `yaml:"worker_group"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
+	AdminSocket      string                  `yaml:"admin_socket"`
+	WorkerSocket     string                  `yaml:"worker_socket"`
 	WorkerUid        int                     `yaml:"-"`
 	WorkerGid        int                     `yaml:"-"`
 }
@@ -83,9 +85,13 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 		return nil, fmt.Errorf("failed to convert gid %s: %w", g.Gid, err)
 	}
 
-	for i := range config.Workers {
-		config.Workers[i].Uid = config.WorkerUid
-		config.Workers[i].Gid = config.WorkerGid
+	for _, w := range config.Workers {
+		w.Gid = config.WorkerGid
+		w.Uid = config.WorkerUid
+	}
+
+	if config.WorkerSocket == "" {
+		config.WorkerSocket = "/run/crowdsec-spoa-worker.sock"
 	}
 
 	return config, nil
