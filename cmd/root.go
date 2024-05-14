@@ -21,6 +21,8 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/spoa"
 	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
 	"github.com/crowdsecurity/go-cs-lib/csdaemon"
@@ -122,7 +124,6 @@ func Execute() error {
 
 	g, ctx := errgroup.WithContext(context.Background())
 
-	config.Hosts.Init(ctx, &config.Logging)
 	config.Geo.Init(ctx)
 
 	if *testConfig {
@@ -193,6 +194,32 @@ func Execute() error {
 		workerManager.CreateChan <- worker
 	}
 
+	HostManager := host.NewManager(ctx)
+	go HostManager.Run()
+
+	for _, h := range config.Hosts {
+		HostManager.CreateChan <- h
+	}
+
+	workerServer, err := server.NewWorkerSocket(config.WorkerSocket, config.WorkerGid)
+
+	if err != nil {
+		return fmt.Errorf("failed to create worker server: %w", err)
+	}
+
+	g.Go(func() error {
+		errChan := make(chan error)
+		go func() {
+			errChan <- workerServer.Run()
+		}()
+		select {
+		case err := <-errChan:
+			return err
+		case <-ctx.Done():
+			return nil
+		}
+	})
+
 	if err := g.Wait(); err != nil {
 		switch err.Error() {
 		case "received SIGTERM":
@@ -203,6 +230,8 @@ func Execute() error {
 			return err
 		}
 	}
+
+	workerServer.Close()
 
 	return nil
 }
