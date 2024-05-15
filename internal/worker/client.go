@@ -1,12 +1,18 @@
 package worker
 
-import "net"
+import (
+	"net"
+	"sync"
+)
 
 type WorkerClient struct {
-	conn net.Conn
+	conn  net.Conn
+	mutex *sync.Mutex
 }
 
 func (w *WorkerClient) GetIP(ip string) string {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
 	w.conn.Write([]byte("get ip " + ip))
 	buffer := make([]byte, 16)
 	n, err := w.conn.Read(buffer)
@@ -17,6 +23,8 @@ func (w *WorkerClient) GetIP(ip string) string {
 }
 
 func (w *WorkerClient) GetCN(cn string) string {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
 	w.conn.Write([]byte("get cn " + cn))
 	buffer := make([]byte, 16)
 	n, err := w.conn.Read(buffer)
@@ -27,6 +35,8 @@ func (w *WorkerClient) GetCN(cn string) string {
 }
 
 func (w *WorkerClient) GetGeoIso(ip string) string {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
 	w.conn.Write([]byte("get geo " + ip + " iso"))
 	buffer := make([]byte, 16)
 	n, err := w.conn.Read(buffer)
@@ -41,5 +51,5 @@ func NewWorkerClient(path string) *WorkerClient {
 	if err != nil {
 		return nil
 	}
-	return &WorkerClient{conn: c}
+	return &WorkerClient{conn: c, mutex: &sync.Mutex{}}
 }
