@@ -3,22 +3,13 @@ package worker
 import "net"
 
 type WorkerClient struct {
-	path string
-}
-
-func (w *WorkerClient) GetPath() string {
-	return w.path
+	conn net.Conn
 }
 
 func (w *WorkerClient) GetIP(ip string) string {
-	conn, err := net.Dial("unix", w.path)
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-	conn.Write([]byte("get ip " + ip))
+	w.conn.Write([]byte("get ip " + ip))
 	buffer := make([]byte, 16)
-	n, err := conn.Read(buffer)
+	n, err := w.conn.Read(buffer)
 	if err != nil {
 		return ""
 	}
@@ -26,14 +17,9 @@ func (w *WorkerClient) GetIP(ip string) string {
 }
 
 func (w *WorkerClient) GetCN(cn string) string {
-	conn, err := net.Dial("unix", w.path)
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-	conn.Write([]byte("get cn " + cn))
+	w.conn.Write([]byte("get cn " + cn))
 	buffer := make([]byte, 16)
-	n, err := conn.Read(buffer)
+	n, err := w.conn.Read(buffer)
 	if err != nil {
 		return ""
 	}
@@ -41,14 +27,9 @@ func (w *WorkerClient) GetCN(cn string) string {
 }
 
 func (w *WorkerClient) GetGeoIso(ip string) string {
-	conn, err := net.Dial("unix", w.path)
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-	conn.Write([]byte("get geo " + ip + " iso"))
+	w.conn.Write([]byte("get geo " + ip + " iso"))
 	buffer := make([]byte, 16)
-	n, err := conn.Read(buffer)
+	n, err := w.conn.Read(buffer)
 	if err != nil {
 		return ""
 	}
@@ -56,5 +37,9 @@ func (w *WorkerClient) GetGeoIso(ip string) string {
 }
 
 func NewWorkerClient(path string) *WorkerClient {
-	return &WorkerClient{path: path}
+	c, err := net.Dial("unix", path)
+	if err != nil {
+		return nil
+	}
+	return &WorkerClient{conn: c}
 }
