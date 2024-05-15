@@ -384,9 +384,8 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	}
 
 	r := remediation.Allow
-	rr := s.workerClient.GetIP(ipType.String())
-	s.logger.Info("remediation: ", rr)
-	r = remediation.FromString(rr)
+	r = remediation.FromString(s.workerClient.GetIP(ipType.String()))
+
 	if r < remediation.Unknown {
 		iso := s.workerClient.GetGeoIso(ipType.String())
 		if iso != "" {
