@@ -13,6 +13,7 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/negasus/haproxy-spoe-go/action"
 	"github.com/negasus/haproxy-spoe-go/agent"
@@ -33,10 +34,17 @@ type Spoa struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	logger       *log.Entry
+	workerClient *worker.WorkerClient
 }
 
 func New(tcpAddr, unixAddr string) (*Spoa, error) {
 	clog := log.New()
+	socket, ok := os.LookupEnv("WORKERSOCKET")
+
+	if !ok {
+		return nil, fmt.Errorf("failed to get socket from environment")
+	}
+
 	name, _ := os.LookupEnv("WORKERNAME") // worker name set by parent process
 	logLevel, err := log.ParseLevel(os.Getenv("LOG_LEVEL"))
 
@@ -48,10 +56,11 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Spoa{
-		HAWaitGroup: &sync.WaitGroup{},
-		ctx:         ctx,
-		cancel:      cancel,
-		logger:      clog.WithField("worker", name),
+		HAWaitGroup:  &sync.WaitGroup{},
+		ctx:          ctx,
+		cancel:       cancel,
+		logger:       clog.WithField("worker", name),
+		workerClient: worker.NewWorkerClient(socket),
 	}
 
 	if tcpAddr != "" {
@@ -367,27 +376,24 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 // Handles checking the IP address against the dataset
 func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
-	// ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
+	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
 
-	// if err != nil {
-	// 	log.Error(err)
-	// 	return
-	// }
+	if err != nil {
+		log.Error(err)
+		return
+	}
 
 	r := remediation.Allow
-	// s.DataSet.CheckIP(ipType)
-	// var country string
-	// if r < remediation.Unknown {
-	// 	record, err := s.cfg.Geo.GetCity(ipType)
-	// 	if err != nil && !errors.Is(err, geo.NotValidConfig) {
-	// 		log.Error(err)
-	// 	}
-	// 	country = geo.GetIsoCodeFromRecord(record)
-	// 	if country != "" {
-	// 		r = s.DataSet.CheckCN(country)
-	// 		req.Actions.SetVar(action.ScopeTransaction, "isocode", country)
-	// 	}
-	// }
+	rr := s.workerClient.GetIP(ipType.String())
+	s.logger.Info("remediation: ", rr)
+	r = remediation.FromString(rr)
+	if r < remediation.Unknown {
+		iso := s.workerClient.GetGeoIso(ipType.String())
+		if iso != "" {
+			r = remediation.FromString(s.workerClient.GetCN(iso))
+			req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
+		}
+	}
 
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
 }

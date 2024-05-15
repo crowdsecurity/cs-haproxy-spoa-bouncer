@@ -22,22 +22,22 @@ type Host struct {
 	logger   *log.Entry      `yaml:"-"`
 }
 
-type HostManager struct {
+type Manager struct {
 	Hosts      []*Host `yaml:"-"`
 	ctx        context.Context
 	CreateChan chan *Host
 	sync.RWMutex
 }
 
-func NewManager(ctx context.Context) *HostManager {
-	return &HostManager{
+func NewManager(ctx context.Context) *Manager {
+	return &Manager{
 		ctx:        ctx,
 		Hosts:      make([]*Host, 0),
 		CreateChan: make(chan *Host),
 	}
 }
 
-func (h *HostManager) MatchFirstHost(toMatch string) *Host {
+func (h *Manager) MatchFirstHost(toMatch string) *Host {
 	h.RLock()
 	defer h.RUnlock()
 	for _, host := range h.Hosts {
@@ -50,7 +50,7 @@ func (h *HostManager) MatchFirstHost(toMatch string) *Host {
 	return nil
 }
 
-func (h *HostManager) Run() {
+func (h *Manager) Run() {
 	for {
 		select {
 		case host := <-h.CreateChan:
@@ -62,7 +62,7 @@ func (h *HostManager) Run() {
 	}
 }
 
-func (h *HostManager) Sort() {
+func (h *Manager) Sort() {
 	h.Lock()
 	defer h.Unlock()
 
@@ -87,7 +87,7 @@ func (h *HostManager) Sort() {
 	})
 }
 
-func (hM *HostManager) RemoveHost(host *Host) {
+func (hM *Manager) RemoveHost(host *Host) {
 	hM.Lock()
 	defer hM.Unlock()
 
@@ -103,7 +103,7 @@ func (hM *HostManager) RemoveHost(host *Host) {
 	}
 }
 
-func (h *HostManager) AddHost(host *Host) {
+func (h *Manager) AddHost(host *Host) {
 	h.Lock()
 	defer h.Unlock()
 

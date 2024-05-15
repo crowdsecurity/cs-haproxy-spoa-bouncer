@@ -15,6 +15,11 @@ services:
     networks:
       crowdsec:
         ipv4_address: 10.5.5.254
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 250M
         
 
   whoami:

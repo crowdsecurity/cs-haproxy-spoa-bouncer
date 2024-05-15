@@ -20,7 +20,7 @@ type Worker struct {
 	Command      *exec.Cmd  `yaml:"-"`
 }
 
-func (w *Worker) Run() error {
+func (w *Worker) Run(socket string) error {
 	args := []string{
 		"-worker",
 	}
@@ -34,6 +34,7 @@ func (w *Worker) Run() error {
 
 	command.Env = []string{
 		"WORKERNAME=" + w.Name,
+		"WORKERSOCKET=" + socket,
 	}
 
 	if w.LogLevel != nil {
@@ -54,16 +55,18 @@ func (w *Worker) Run() error {
 }
 
 type Manager struct {
-	Workers    []*Worker       `yaml:"workers"`
-	CreateChan chan *Worker    `yaml:"-"`
-	Ctx        context.Context `yaml:"-"`
+	Workers          []*Worker       `yaml:"-"`
+	CreateChan       chan *Worker    `yaml:"-"`
+	Ctx              context.Context `yaml:"-"`
+	WorkerSocketPath string          `yaml:"-"`
 }
 
-func NewManager(ctx context.Context) *Manager {
+func NewManager(ctx context.Context, path string) *Manager {
 	return &Manager{
-		CreateChan: make(chan *Worker),
-		Workers:    make([]*Worker, 0),
-		Ctx:        ctx,
+		CreateChan:       make(chan *Worker),
+		Workers:          make([]*Worker, 0),
+		Ctx:              ctx,
+		WorkerSocketPath: path,
 	}
 }
 
@@ -80,7 +83,7 @@ func (m *Manager) Run() {
 }
 
 func (m *Manager) AddWorker(w *Worker) {
-	go w.Run()
+	go w.Run(m.WorkerSocketPath)
 	m.Workers = append(m.Workers, w)
 }
 
