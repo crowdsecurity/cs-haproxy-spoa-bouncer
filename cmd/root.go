@@ -18,6 +18,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/api"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
@@ -185,10 +186,8 @@ func Execute() error {
 		}
 	})
 
-	workerManager := worker.NewManager(ctx)
+	workerManager := worker.NewManager(ctx, config.WorkerSocket)
 	go workerManager.Run()
-
-	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
 
 	for _, worker := range config.Workers {
 		workerManager.CreateChan <- worker
@@ -201,7 +200,9 @@ func Execute() error {
 		HostManager.CreateChan <- h
 	}
 
-	workerServer, err := server.NewWorkerSocket(config.WorkerSocket, config.WorkerGid)
+	apiServer := api.NewApi(workerManager, HostManager, dataSet, &config.Geo)
+
+	workerServer, err := server.NewWorkerSocket(config.WorkerSocket, config.WorkerGid, apiServer)
 
 	if err != nil {
 		return fmt.Errorf("failed to create worker server: %w", err)
@@ -219,6 +220,8 @@ func Execute() error {
 			return nil
 		}
 	})
+
+	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
 
 	if err := g.Wait(); err != nil {
 		switch err.Error() {
