@@ -137,7 +137,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 				break
 			}
 
-			_b = append(_b, b)
+			// ignore newlines
+			if b != '\n' && b != '\r' {
+				_b = append(_b, b)
+			}
 
 			if i == len(data)-1 {
 				if len(apiCommand) == 2 && len(args) == 1 {
@@ -167,5 +170,5 @@ func (s *Server) handleConnection(conn net.Conn) {
 	if err != nil {
 		conn.Write([]byte(err.Error() + "\n"))
 	}
-	conn.Write([]byte(value))
+	conn.Write([]byte(value + "\n"))
 }

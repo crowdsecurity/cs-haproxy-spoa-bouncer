@@ -17,12 +17,12 @@ func (w *WorkerClient) GetIP(ip string) string {
 	}
 	defer conn.Close()
 	conn.Write([]byte("get ip " + ip))
-	buffer := make([]byte, 8)
+	buffer := make([]byte, 16)
 	n, err := conn.Read(buffer)
 	if err != nil {
 		return ""
 	}
-	return string(buffer[:n])
+	return string(buffer[:n-1])
 }
 
 func (w *WorkerClient) GetCN(cn string) string {
@@ -32,12 +32,12 @@ func (w *WorkerClient) GetCN(cn string) string {
 	}
 	defer conn.Close()
 	conn.Write([]byte("get cn " + cn))
-	buffer := make([]byte, 8)
+	buffer := make([]byte, 16)
 	n, err := conn.Read(buffer)
 	if err != nil {
 		return ""
 	}
-	return string(buffer[:n])
+	return string(buffer[:n-1])
 }
 
 func (w *WorkerClient) GetGeoIso(ip string) string {
@@ -47,12 +47,12 @@ func (w *WorkerClient) GetGeoIso(ip string) string {
 	}
 	defer conn.Close()
 	conn.Write([]byte("get geo " + ip + " iso"))
-	buffer := make([]byte, 8)
+	buffer := make([]byte, 16)
 	n, err := conn.Read(buffer)
 	if err != nil {
 		return ""
 	}
-	return string(buffer[:n])
+	return string(buffer[:n-1])
 }
 
 func NewWorkerClient(path string) *WorkerClient {
