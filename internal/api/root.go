@@ -1,24 +1,21 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 
+	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
 	log "github.com/sirupsen/logrus"
 )
-
-const (
-	WorkerPermission ApiPermission = iota
-	AdminPermission
-)
-
-type ApiPermission int
 
 const (
 	GET ApiVerb = "get"
@@ -68,7 +65,7 @@ var (
 )
 
 type ApiHandler struct {
-	handle func(permission ApiPermission, args ...string) (string, error)
+	handle func(permission apiPermission.ApiPermission, args ...string) (string, error)
 }
 
 type Api struct {
@@ -77,32 +74,34 @@ type Api struct {
 	HostManager   *host.Manager
 	Dataset       *dataset.DataSet
 	GeoDatabase   *geo.GeoDatabase
+	ConnChan      chan server.SocketConn
 }
 
-func (a *Api) HandleCommand(command string, args []string, permission ApiPermission) (string, error) {
+func (a *Api) HandleCommand(command string, args []string, permission apiPermission.ApiPermission) (string, error) {
 	if handler, ok := a.Handlers[command]; ok {
 		return handler.handle(permission, args...)
 	}
 	return "", fmt.Errorf("invalid command")
 }
 
-func NewApi(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *dataset.DataSet, geoDatabase *geo.GeoDatabase) *Api {
+func NewApi(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *dataset.DataSet, geoDatabase *geo.GeoDatabase, socketChan chan server.SocketConn) *Api {
 	a := &Api{
 		WorkerManager: WorkerManager,
 		HostManager:   HostManager,
 		Dataset:       dataset,
 		GeoDatabase:   geoDatabase,
+		ConnChan:      socketChan,
 	}
 
 	a.Handlers = map[string]ApiHandler{
 		"get:hosts": {
-			handle: func(permission ApiPermission, args ...string) (string, error) {
+			handle: func(permission apiPermission.ApiPermission, args ...string) (string, error) {
 
-				if len(args) == 0 && permission == WorkerPermission {
+				if len(args) == 0 && permission == apiPermission.WorkerPermission {
 					return "", fmt.Errorf("permission denied")
 				}
 
-				if len(args) == 0 && permission == AdminPermission {
+				if len(args) == 0 && permission == apiPermission.AdminPermission {
 					sb := strings.Builder{}
 					for _, host := range a.HostManager.Hosts {
 						sb.WriteString(host.Host)
@@ -125,7 +124,7 @@ func NewApi(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *d
 			},
 		},
 		"get:ip": {
-			handle: func(_ ApiPermission, args ...string) (string, error) {
+			handle: func(_ apiPermission.ApiPermission, args ...string) (string, error) {
 				if err := ArgsCheck(args, 1, 1); err != nil {
 					return "", err
 				}
@@ -140,7 +139,7 @@ func NewApi(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *d
 			},
 		},
 		"get:cn": {
-			handle: func(_ ApiPermission, args ...string) (string, error) {
+			handle: func(_ apiPermission.ApiPermission, args ...string) (string, error) {
 				if err := ArgsCheck(args, 1, 1); err != nil {
 					return "", err
 				}
@@ -152,7 +151,7 @@ func NewApi(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *d
 			},
 		},
 		"get:geo:iso": {
-			handle: func(_ ApiPermission, args ...string) (string, error) {
+			handle: func(_ apiPermission.ApiPermission, args ...string) (string, error) {
 
 				if err := ArgsCheck(args, 1, 1); err != nil {
 					return "", err
@@ -176,6 +175,17 @@ func NewApi(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *d
 	return a
 }
 
+func (a *Api) Run(ctx context.Context) {
+	for {
+		select {
+		case sc := <-a.ConnChan:
+			go a.handleConnection(sc)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func ArgsCheck(args []string, min int, max int) error {
 	if len(args) < min {
 		return fmt.Errorf("missing argument")
@@ -184,6 +194,117 @@ func ArgsCheck(args []string, min int, max int) error {
 		return fmt.Errorf("too many arguments")
 	}
 	return nil
+}
+
+func (a *Api) handleConnection(sc server.SocketConn) {
+	defer sc.Conn.Close()
+	buffer := make([]byte, sc.MaxBuffer)
+	var data []byte
+
+	for {
+		n, err := sc.Conn.Read(buffer)
+		if err != nil {
+			if err == io.EOF {
+				// Client closed the connection gracefully
+				break
+			}
+			fmt.Println("Read error:", err)
+			return
+		}
+
+		data = append(data, buffer[:n]...)
+
+		// Process the accumulated data
+		for len(data) > 0 {
+			apiCommand, args, remainingData, err := parseCommand(data)
+			if err != nil {
+				sc.Conn.Write([]byte("error processing command\n"))
+				data = remainingData
+				continue
+			}
+
+			if apiCommand == nil {
+				// Command is not complete yet, wait for more data
+				break
+			}
+
+			data = remainingData
+
+			// Handle the command
+			value, err := a.HandleCommand(strings.Join(apiCommand, ":"), args, sc.Permission)
+			if err != nil {
+				sc.Conn.Write([]byte(err.Error() + "\n"))
+			} else {
+				sc.Conn.Write([]byte(value + "\n"))
+			}
+		}
+	}
+}
+
+// parseCommand processes the data buffer and extracts the command and arguments.
+// It returns the command, arguments, remaining unprocessed data, and any error encountered.
+func parseCommand(data []byte) ([]string, []string, []byte, error) {
+	apiCommand := []string{}
+	args := []string{}
+	_b := make([]byte, 0)
+
+	for i, b := range data {
+		if b == ' ' {
+			if len(apiCommand) == 0 {
+				verb := string(_b)
+				if !IsValidVerb(verb) {
+					return nil, nil, data[i+1:], fmt.Errorf("invalid verb please use help")
+				}
+				apiCommand = append(apiCommand, verb)
+				_b = make([]byte, 0)
+				continue
+			}
+			if len(apiCommand) == 1 {
+				module := string(_b)
+				if !IsValidModule(module) {
+					return nil, nil, data[i+1:], fmt.Errorf("invalid module please use help")
+				}
+				apiCommand = append(apiCommand, module)
+				_b = make([]byte, 0)
+				continue
+			}
+			if len(apiCommand) == 2 && len(args) == 1 {
+				subModule := string(_b)
+				apiCommand = append(apiCommand, subModule)
+				_b = make([]byte, 0)
+				continue
+			}
+			args = append(args, string(_b))
+			_b = make([]byte, 0)
+			continue
+		}
+
+		// ignore newlines
+		if b != '\n' && b != '\r' {
+			_b = append(_b, b)
+		}
+
+		if i == len(data)-1 {
+			if len(apiCommand) == 2 && len(args) == 1 {
+				subModule := string(_b)
+				apiCommand = append(apiCommand, subModule)
+				return apiCommand, args, nil, nil
+			}
+			args = append(args, string(_b))
+			return apiCommand, args, nil, nil
+		}
+	}
+
+	if len(_b) > 0 {
+		if len(apiCommand) == 2 && len(args) == 1 {
+			subModule := string(_b)
+			apiCommand = append(apiCommand, subModule)
+			return apiCommand, args, nil, nil
+		}
+		args = append(args, string(_b))
+	}
+
+	return apiCommand, args, nil, nil
 }
 
 /*

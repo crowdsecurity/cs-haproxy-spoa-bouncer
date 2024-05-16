@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"syscall"
 
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -18,6 +19,7 @@ type Worker struct {
 	Uid          int        `yaml:"-"`
 	Gid          int        `yaml:"-"`
 	Command      *exec.Cmd  `yaml:"-"`
+	SocketPath   string     `yaml:"-"`
 }
 
 func (w *Worker) Run(socket string) error {
@@ -55,18 +57,18 @@ func (w *Worker) Run(socket string) error {
 }
 
 type Manager struct {
-	Workers          []*Worker       `yaml:"-"`
-	CreateChan       chan *Worker    `yaml:"-"`
-	Ctx              context.Context `yaml:"-"`
-	WorkerSocketPath string          `yaml:"-"`
+	Workers    []*Worker       `yaml:"-"`
+	CreateChan chan *Worker    `yaml:"-"`
+	Ctx        context.Context `yaml:"-"`
+	Server     *server.Server  `yaml:"-"`
 }
 
-func NewManager(ctx context.Context, path string) *Manager {
+func NewManager(ctx context.Context, s *server.Server) *Manager {
 	return &Manager{
-		CreateChan:       make(chan *Worker),
-		Workers:          make([]*Worker, 0),
-		Ctx:              ctx,
-		WorkerSocketPath: path,
+		CreateChan: make(chan *Worker),
+		Workers:    make([]*Worker, 0),
+		Ctx:        ctx,
+		Server:     s,
 	}
 }
 
@@ -83,7 +85,12 @@ func (m *Manager) Run() {
 }
 
 func (m *Manager) AddWorker(w *Worker) {
-	go w.Run(m.WorkerSocketPath)
+	socketString, err := m.Server.NewWorkerListener(w.Name, w.Gid)
+	if err != nil {
+		log.Errorf("failed to create worker listener: %s", err)
+		return
+	}
+	go w.Run(socketString)
 	m.Workers = append(m.Workers, w)
 }
 

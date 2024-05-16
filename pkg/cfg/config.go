@@ -5,6 +5,7 @@ import (
 	"io"
 	"os/user"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v2"
 
@@ -31,7 +32,7 @@ type BouncerConfig struct {
 	WorkerGroup      string                  `yaml:"worker_group"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
 	AdminSocket      string                  `yaml:"admin_socket"`
-	WorkerSocket     string                  `yaml:"worker_socket"`
+	WorkerSocketDir  string                  `yaml:"worker_socket"`
 	WorkerUid        int                     `yaml:"-"`
 	WorkerGid        int                     `yaml:"-"`
 }
@@ -90,8 +91,12 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 		w.Uid = config.WorkerUid
 	}
 
-	if config.WorkerSocket == "" {
-		config.WorkerSocket = "/run/crowdsec-spoa-worker.sock"
+	if config.WorkerSocketDir == "" {
+		config.WorkerSocketDir = "/run/"
+	}
+
+	if !strings.HasSuffix(config.WorkerSocketDir, "/") {
+		config.WorkerSocketDir = config.WorkerSocketDir + "/"
 	}
 
 	return config, nil

@@ -2,198 +2,139 @@ package server
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"os"
-	"strings"
 	"sync"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/api"
+	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
 	log "github.com/sirupsen/logrus"
 )
 
+var (
+	WORKER_SOCKET_PREFIX = "crowdsec-spoa-worker-"
+	ADMIN_SOCKET_PREFIX  = "crowdsec-spoa-admin-"
+)
+
 type Server struct {
-	listener      *net.Listener     // Listener
-	permission    api.ApiPermission // Worker or Admin
-	maxBufferSize int               // To protect against DoS if socket is compromised
-	logger        *log.Entry        // Logger
-	api           *api.Api
-	mutex         *sync.Mutex
+	listeners       []*net.Listener             // Listener
+	permission      apiPermission.ApiPermission // Worker or Admin
+	maxBufferSize   int                         // To protect against DoS if socket is compromised
+	logger          *log.Entry                  // Logger
+	connChan        chan SocketConn
+	mutex           *sync.Mutex
+	workerSocketDir string
 }
 
-func NewAdminSocket(path string, apiServer *api.Api) (*Server, error) {
+type SocketConn struct {
+	Conn       net.Conn
+	Permission apiPermission.ApiPermission
+	MaxBuffer  int
+}
+
+func NewAdminSocket(connChan chan SocketConn) (*Server, error) {
 	as := &Server{
-		permission:    api.AdminPermission,
+		permission:    apiPermission.AdminPermission,
 		logger:        log.New().WithField("server", "admin"),
 		maxBufferSize: 1024,
-		api:           apiServer,
+		connChan:      connChan,
 	}
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		return nil, err
-	}
-
-	// Admin socket has strict permissions
-	if err := os.Chmod(path, 0600); err != nil {
-		return nil, err
-	}
-
-	as.listener = &l
 
 	return as, nil
 }
 
-func NewWorkerSocket(path string, gid int, apiServer *api.Api) (*Server, error) {
+func NewWorkerSocket(connChan chan SocketConn, dir string) (*Server, error) {
 	ws := &Server{
-		permission:    api.WorkerPermission,
-		logger:        log.New().WithField("server", "worker"),
-		maxBufferSize: 128,
-		api:           apiServer,
-		mutex:         &sync.Mutex{},
+		permission:      apiPermission.WorkerPermission,
+		logger:          log.New().WithField("server", "worker"),
+		maxBufferSize:   128,
+		mutex:           &sync.Mutex{},
+		connChan:        connChan,
+		workerSocketDir: dir,
 	}
+
+	return ws, nil
+}
+
+func (s *Server) Run(l *net.Listener) error {
+	for {
+		conn, err := (*l).Accept()
+		if err != nil {
+			return err
+		}
+		s.connChan <- SocketConn{
+			Conn:       conn,
+			Permission: s.permission,
+			MaxBuffer:  s.maxBufferSize,
+		}
+	}
+}
+
+func (s *Server) NewAdminListener(path string) error {
+	l, err := newUnixSocket(path)
+	if err != nil {
+		return err
+	}
+	if err := configAdminSocket(path); err != nil {
+		return err
+	}
+	s.listeners = append(s.listeners, &l)
+
+	go s.Run(&l)
+
+	return nil
+}
+
+func (s *Server) NewWorkerListener(name string, gid int) (string, error) {
+	socketString := fmt.Sprintf("%s%s%s.sock", s.workerSocketDir, WORKER_SOCKET_PREFIX, name)
+
+	l, err := newUnixSocket(socketString)
+	if err != nil {
+		return "", err
+	}
+	if err := configWorkerSocket(socketString, gid); err != nil {
+		return "", err
+	}
+	s.listeners = append(s.listeners, &l)
+
+	go s.Run(&l)
+
+	return socketString, nil
+}
+
+func newUnixSocket(path string) (net.Listener, error) {
 	l, err := net.Listen("unix", path)
 	if err != nil {
 		return nil, err
 	}
+	return l, nil
+}
 
-	// Allow the worker group to access the socket
+func configWorkerSocket(path string, gid int) error {
 	if err := os.Chown(path, os.Getuid(), gid); err != nil {
-		return nil, err
+		return err
 	}
 
 	if err := os.Chmod(path, 0660); err != nil {
-		return nil, err
+		return err
 	}
 
-	ws.listener = &l
-	return ws, nil
+	return nil
 }
 
-func (s *Server) Run() error {
-	for {
-		conn, err := (*s.listener).Accept()
-		if err != nil {
-			return err
-		}
-		go s.handleConnection(conn)
+func configAdminSocket(path string) error {
+	if err := os.Chmod(path, 0600); err != nil {
+		return err
 	}
+	return nil
 }
 
 func (s *Server) Close() error {
-	return (*s.listener).Close()
-}
-
-func (s *Server) handleConnection(conn net.Conn) {
-	defer conn.Close()
-	buffer := make([]byte, s.maxBufferSize)
-	var data []byte
-
-	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
-			if err == io.EOF {
-				// Client closed the connection gracefully
-				break
-			}
-			fmt.Println("Read error:", err)
-			return
-		}
-
-		data = append(data, buffer[:n]...)
-
-		// Process the accumulated data
-		for len(data) > 0 {
-			apiCommand, args, remainingData, err := s.parseCommand(data)
-			if err != nil {
-				conn.Write([]byte("error processing command\n"))
-				data = remainingData
-				continue
-			}
-
-			if apiCommand == nil {
-				// Command is not complete yet, wait for more data
-				break
-			}
-
-			data = remainingData
-
-			// Handle the command
-			s.mutex.Lock()
-			value, err := s.api.HandleCommand(strings.Join(apiCommand, ":"), args, s.permission)
-			if err != nil {
-				conn.Write([]byte(err.Error() + "\n"))
-			} else {
-				conn.Write([]byte(value + "\n"))
-			}
-			s.mutex.Unlock()
+	for _, l := range s.listeners {
+		if err := (*l).Close(); err != nil {
+			return err
 		}
 	}
-}
-
-// parseCommand processes the data buffer and extracts the command and arguments.
-// It returns the command, arguments, remaining unprocessed data, and any error encountered.
-func (s *Server) parseCommand(data []byte) ([]string, []string, []byte, error) {
-	apiCommand := []string{}
-	args := []string{}
-	_b := make([]byte, 0)
-
-	for i, b := range data {
-		if b == ' ' {
-			if len(apiCommand) == 0 {
-				verb := string(_b)
-				if !api.IsValidVerb(verb) {
-					return nil, nil, data[i+1:], fmt.Errorf("invalid verb please use help")
-				}
-				apiCommand = append(apiCommand, verb)
-				_b = make([]byte, 0)
-				continue
-			}
-			if len(apiCommand) == 1 {
-				module := string(_b)
-				if !api.IsValidModule(module) {
-					return nil, nil, data[i+1:], fmt.Errorf("invalid module please use help")
-				}
-				apiCommand = append(apiCommand, module)
-				_b = make([]byte, 0)
-				continue
-			}
-			if len(apiCommand) == 2 && len(args) == 1 {
-				subModule := string(_b)
-				apiCommand = append(apiCommand, subModule)
-				_b = make([]byte, 0)
-				continue
-			}
-			args = append(args, string(_b))
-			_b = make([]byte, 0)
-			continue
-		}
-
-		// ignore newlines
-		if b != '\n' && b != '\r' {
-			_b = append(_b, b)
-		}
-
-		if i == len(data)-1 {
-			if len(apiCommand) == 2 && len(args) == 1 {
-				subModule := string(_b)
-				apiCommand = append(apiCommand, subModule)
-				return apiCommand, args, nil, nil
-			}
-			args = append(args, string(_b))
-			return apiCommand, args, nil, nil
-		}
-	}
-
-	if len(_b) > 0 {
-		if len(apiCommand) == 2 && len(args) == 1 {
-			subModule := string(_b)
-			apiCommand = append(apiCommand, subModule)
-			return apiCommand, args, nil, nil
-		}
-		args = append(args, string(_b))
-	}
-
-	return apiCommand, args, nil, nil
+	return nil
 }
 
 // func (s *Server) handleConnection(conn net.Conn) {

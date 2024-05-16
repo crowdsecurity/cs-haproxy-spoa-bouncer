@@ -186,13 +186,6 @@ func Execute() error {
 		}
 	})
 
-	workerManager := worker.NewManager(ctx, config.WorkerSocket)
-	go workerManager.Run()
-
-	for _, worker := range config.Workers {
-		workerManager.CreateChan <- worker
-	}
-
 	HostManager := host.NewManager(ctx)
 	go HostManager.Run()
 
@@ -200,25 +193,25 @@ func Execute() error {
 		HostManager.CreateChan <- h
 	}
 
-	apiServer := api.NewApi(workerManager, HostManager, dataSet, &config.Geo)
+	socketConnChan := make(chan server.SocketConn)
 
-	workerServer, err := server.NewWorkerSocket(config.WorkerSocket, config.WorkerGid, apiServer)
-
+	workerServer, err := server.NewWorkerSocket(socketConnChan, config.WorkerSocketDir)
 	if err != nil {
 		return fmt.Errorf("failed to create worker server: %w", err)
 	}
 
+	workerManager := worker.NewManager(ctx, workerServer)
+	go workerManager.Run()
+
+	apiServer := api.NewApi(workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
+
+	for _, worker := range config.Workers {
+		workerManager.CreateChan <- worker
+	}
+
 	g.Go(func() error {
-		errChan := make(chan error)
-		go func() {
-			errChan <- workerServer.Run()
-		}()
-		select {
-		case err := <-errChan:
-			return err
-		case <-ctx.Done():
-			return nil
-		}
+		apiServer.Run(ctx)
+		return nil
 	})
 
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
