@@ -384,6 +384,7 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 			log.Info("Verb:", verb)
 
 		case module == "":
+			module = headerStr
 			if !IsValidModule(module) {
 				log.Error("Invalid module:", module)
 				resetState()
@@ -391,9 +392,7 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 					log.Error("Error flushing connection buffer:", flushErr)
 					return
 				}
-				continue
 			}
-			module = headerStr
 			continue
 
 		default:
