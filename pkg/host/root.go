@@ -26,6 +26,7 @@ type Manager struct {
 	Hosts      []*Host `yaml:"-"`
 	ctx        context.Context
 	CreateChan chan *Host
+	cache      map[string]*Host
 	sync.RWMutex
 }
 
@@ -34,16 +35,23 @@ func NewManager(ctx context.Context) *Manager {
 		ctx:        ctx,
 		Hosts:      make([]*Host, 0),
 		CreateChan: make(chan *Host),
+		cache:      make(map[string]*Host),
 	}
 }
 
 func (h *Manager) MatchFirstHost(toMatch string) *Host {
 	h.RLock()
 	defer h.RUnlock()
+
+	if host, ok := h.cache[toMatch]; ok {
+		return host
+	}
+
 	for _, host := range h.Hosts {
 		matched, err := filepath.Match(host.Host, toMatch)
 		if matched && err == nil {
 			host.logger.WithField("value", toMatch).Debug("matched host")
+			h.cache[toMatch] = host
 			return host
 		}
 	}
@@ -54,6 +62,7 @@ func (h *Manager) Run() {
 	for {
 		select {
 		case host := <-h.CreateChan:
+			h.cache = make(map[string]*Host) //reset cache before adding new host
 			h.AddHost(host)
 			h.Sort()
 		case <-h.ctx.Done():

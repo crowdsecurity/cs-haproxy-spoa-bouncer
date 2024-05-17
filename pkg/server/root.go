@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"sync"
 
 	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
 	log "github.com/sirupsen/logrus"
@@ -20,9 +19,8 @@ type Server struct {
 	permission      apiPermission.ApiPermission // Worker or Admin
 	maxBufferSize   int                         // To protect against DoS if socket is compromised
 	logger          *log.Entry                  // Logger
-	connChan        chan SocketConn
-	mutex           *sync.Mutex
-	workerSocketDir string
+	connChan        chan SocketConn             // Channel to send new connections
+	workerSocketDir string                      // Directory for worker sockets
 }
 
 type SocketConn struct {
@@ -47,7 +45,6 @@ func NewWorkerSocket(connChan chan SocketConn, dir string) (*Server, error) {
 		permission:      apiPermission.WorkerPermission,
 		logger:          log.New().WithField("server", "worker"),
 		maxBufferSize:   128,
-		mutex:           &sync.Mutex{},
 		connChan:        connChan,
 		workerSocketDir: dir,
 	}
@@ -136,100 +133,3 @@ func (s *Server) Close() error {
 	}
 	return nil
 }
-
-// func (s *Server) handleConnection(conn net.Conn) {
-// 	defer conn.Close()
-// 	s.mutex.Lock()
-// 	defer s.mutex.Unlock()
-// 	buffer := make([]byte, 32)
-// 	var data []byte
-// 	for {
-// 		n, err := conn.Read(buffer)
-// 		if err != nil {
-// 			// handle error
-// 			break
-// 		}
-// 		data = append(data, buffer[:n]...)
-// 		if n < len(buffer) {
-// 			break
-// 		}
-// 		if len(data) >= s.maxBufferSize {
-// 			break
-// 		}
-// 	}
-// 	apiCommand := []string{}
-// 	args := []string{}
-// 	_b := make([]byte, 0)
-// 	for {
-// 		for i, b := range data {
-// 			if b == ' ' {
-// 				if len(apiCommand) == 0 {
-// 					verb := string(_b)
-// 					if !api.IsValidVerb(verb) {
-// 						conn.Write([]byte("invalid verb please use help\n"))
-// 						return
-// 					}
-// 					apiCommand = append(apiCommand, verb)
-// 					data = data[len(_b)+1:]
-// 					_b = make([]byte, 0)
-// 					break
-// 				}
-// 				if len(apiCommand) == 1 {
-// 					module := string(_b)
-// 					if !api.IsValidModule(module) {
-// 						conn.Write([]byte("invalid module please use help\n"))
-// 						return
-// 					}
-// 					apiCommand = append(apiCommand, module)
-// 					data = data[len(_b)+1:]
-// 					_b = make([]byte, 0)
-// 					break
-// 				}
-// 				if len(apiCommand) == 2 && len(args) == 1 {
-// 					subModule := string(_b)
-// 					apiCommand = append(apiCommand, subModule)
-// 					data = data[len(_b)+1:]
-// 					_b = make([]byte, 0)
-// 					break
-// 				}
-// 				args = append(args, string(_b))
-// 				data = data[len(_b)+1:]
-// 				_b = make([]byte, 0)
-// 				break
-// 			}
-
-// 			// ignore newlines
-// 			if b != '\n' && b != '\r' {
-// 				_b = append(_b, b)
-// 			}
-
-// 			if i == len(data)-1 {
-// 				if len(apiCommand) == 2 && len(args) == 1 {
-// 					subModule := string(_b)
-// 					apiCommand = append(apiCommand, subModule)
-// 					data = data[len(_b):]
-// 					_b = make([]byte, 0)
-// 					break
-// 				}
-// 				args = append(args, string(_b))
-// 				data = data[len(_b):]
-// 				break
-// 			}
-// 		}
-
-// 		if len(data) == 0 {
-// 			break
-// 		}
-// 	}
-
-// 	log.Info("Received command: ", apiCommand, args)
-// 	if len(apiCommand) < 2 {
-// 		conn.Write([]byte("invalid command\n"))
-// 		return
-// 	}
-// 	value, err := s.api.HandleCommand(strings.Join(apiCommand, ":"), args, s.permission)
-// 	if err != nil {
-// 		conn.Write([]byte(err.Error() + "\n"))
-// 	}
-// 	conn.Write([]byte(value + "\n"))
-// }

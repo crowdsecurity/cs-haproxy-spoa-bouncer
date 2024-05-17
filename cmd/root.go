@@ -201,17 +201,19 @@ func Execute() error {
 	}
 
 	workerManager := worker.NewManager(ctx, workerServer)
-	go workerManager.Run()
 
-	apiServer := api.NewApi(workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
+	g.Go(func() error {
+		return workerManager.Run()
+	})
+
+	apiServer := api.NewApi(ctx, workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
 
 	for _, worker := range config.Workers {
 		workerManager.CreateChan <- worker
 	}
 
 	g.Go(func() error {
-		apiServer.Run(ctx)
-		return nil
+		return apiServer.Run()
 	})
 
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
