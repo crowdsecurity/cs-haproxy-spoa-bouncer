@@ -72,14 +72,14 @@ func NewManager(ctx context.Context, s *server.Server) *Manager {
 	}
 }
 
-func (m *Manager) Run() {
+func (m *Manager) Run() error {
 	for {
 		select {
 		case w := <-m.CreateChan:
 			m.AddWorker(w)
 		case <-m.Ctx.Done():
 			m.Stop()
-			return
+			return nil
 		}
 	}
 }
