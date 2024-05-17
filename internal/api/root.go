@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
@@ -83,6 +84,7 @@ type Api struct {
 	GeoDatabase   *geo.GeoDatabase
 	ConnChan      chan server.SocketConn
 	ctx           context.Context
+	mutex         sync.Mutex
 }
 
 func (a *Api) HandleCommand(conn net.Conn, command string, args []string, permission apiPermission.ApiPermission) {
@@ -101,6 +103,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 		GeoDatabase:   geoDatabase,
 		ConnChan:      socketChan,
 		ctx:           ctx,
+		mutex:         sync.Mutex{},
 	}
 
 	a.Handlers = map[string]ApiHandler{
@@ -336,10 +339,11 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 			log.Error("Read error:", err)
 			return
 		}
+
 		if n == 0 {
 			continue
 		}
-
+		a.mutex.Lock()
 		_dl, _v, _m, _sm, err := readHeaderFromBytes(headerBuffer)
 
 		if err != nil || !IsValidVerb(_v) || !IsValidModule(_m) {
@@ -348,20 +352,18 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 				log.Error("Error flushing connection buffer:", flushErr)
 				return
 			}
+			a.mutex.Unlock()
 			continue
 		}
 
 		dataBuffer = make([]byte, _dl)
 		n, err = sc.Conn.Read(dataBuffer)
-		if err != nil {
-			log.Error("Read error:", err)
-			return
-		}
-		if n == 0 {
+		if err != nil || n == 0 {
 			if flushErr := flushConn(sc.Conn); flushErr != nil {
 				log.Error("Error flushing connection buffer:", flushErr)
 				return
 			}
+			a.mutex.Unlock()
 			continue
 		}
 
@@ -372,6 +374,7 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 		dataParts := strings.Split(string(dataBuffer[:n]), " ")
 		log.Infof("data: %+v", dataParts)
 		a.HandleCommand(sc.Conn, command, dataParts, sc.Permission)
+		a.mutex.Unlock()
 	}
 }
 
