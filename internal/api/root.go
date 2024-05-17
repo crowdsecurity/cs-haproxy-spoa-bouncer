@@ -322,23 +322,9 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 		log.Error("Error flushing connection buffer:", err)
 		return
 	}
-
-	headerBuffer := make([]byte, 16)
+	// headerBuffer is 4 parts of 16 bytes each
+	headerBuffer := make([]byte, 64)
 	dataBuffer := make([]byte, 0)
-
-	var (
-		dataLen   int
-		verb      string
-		module    string
-		subModule string
-	)
-
-	resetState := func() {
-		dataLen = 0
-		verb = ""
-		module = ""
-		subModule = ""
-	}
 
 	for {
 		n, err := sc.Conn.Read(headerBuffer)
@@ -353,77 +339,51 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 		if n == 0 {
 			continue
 		}
-		headerStr := cleanNullBytes(headerBuffer[:n])
-		log.Info("Header:", headerStr)
 
-		switch {
-		case dataLen == 0:
-			dataLen, err = strconv.Atoi(headerStr)
-			if err != nil {
-				log.Error("Error parsing data length:", err)
-				resetState()
-				if flushErr := flushConn(sc.Conn); flushErr != nil {
-					log.Error("Error flushing connection buffer:", flushErr)
-					return
-				}
-				continue
-			}
-			log.Info("Data length:", dataLen)
+		_dl, _v, _m, _sm, err := readHeaderFromBytes(headerBuffer)
 
-		case verb == "":
-			verb = headerStr
-			if !IsValidVerb(verb) {
-				log.Error("Invalid verb:", verb)
-				resetState()
-				if flushErr := flushConn(sc.Conn); flushErr != nil {
-					log.Error("Error flushing connection buffer:", flushErr)
-					return
-				}
-				continue
-			}
-			log.Info("Verb:", verb)
-
-		case module == "":
-			module = headerStr
-			if !IsValidModule(module) {
-				log.Error("Invalid module:", module)
-				resetState()
-				if flushErr := flushConn(sc.Conn); flushErr != nil {
-					log.Error("Error flushing connection buffer:", flushErr)
-					return
-				}
-			}
-			continue
-
-		default:
-			subModule = headerStr
-
-			dataBuffer = make([]byte, dataLen)
-			n, err := sc.Conn.Read(dataBuffer)
-			if err != nil {
-				log.Error("Read error:", err)
+		if err != nil || !IsValidVerb(_v) || !IsValidModule(_m) {
+			log.Error("Error reading header:", err)
+			if flushErr := flushConn(sc.Conn); flushErr != nil {
+				log.Error("Error flushing connection buffer:", flushErr)
 				return
 			}
-			if n == 0 {
-				resetState()
-				if flushErr := flushConn(sc.Conn); flushErr != nil {
-					log.Error("Error flushing connection buffer:", flushErr)
-					return
-				}
-				continue
-			}
-
-			command := verb + ":" + module
-			if subModule != "" {
-				command += ":" + subModule
-			}
-			dataParts := strings.Split(string(dataBuffer[:n]), " ")
-			log.Infof("data: %+v", dataParts)
-			a.HandleCommand(sc.Conn, command, dataParts, sc.Permission)
-
-			resetState()
+			continue
 		}
+
+		dataBuffer = make([]byte, _dl)
+		n, err = sc.Conn.Read(dataBuffer)
+		if err != nil {
+			log.Error("Read error:", err)
+			return
+		}
+		if n == 0 {
+			if flushErr := flushConn(sc.Conn); flushErr != nil {
+				log.Error("Error flushing connection buffer:", flushErr)
+				return
+			}
+			continue
+		}
+
+		command := _v + ":" + _m
+		if _sm != "" {
+			command += ":" + _sm
+		}
+		dataParts := strings.Split(string(dataBuffer[:n]), " ")
+		log.Infof("data: %+v", dataParts)
+		a.HandleCommand(sc.Conn, command, dataParts, sc.Permission)
 	}
+}
+
+func readHeaderFromBytes(hb []byte) (int, string, string, string, error) {
+	dataLen, err := strconv.Atoi(cleanNullBytes(hb[:16]))
+	if err != nil {
+		return 0, "", "", "", err
+	}
+	verb := cleanNullBytes(hb[16:32])
+	module := cleanNullBytes(hb[32:48])
+	subModule := cleanNullBytes(hb[48:64])
+	return dataLen, verb, module, subModule, nil
 }
 
 func cleanNullBytes(b []byte) string {
