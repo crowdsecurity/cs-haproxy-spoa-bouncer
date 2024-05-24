@@ -55,7 +55,6 @@ func (c *Captcha) InitLogger(logger *log.Entry) {
 func (c *Captcha) InjectKeyValues(actions *action.Actions) error {
 
 	if err := c.IsValid(); err != nil {
-		c.logger.Error("invalid captcha configuration using host fallback")
 		return err
 	}
 
@@ -138,10 +137,6 @@ func (c *Captcha) IsValid() error {
 
 	if !ValidProvider(c.Provider) {
 		return fmt.Errorf("invalid captcha provider %s", c.Provider)
-	}
-
-	if c.SecretKey == "" {
-		return fmt.Errorf("empty captcha secret key")
 	}
 
 	if c.SiteKey == "" {
