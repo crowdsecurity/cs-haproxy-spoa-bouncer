@@ -187,7 +187,10 @@ func Execute() error {
 	})
 
 	HostManager := host.NewManager(ctx)
-	go HostManager.Run()
+	g.Go(func() error {
+		HostManager.Run()
+		return nil
+	})
 
 	for _, h := range config.Hosts {
 		HostManager.CreateChan <- h

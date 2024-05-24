@@ -3,14 +3,12 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
@@ -73,7 +71,7 @@ var (
 )
 
 type ApiHandler struct {
-	handle func(conn net.Conn, permission apiPermission.ApiPermission, args ...string)
+	handle func(permission apiPermission.ApiPermission, args ...string) (interface{}, error)
 }
 
 type Api struct {
@@ -84,15 +82,13 @@ type Api struct {
 	GeoDatabase   *geo.GeoDatabase
 	ConnChan      chan server.SocketConn
 	ctx           context.Context
-	mutex         sync.Mutex
 }
 
-func (a *Api) HandleCommand(conn net.Conn, command string, args []string, permission apiPermission.ApiPermission) {
+func (a *Api) HandleCommand(command string, args []string, permission apiPermission.ApiPermission) (interface{}, error) {
 	if handler, ok := a.Handlers[command]; ok {
-		handler.handle(conn, permission, args...)
-		return
+		return handler.handle(permission, args...)
 	}
-	conn.Write([]byte("command not found\n"))
+	return nil, fmt.Errorf("command not found")
 }
 
 func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *host.Manager, dataset *dataset.DataSet, geoDatabase *geo.GeoDatabase, socketChan chan server.SocketConn) *Api {
@@ -103,73 +99,61 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 		GeoDatabase:   geoDatabase,
 		ConnChan:      socketChan,
 		ctx:           ctx,
-		mutex:         sync.Mutex{},
 	}
 
 	a.Handlers = map[string]ApiHandler{
 		"val:host:cookie": {
-			handle: func(conn net.Conn, permission apiPermission.ApiPermission, args ...string) {
+			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 2, 2); err != nil {
-					conn.Write([]byte(err.Error() + "\n"))
-					return
+					return "", err
 				}
 
 				h := a.HostManager.MatchFirstHost(args[0])
 				if h == nil {
-					conn.Write([]byte("host not found\n"))
-					return
+					return "", nil
 				}
 
 				uuid, err := h.Captcha.CookieGenerator.ValidateCookie(args[1])
 				if err != nil {
-					conn.Write([]byte("invalid cookie\n"))
-					return
+					return "", err
 				}
 
-				conn.Write([]byte(uuid + "\n"))
+				return uuid, nil
 			},
 		},
 		"get:host:cookie": {
-			handle: func(conn net.Conn, permission apiPermission.ApiPermission, args ...string) {
+			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 2, 2); err != nil {
-					conn.Write([]byte(err.Error() + "\n"))
-					return
+					return nil, err
 				}
 
 				h := a.HostManager.MatchFirstHost(args[0])
 				ses, err := h.Captcha.Sessions.NewRandomSession()
 				if err != nil {
-					conn.Write([]byte("error generating cookie\n"))
-					return
+					return nil, err
 				}
 
 				cookie, err := h.Captcha.CookieGenerator.GenerateCookie(ses, ptr.Of(args[1] == "true"))
 				if err != nil {
-					conn.Write([]byte("error generating cookie\n"))
-					return
+					return nil, err
 				}
 
 				ses.Set(session.CAPTCHA_STATUS, captcha.Pending)
-				conn.Write([]byte(cookie.String() + "\n"))
+				return cookie.String(), nil
 			},
 		},
 		"get:hosts": {
-			handle: func(conn net.Conn, permission apiPermission.ApiPermission, args ...string) {
-				hostGob := gob.NewEncoder(conn)
-
+			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
 				if len(args) == 0 && permission == apiPermission.WorkerPermission {
-					conn.Write([]byte("permission denied\n"))
-					return
+					return nil, fmt.Errorf("permission denied")
 				}
 
 				if len(args) == 0 && permission == apiPermission.AdminPermission {
-					hostGob.Encode(a.HostManager.Hosts)
-					return
+					return a.HostManager.Hosts, nil
 				}
 
 				if err := ArgsCheck(args, 1, 1); err != nil {
-					conn.Write([]byte(err.Error() + "\n"))
-					return
+					return nil, err
 				}
 
 				log.Info("Checking host", args[0])
@@ -177,12 +161,11 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 				h := a.HostManager.MatchFirstHost(args[0])
 
 				if h == nil {
-					conn.Write([]byte("\n"))
-					return
+					return "", nil
 				}
 
-				// Encode a host object with gob, omits the sensitive data
-				hostGob.Encode(&host.Host{
+				// return a new host derived from the host object
+				return &host.Host{
 					Host: h.Host,
 					Captcha: captcha.Captcha{
 						SiteKey:             h.Captcha.SiteKey,
@@ -190,70 +173,65 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 						FallbackRemediation: h.Captcha.FallbackRemediation,
 					},
 					Ban: h.Ban,
-				})
+				}, nil
 			},
 		},
 		"get:ip": {
-			handle: func(conn net.Conn, permission apiPermission.ApiPermission, args ...string) {
+			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 1, 1); err != nil {
-					conn.Write([]byte(err.Error() + "\n"))
-					return
+					return nil, err
 				}
 
 				log.Infof("Checking IP %s", args[0])
 				val := net.ParseIP(args[0])
+
 				if val == nil {
-					conn.Write([]byte("invalid IP\n"))
-					return
+					return nil, fmt.Errorf("invalid IP")
 				}
+
 				r := a.Dataset.CheckIP(&val)
 				if permission == apiPermission.WorkerPermission {
-					rGob := gob.NewEncoder(conn)
-					rGob.Encode(r)
-					return
+					return r, nil
 				}
-				conn.Write([]byte(r.String() + "\n"))
+				return r.String(), nil
 			},
 		},
 		"get:cn": {
-			handle: func(conn net.Conn, permission apiPermission.ApiPermission, args ...string) {
+			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 1, 1); err != nil {
-					conn.Write([]byte(err.Error() + "\n"))
-					return
+					return nil, err
 				}
 				if args[0] == "" {
-					conn.Write([]byte("invalid country\n"))
-					return
+					return nil, fmt.Errorf("invalid argument")
 				}
 				r := a.Dataset.CheckCN(args[0])
+
 				if permission == apiPermission.WorkerPermission {
-					rGob := gob.NewEncoder(conn)
-					rGob.Encode(r)
-					return
+					return r, nil
 				}
-				conn.Write([]byte(r.String() + "\n"))
+
+				return r.String(), nil
 			},
 		},
 		"get:geo:iso": {
-			handle: func(conn net.Conn, _ apiPermission.ApiPermission, args ...string) {
-				geoGob := gob.NewEncoder(conn)
+			handle: func(_ apiPermission.ApiPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 1, 1); err != nil {
-					conn.Write([]byte(err.Error() + "\n"))
-					return
+					return nil, err
 				}
 
 				log.Infof("Checking IP %s", args[0])
 				val := net.ParseIP(args[0])
+
 				if val == nil {
-					conn.Write([]byte("invalid IP\n"))
-					return
+					return nil, fmt.Errorf("invalid IP")
 				}
 				record, err := a.GeoDatabase.GetCity(&val)
+
 				if err != nil && !errors.Is(err, geo.NotValidConfig) {
-					log.Error(err)
+					return nil, err
 				}
-				iso := geo.GetIsoCodeFromRecord(record)
-				geoGob.Encode(iso)
+
+				return geo.GetIsoCodeFromRecord(record), nil
 			},
 		},
 	}
@@ -327,7 +305,6 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 	}
 	// headerBuffer is 4 parts of 16 bytes each
 	headerBuffer := make([]byte, 64)
-	dataBuffer := make([]byte, 0)
 
 	for {
 		n, err := sc.Conn.Read(headerBuffer)
@@ -343,8 +320,10 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 		if n == 0 {
 			continue
 		}
-		a.mutex.Lock()
+
 		_dl, _v, _m, _sm, err := readHeaderFromBytes(headerBuffer)
+
+		log.Info("received header bytes", _dl, _v, _m, _sm)
 
 		if err != nil || !IsValidVerb(_v) || !IsValidModule(_m) {
 			log.Error("Error reading header:", err)
@@ -352,18 +331,16 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 				log.Error("Error flushing connection buffer:", flushErr)
 				return
 			}
-			a.mutex.Unlock()
 			continue
 		}
 
-		dataBuffer = make([]byte, _dl)
+		dataBuffer := make([]byte, _dl)
 		n, err = sc.Conn.Read(dataBuffer)
 		if err != nil || n == 0 {
 			if flushErr := flushConn(sc.Conn); flushErr != nil {
 				log.Error("Error flushing connection buffer:", flushErr)
 				return
 			}
-			a.mutex.Unlock()
 			continue
 		}
 
@@ -373,8 +350,15 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 		}
 		dataParts := strings.Split(string(dataBuffer[:n]), " ")
 		log.Infof("data: %+v", dataParts)
-		a.HandleCommand(sc.Conn, command, dataParts, sc.Permission)
-		a.mutex.Unlock()
+		value, err := a.HandleCommand(command, dataParts, sc.Permission)
+
+		if err != nil {
+			//TODO handle error
+			continue
+		}
+
+		sc.Encoder.Encode(value)
+		log.Info("handled command")
 	}
 }
 
