@@ -62,9 +62,11 @@ func (h *Manager) Run() {
 	for {
 		select {
 		case host := <-h.CreateChan:
+			h.Lock()
 			h.cache = make(map[string]*Host) //reset cache before adding new host
 			h.AddHost(host)
 			h.Sort()
+			h.Unlock()
 		case <-h.ctx.Done():
 			return
 		}
@@ -72,9 +74,6 @@ func (h *Manager) Run() {
 }
 
 func (h *Manager) Sort() {
-	h.Lock()
-	defer h.Unlock()
-
 	// If there are less than 2 hosts, no need to sort
 	if len(h.Hosts) < 2 {
 		return
@@ -113,9 +112,6 @@ func (hM *Manager) RemoveHost(host *Host) {
 }
 
 func (h *Manager) AddHost(host *Host) {
-	h.Lock()
-	defer h.Unlock()
-
 	clog := log.New()
 
 	if host.LogLevel != nil {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/gob"
 	"fmt"
 	"net"
 	"os"
@@ -24,9 +25,10 @@ type Server struct {
 }
 
 type SocketConn struct {
-	Conn       net.Conn
-	Permission apiPermission.ApiPermission
-	MaxBuffer  int
+	Conn       net.Conn                    // underlying connection
+	Permission apiPermission.ApiPermission // Permission of the socket admin|worker
+	MaxBuffer  int                         // Placeholder for max buffer might be dropped
+	Encoder    *gob.Encoder                // Unique encoder for socket connection
 }
 
 func NewAdminSocket(connChan chan SocketConn) (*Server, error) {
@@ -62,6 +64,7 @@ func (s *Server) Run(l *net.Listener) error {
 			Conn:       conn,
 			Permission: s.permission,
 			MaxBuffer:  s.maxBufferSize,
+			Encoder:    gob.NewEncoder(conn),
 		}
 	}
 }
