@@ -362,6 +362,7 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 	}
 }
 
+// readHeaderFromBytes reads the header bytes and returns the data length, verb, module, and sub-module.
 func readHeaderFromBytes(hb []byte) (int, string, string, string, error) {
 	dataLen, err := strconv.Atoi(cleanNullBytes(hb[:16]))
 	if err != nil {
@@ -373,6 +374,7 @@ func readHeaderFromBytes(hb []byte) (int, string, string, string, error) {
 	return dataLen, verb, module, subModule, nil
 }
 
+// cleanNullBytes removes null bytes from a byte slice and returns a string.
 func cleanNullBytes(b []byte) string {
 	return string(bytes.ReplaceAll(b, []byte{0}, []byte{}))
 }
