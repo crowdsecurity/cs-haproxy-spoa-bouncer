@@ -4,7 +4,6 @@ import (
 	"encoding/gob"
 	"net"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
@@ -27,6 +26,15 @@ func (w *WorkerClient) write(_b []byte) error {
 	return nil
 }
 
+func (w *WorkerClient) joinArgsBytes(args []string) []byte {
+	_b := make([]byte, 0)
+	for _, a := range args {
+		_b = append(_b, []byte(a)...)
+		_b = append(_b, 0)
+	}
+	return _b
+}
+
 /*
 First 52 bytes of the message are the header:
 0 - 16: length of data as string
@@ -36,7 +44,7 @@ First 52 bytes of the message are the header:
 52 - 52+dl: data
 */
 func (w *WorkerClient) formatHeaderBytes(verb, command, submodule string, args []string) []byte {
-	_jd := strings.Join(args, " ")
+	_jd := w.joinArgsBytes(args)
 	_dl := len(_jd)
 	_b := make([]byte, 52+_dl)
 	copy(_b[0:16], strconv.Itoa(_dl))

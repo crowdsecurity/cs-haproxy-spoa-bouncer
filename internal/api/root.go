@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"strconv"
-	"strings"
 	"time"
 
 	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
@@ -425,7 +424,7 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 		if _sm != "" {
 			command += ":" + _sm
 		}
-		dataParts := strings.Split(string(dataBuffer[:n]), " ")
+		dataParts := splitBytesByNull(dataBuffer[:n])
 		log.Infof("data: %+v", dataParts)
 		value, err := a.HandleCommand(command, dataParts, sc.Permission)
 
@@ -455,6 +454,17 @@ func readHeaderFromBytes(hb []byte) (int, string, string, string, error) {
 // cleanNullBytes removes null bytes from a byte slice and returns a string.
 func cleanNullBytes(b []byte) string {
 	return string(bytes.ReplaceAll(b, []byte{0}, []byte{}))
+}
+
+func splitBytesByNull(b []byte) []string {
+	s := bytes.Split(b, []byte{0})
+	str := make([]string, 0)
+	for _, v := range s {
+		if len(v) > 0 {
+			str = append(str, string(v))
+		}
+	}
+	return str
 }
 
 // parseCommand processes the data buffer and extracts the command and arguments.
