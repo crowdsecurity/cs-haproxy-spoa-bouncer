@@ -123,7 +123,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 		},
 		"val:host:captcha": {
 			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 2, 2); err != nil {
+				if err := ArgsCheck(args, 3, 3); err != nil {
 					return "", err
 				}
 
@@ -137,7 +137,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 		},
 		"del:host:session": {
 			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 2, 2); err != nil {
+				if err := ArgsCheck(args, 3, 3); err != nil {
 					return "", err
 				}
 
@@ -431,6 +431,7 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 
 		if err != nil {
 			//TODO handle error
+			log.Error("Error handling command:", err)
 			continue
 		}
 
