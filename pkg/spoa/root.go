@@ -266,12 +266,6 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 			cookie := s.workerClient.GetHostCookie(*hoststring, fmt.Sprint(*ssl))
 
-			if err != nil {
-				// should we revert back to ban?
-				log.Error(err)
-				return
-			}
-
 			uuid = s.workerClient.ValHostCookie(*hoststring, cookie)
 
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie)
