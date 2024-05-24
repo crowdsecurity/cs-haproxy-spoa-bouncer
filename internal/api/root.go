@@ -215,7 +215,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 				}
 
 				ses.Set(session.CAPTCHA_STATUS, captcha.Pending)
-				return cookie.String(), nil
+				return cookie, nil
 			},
 		},
 		"get:hosts": {

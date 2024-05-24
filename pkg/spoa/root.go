@@ -266,9 +266,9 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 			cookie := s.workerClient.GetHostCookie(*hoststring, fmt.Sprint(*ssl))
 
-			uuid = s.workerClient.ValHostCookie(*hoststring, cookie)
+			uuid = s.workerClient.ValHostCookie(*hoststring, cookie.Value)
 
-			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie)
+			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
 		}
 
 		url, err = readKeyFromMessage[string](mes, "url")

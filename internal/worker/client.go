@@ -3,6 +3,7 @@ package worker
 import (
 	"encoding/gob"
 	"net"
+	"net/http"
 	"strconv"
 	"sync"
 
@@ -124,11 +125,11 @@ func (w *WorkerClient) GetHost(h string) *host.Host {
 }
 
 // GetHostCookie returns a new random cookie for a given host
-func (w *WorkerClient) GetHostCookie(h string, ssl string) string {
+func (w *WorkerClient) GetHostCookie(h string, ssl string) http.Cookie {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 	w.get("host", "cookie", h, ssl)
-	cookie := ""
+	cookie := http.Cookie{}
 	w.decoder.Decode(&cookie)
 	return cookie
 }
