@@ -28,22 +28,22 @@ func (w *WorkerClient) write(_b []byte) error {
 }
 
 /*
-First 64 bytes of the message are the header:
+First 52 bytes of the message are the header:
 0 - 16: length of data as string
-16 - 32: verb
-32 - 48: command
-48 - 64: submodule
-64 - 64+dl: data
+16 - 20: verb // get, set, val, help so 4 bytes max
+20 - 36: command
+36 - 52: submodule
+52 - 52+dl: data
 */
 func (w *WorkerClient) formatHeaderBytes(verb, command, submodule string, args []string) []byte {
 	_jd := strings.Join(args, " ")
 	_dl := len(_jd)
-	_b := make([]byte, 64+_dl)
+	_b := make([]byte, 52+_dl)
 	copy(_b[0:16], strconv.Itoa(_dl))
-	copy(_b[16:32], verb)
-	copy(_b[32:48], command)
-	copy(_b[48:64], submodule)
-	copy(_b[64:], _jd)
+	copy(_b[16:20], verb)
+	copy(_b[20:36], command)
+	copy(_b[36:52], submodule)
+	copy(_b[52:], _jd)
 	return _b
 }
 

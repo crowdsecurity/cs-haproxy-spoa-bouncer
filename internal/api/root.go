@@ -304,7 +304,7 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 		return
 	}
 	// headerBuffer is 4 parts of 16 bytes each
-	headerBuffer := make([]byte, 64)
+	headerBuffer := make([]byte, 52)
 
 	for {
 		n, err := sc.Conn.Read(headerBuffer)
@@ -368,9 +368,9 @@ func readHeaderFromBytes(hb []byte) (int, string, string, string, error) {
 	if err != nil {
 		return 0, "", "", "", err
 	}
-	verb := cleanNullBytes(hb[16:32])
-	module := cleanNullBytes(hb[32:48])
-	subModule := cleanNullBytes(hb[48:64])
+	verb := cleanNullBytes(hb[16:20])
+	module := cleanNullBytes(hb[20:36])
+	subModule := cleanNullBytes(hb[36:52])
 	return dataLen, verb, module, subModule, nil
 }
 
