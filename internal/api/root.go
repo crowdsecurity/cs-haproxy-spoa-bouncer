@@ -121,6 +121,83 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 				return uuid, nil
 			},
 		},
+		"val:host:captcha": {
+			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+				if err := ArgsCheck(args, 2, 2); err != nil {
+					return "", err
+				}
+
+				h := a.HostManager.MatchFirstHost(args[0])
+				if h == nil {
+					return "", nil
+				}
+
+				return h.Captcha.Validate(args[1], args[2]), nil
+			},
+		},
+		"del:host:session": {
+			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+				if err := ArgsCheck(args, 2, 2); err != nil {
+					return "", err
+				}
+
+				h := a.HostManager.MatchFirstHost(args[0])
+				if h == nil {
+					return "", nil
+				}
+
+				ses := h.Captcha.Sessions.GetSession(args[1])
+
+				if ses == nil {
+					return "", nil
+				}
+
+				ses.Delete(args[2])
+
+				return "", nil
+			},
+		},
+		"set:host:session": {
+			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+				if err := ArgsCheck(args, 4, 4); err != nil {
+					return "", err
+				}
+
+				h := a.HostManager.MatchFirstHost(args[0])
+				if h == nil {
+					return "", nil
+				}
+
+				ses := h.Captcha.Sessions.GetSession(args[1])
+
+				if ses == nil {
+					return "", nil
+				}
+
+				ses.Set(args[2], args[3])
+				return "", nil
+			},
+		},
+		"get:host:session": {
+			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+				if err := ArgsCheck(args, 3, 3); err != nil {
+					return "", err
+				}
+
+				h := a.HostManager.MatchFirstHost(args[0])
+				if h == nil {
+					return "", nil
+				}
+
+				ses := h.Captcha.Sessions.GetSession(args[1])
+
+				if ses == nil {
+					return "", nil
+				}
+
+				return ses.Get(args[2]), nil
+			},
+		},
 		"get:host:cookie": {
 			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 2, 2); err != nil {
@@ -475,9 +552,11 @@ get hosts <host> // find function return host.Host
 get host <host> cookie // get cookie for host
 val host <host> cookie <cookie> // validate cookie for host
 
-val host <host> session <uuid> <response> // validate captcha response for host
+val host <host> captcha <response> // validate captcha response for host
+
 get host <host> session <uuid> <key> // get session key against kv store
 set host <host> session <uuid> <key> <value> // set session key against kv store
+del host <host> session <uuid> <key> // delete session key against kv store
 
 help host session // this help
 help host cookie // this help
