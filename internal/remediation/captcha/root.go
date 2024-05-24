@@ -17,11 +17,9 @@ import (
 )
 
 const (
-	Pending CaptchaStatus = iota
-	Valid
+	Pending = "pending"
+	Valid   = "valid"
 )
-
-type CaptchaStatus uint8
 
 type Captcha struct {
 	Provider            string                 `yaml:"provider"`             // Captcha Provider
@@ -73,30 +71,31 @@ type CaptchaResponse struct {
 }
 
 // Validate tries to validate the captcha response and sets the session status to valid if the captcha is valid
-func (c *Captcha) Validate(s *session.Session, toParse string) {
-	clog := c.logger.WithField("session", s.Uuid)
+func (c *Captcha) Validate(uuid, toParse string) bool {
+	clog := c.logger.WithField("session", uuid)
+
 	if len(toParse) == 0 {
-		return
+		return false
 	}
 
 	values, err := url.ParseQuery(toParse)
 	if err != nil {
 		clog.WithError(err).Error("failed to parse captcha response")
-		return
+		return false
 	}
 
 	response := values.Get(fmt.Sprintf("%s-response", providers[c.Provider].key))
 
 	if response == "" {
 		clog.Debug("user submitted empty captcha response")
-		return
+		return false
 	}
 
-	if tries := s.Get(session.CAPTCHA_TRIES); tries != nil {
-		s.Set(session.CAPTCHA_TRIES, tries.(int)+1)
-	} else {
-		s.Set(session.CAPTCHA_TRIES, 1)
-	}
+	// if tries := s.Get(session.CAPTCHA_TRIES); tries != nil {
+	// 	s.Set(session.CAPTCHA_TRIES, tries.(int)+1)
+	// } else {
+	// 	s.Set(session.CAPTCHA_TRIES, 1)
+	// }
 
 	body := url.Values{}
 	body.Add("secret", c.SecretKey)
@@ -106,7 +105,7 @@ func (c *Captcha) Validate(s *session.Session, toParse string) {
 
 	if err != nil {
 		clog.WithError(err).Error("failed to validate captcha")
-		return
+		return false
 	}
 
 	defer func() {
@@ -117,20 +116,18 @@ func (c *Captcha) Validate(s *session.Session, toParse string) {
 
 	if !strings.Contains(res.Header.Get("Content-Type"), "application/json") {
 		clog.Debug("invalid response content type")
-		return
+		return false
 	}
 
 	captchaRes := &CaptchaResponse{}
 	if err := json.NewDecoder(res.Body).Decode(captchaRes); err != nil {
 		clog.WithError(err).Error("failed to decode captcha response")
-		return
+		return false
 	}
 
 	clog.WithField("response", captchaRes.Success).Debug("captcha response")
 
-	if captchaRes.Success {
-		s.Set(session.CAPTCHA_STATUS, Valid)
-	}
+	return captchaRes.Success
 }
 
 func (c *Captcha) IsValid() error {
