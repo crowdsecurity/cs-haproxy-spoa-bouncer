@@ -18,17 +18,6 @@ type WorkerClient struct {
 	decoder *gob.Decoder
 }
 
-func makeHeaderBytes(s string) []byte {
-	_b := make([]byte, 16)
-	// if s is not empty we copy it to _b
-	if s != "" {
-		for i, c := range s {
-			_b[i] = byte(c)
-		}
-	}
-	return _b
-}
-
 func (w *WorkerClient) write(_b []byte) error {
 	n, err := w.conn.Write(_b)
 	if err != nil {
@@ -54,7 +43,7 @@ func (w *WorkerClient) formatHeaderBytes(verb, command, submodule string, args [
 	copy(_b[16:32], verb)
 	copy(_b[32:48], command)
 	copy(_b[48:64], submodule)
-	copy(_b[64:64+_dl], []byte(_jd))
+	copy(_b[64:], _jd)
 	return _b
 }
 
