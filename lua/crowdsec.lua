@@ -3,22 +3,10 @@ package.path = package.path .. ";./?.lua"
 local utils = require "utils"
 local template = require "template"
 
--- Captcha template
--- @param path the path to the captcha template
--- @return Captcha object with template and render function
-local function NewCaptcha(path)
-    local self = {}
-    self.template = utils.read_file(path)
-    self.render = function(data)
-        return template.compile(self.template, data)
-    end
-    return self
-end
-
--- Ban template
--- @param path the path to the ban template
--- @return Ban object with template and render function
-local function NewBan(path)
+-- Template
+-- @param path the path to the template
+-- @return object with template and render function
+local function NewTemplate(path)
     local self = {}
     self.template = utils.read_file(path)
     self.render = function(data)
@@ -63,14 +51,14 @@ local function init()
         return
     end
     
-    runtime.ban = NewBan(ban_template_path)
+    runtime.ban = NewTemplate(ban_template_path)
     
     if captcha_template_path == nil then
         runtime.logger.error("CROWDSEC_CAPTCHA_TEMPLATE_PATH env is not set")
         return
     end
 
-    runtime.captcha = NewCaptcha(captcha_template_path)
+    runtime.captcha = NewTemplate(captcha_template_path)
     runtime.logger.info("lua modules initialised")
 end
 
