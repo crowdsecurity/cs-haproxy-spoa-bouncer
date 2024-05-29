@@ -15,6 +15,14 @@ const (
 	CAPTCHA_TRIES  = "CAPTCHA_TRIES"  // Number of captcha tries
 )
 
+var sessionPool = sync.Pool{
+	New: func() interface{} {
+		return &Session{
+			KV: make(map[string]interface{}),
+		}
+	},
+}
+
 func NewSession() (*Session, error) {
 	uid, err := uuid.NewRandom()
 	if err != nil {
@@ -25,12 +33,14 @@ func NewSession() (*Session, error) {
 
 func NewSessionWithUUID(uuid string) *Session {
 	now := time.Now().UTC()
-	return &Session{
-		Uuid:         uuid,
-		KV:           make(map[string]interface{}),
-		UpdateTime:   now,
-		CreationTime: now,
+	session := sessionPool.Get().(*Session)
+	session.Uuid = uuid
+	session.CreationTime = now
+	session.UpdateTime = now
+	for k := range session.KV {
+		delete(session.KV, k)
 	}
+	return session
 }
 
 type Session struct {
@@ -81,10 +91,10 @@ func (s *Session) HasMaxTime(parsedMaxTime time.Duration) bool {
 }
 
 type Sessions struct {
-	SessionIdleTimeout    string `yaml:"session_idle_timeout"`
-	SessionMaxTime        string `yaml:"session_max_time"`
-	SessionGarbageSeconds uint16 `yaml:"session_garbage_seconds"`
 	sessions              map[string]*Session
+	SessionIdleTimeout    string
+	SessionMaxTime        string
+	SessionGarbageSeconds uint16
 	parsedIdleTimeout     time.Duration
 	parsedMaxTime         time.Duration
 	logger                *log.Entry
@@ -154,27 +164,43 @@ func (s *Sessions) RemoveSession(session *Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, session.Uuid)
+	sessionPool.Put(session)
 }
 
 func (s *Sessions) garbageCollect(ctx context.Context) {
 	s.logger.Debug("starting session garbage collection goroutine")
 	ticker := time.NewTicker(time.Duration(s.SessionGarbageSeconds) * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
-			ticker.Stop()
 			return
 		case <-ticker.C:
 			s.logger.Trace("checking for sessions to garbage collect")
-
 			s.mu.Lock()
+			expiredSessions := make([]string, 0)
+
 			for uuid, session := range s.sessions {
 				if session.HasTimedOut(s.parsedIdleTimeout) || session.HasMaxTime(s.parsedMaxTime) {
 					s.logger.Tracef("session %s has timed out or reached max time", uuid)
-					delete(s.sessions, uuid)
+					expiredSessions = append(expiredSessions, uuid)
 				}
 			}
+
+			for _, uuid := range expiredSessions {
+				session := s.sessions[uuid]
+				delete(s.sessions, uuid)
+				sessionPool.Put(session)
+			}
+
 			s.mu.Unlock()
+
+			if len(expiredSessions) > 0 {
+				s.logger.Tracef("flushed %d sessions", len(expiredSessions))
+			} else {
+				s.logger.Trace("no timed out sessions to garbage collect")
+			}
 		}
 	}
 }
