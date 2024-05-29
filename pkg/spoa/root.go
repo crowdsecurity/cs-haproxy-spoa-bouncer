@@ -248,6 +248,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	case remediation.Captcha:
 		if err := host.Captcha.InjectKeyValues(&req.Actions); err != nil {
 			r = remediation.FromString(host.Captcha.FallbackRemediation)
+			return
 		}
 
 		cookieB64, _ := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
