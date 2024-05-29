@@ -2,13 +2,13 @@ package session
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
-// Known keys for the session KV store
 const (
 	URI            = "URI"            // Last URI the user visited
 	CAPTCHA_STATUS = "CAPTCHA_STATUS" // Status of the captcha
@@ -17,15 +17,19 @@ const (
 
 func NewSession() (*Session, error) {
 	uid, err := uuid.NewRandom()
-	return NewSessionWithUUID(uid.String()), err
+	if err != nil {
+		return nil, err
+	}
+	return NewSessionWithUUID(uid.String()), nil
 }
 
 func NewSessionWithUUID(uuid string) *Session {
+	now := time.Now().UTC()
 	return &Session{
 		Uuid:         uuid,
 		KV:           make(map[string]interface{}),
-		UpdateTime:   time.Now().UTC(),
-		CreationTime: time.Now().UTC(),
+		UpdateTime:   now,
+		CreationTime: now,
 	}
 }
 
@@ -34,48 +38,57 @@ type Session struct {
 	KV           map[string]interface{} // Key-Value store for the session
 	CreationTime time.Time              // Creation time of the session used to compare against max time
 	UpdateTime   time.Time              // Last update time of the session used to compare against idle timeout
+	mu           sync.RWMutex           // Mutex for thread-safe access to KV
 }
 
-// Get returns the value of the key from the session
 func (s *Session) Get(key string) interface{} {
 	s.updateTime()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.KV[key]
 }
 
-// Set sets the value of the key in the session
 func (s *Session) Set(key string, value interface{}) {
 	s.updateTime()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.KV[key] = value
 }
 
-// Delete deletes the key from the session
 func (s *Session) Delete(key string) {
 	s.updateTime()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.KV, key)
 }
 
 func (s *Session) updateTime() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.UpdateTime = time.Now().UTC()
 }
 
-// HasTimedOut checks if the session has timed out
-func (s *Session) HasTimedOut(ss *Sessions) bool {
-	return time.Since(s.UpdateTime) > ss.parsedIdleTimeout
+func (s *Session) HasTimedOut(parsedIdleTimeout time.Duration) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return time.Since(s.UpdateTime) > parsedIdleTimeout
 }
 
-// HasMaxTime checks if the session has reached the max time to prevent cookie reuse
-func (s *Session) HasMaxTime(ss *Sessions) bool {
-	return time.Since(s.CreationTime) > ss.parsedMaxTime
+func (s *Session) HasMaxTime(parsedMaxTime time.Duration) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return time.Since(s.CreationTime) > parsedMaxTime
 }
 
 type Sessions struct {
-	s                     []*Session    `yaml:"-"`                       // underlying sessions slice
-	SessionIdleTimeout    string        `yaml:"session_idle_timeout"`    // Max session idle timeout as a GoLang duration string EG: "2h"
-	SessionMaxTime        string        `yaml:"session_max_time"`        // Max session time as a GoLang duration string EG: "24h"
-	SessionGarbageSeconds uint16        `yaml:"session_garbage_seconds"` // How often to garbage collect sessions
-	parsedIdleTimeout     time.Duration `yaml:"-"`                       // Parsed session timeout
-	parsedMaxTime         time.Duration `yaml:"-"`                       // Parsed max session time
-	logger                *log.Entry    `yaml:"-"`                       // logger passed from the remediation
+	SessionIdleTimeout    string `yaml:"session_idle_timeout"`
+	SessionMaxTime        string `yaml:"session_max_time"`
+	SessionGarbageSeconds uint16 `yaml:"session_garbage_seconds"`
+	sessions              map[string]*Session
+	parsedIdleTimeout     time.Duration
+	parsedMaxTime         time.Duration
+	logger                *log.Entry
+	mu                    sync.RWMutex
 }
 
 func (s *Sessions) Init(log *log.Entry, ctx context.Context) {
@@ -84,16 +97,14 @@ func (s *Sessions) Init(log *log.Entry, ctx context.Context) {
 	if s.SessionIdleTimeout == "" {
 		s.SessionIdleTimeout = "1h"
 	}
-
 	if s.SessionMaxTime == "" {
 		s.SessionMaxTime = "12h"
 	}
 
 	s.parsedIdleTimeout, err = time.ParseDuration(s.SessionIdleTimeout)
 	if err != nil {
-		log.Errorf("failed to parse session timeout: %s", err)
+		log.Errorf("failed to parse session idle timeout: %s", err)
 	}
-
 	s.parsedMaxTime, err = time.ParseDuration(s.SessionMaxTime)
 	if err != nil {
 		log.Errorf("failed to parse session max time: %s", err)
@@ -104,12 +115,13 @@ func (s *Sessions) Init(log *log.Entry, ctx context.Context) {
 	}
 
 	s.logger = log.WithField("type", "sessions")
+	s.sessions = make(map[string]*Session)
 
 	if s.SessionGarbageSeconds == 0 {
 		s.SessionGarbageSeconds = 60
 	}
 
-	go s.GarbageCollect(ctx)
+	go s.garbageCollect(ctx)
 }
 
 func (s *Sessions) NewRandomSession() (*Session, error) {
@@ -122,42 +134,30 @@ func (s *Sessions) NewRandomSession() (*Session, error) {
 }
 
 func (s *Sessions) GetSession(uuid string) *Session {
-	for _, session := range s.s {
-		if session.Uuid == uuid {
-			// We check if the session has timed out or reached max time
-			if session.HasTimedOut(s) || session.HasMaxTime(s) {
-				s.logger.Tracef("session %s is invalid", uuid)
-				// So we don't return a session that ultimately will be removed by the garbage collector we break
-				break
-			}
-			return session
-		}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	session, exists := s.sessions[uuid]
+	if !exists || session.HasTimedOut(s.parsedIdleTimeout) || session.HasMaxTime(s.parsedMaxTime) {
+		s.logger.Tracef("session %s is invalid or does not exist", uuid)
+		return nil
 	}
-	return nil
+	return session
 }
 
-// AddSession adds a session to the sessions slice
 func (s *Sessions) AddSession(session *Session) {
-	s.s = append(s.s, session)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[session.Uuid] = session
 }
 
-// RemoveSession removes a session from the sessions slice
 func (s *Sessions) RemoveSession(session *Session) {
-	for i, sess := range s.s {
-		if sess.Uuid == session.Uuid {
-			if i == len(s.s)-1 {
-				s.s = (s.s)[:i]
-			} else {
-				s.s = append((s.s)[:i], (s.s)[i+1:]...)
-			}
-			break
-		}
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, session.Uuid)
 }
 
-func (s *Sessions) GarbageCollect(ctx context.Context) {
+func (s *Sessions) garbageCollect(ctx context.Context) {
 	s.logger.Debug("starting session garbage collection goroutine")
-	// Currently not configurable but can be made configurable in future
 	ticker := time.NewTicker(time.Duration(s.SessionGarbageSeconds) * time.Second)
 	for {
 		select {
@@ -167,28 +167,14 @@ func (s *Sessions) GarbageCollect(ctx context.Context) {
 		case <-ticker.C:
 			s.logger.Trace("checking for sessions to garbage collect")
 
-			if len(s.s) == 0 {
-				s.logger.Trace("no sessions to garbage collect")
-				continue
-			}
-
-			tSessions := make([]*Session, 0, len(s.s))
-			for _, session := range s.s {
-				if !session.HasTimedOut(s) && !session.HasMaxTime(s) {
-					tSessions = append(tSessions, session)
+			s.mu.Lock()
+			for uuid, session := range s.sessions {
+				if session.HasTimedOut(s.parsedIdleTimeout) || session.HasMaxTime(s.parsedMaxTime) {
+					s.logger.Tracef("session %s has timed out or reached max time", uuid)
+					delete(s.sessions, uuid)
 				}
 			}
-
-			diff := len(s.s) - len(tSessions)
-
-			if diff == 0 {
-				s.logger.Trace("no timed out sessions to garbage collect")
-				tSessions = nil // Make sure we don't keep a reference to the temp slice
-				continue        // No sessions to garbage collect
-			}
-
-			s.logger.Tracef("flushed %d sessions", diff)
-			s.s = tSessions
+			s.mu.Unlock()
 		}
 	}
 }

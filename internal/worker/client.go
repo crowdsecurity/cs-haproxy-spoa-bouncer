@@ -75,8 +75,6 @@ func (w *WorkerClient) del(command, submodule string, args ...string) error {
 func (w *WorkerClient) decode(i interface{}) {
 	if err := w.decoder.Decode(i); err != nil {
 		log.Errorf("error decoding: %s", err)
-	} else {
-		log.Info("decoded: ", i)
 	}
 }
 
