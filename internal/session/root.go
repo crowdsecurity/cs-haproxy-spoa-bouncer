@@ -15,14 +15,6 @@ const (
 	CAPTCHA_TRIES  = "CAPTCHA_TRIES"  // Number of captcha tries
 )
 
-var sessionPool = sync.Pool{
-	New: func() interface{} {
-		return &Session{
-			KV: make(map[string]interface{}),
-		}
-	},
-}
-
 func NewSession() (*Session, error) {
 	uid, err := uuid.NewRandom()
 	if err != nil {
@@ -33,14 +25,12 @@ func NewSession() (*Session, error) {
 
 func NewSessionWithUUID(uuid string) *Session {
 	now := time.Now().UTC()
-	session := sessionPool.Get().(*Session)
-	session.Uuid = uuid
-	session.CreationTime = now
-	session.UpdateTime = now
-	for k := range session.KV {
-		delete(session.KV, k)
+	return &Session{
+		Uuid:         uuid,
+		KV:           make(map[string]interface{}),
+		UpdateTime:   now,
+		CreationTime: now,
 	}
-	return session
 }
 
 type Session struct {
@@ -164,7 +154,6 @@ func (s *Sessions) RemoveSession(session *Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, session.Uuid)
-	sessionPool.Put(session)
 }
 
 func (s *Sessions) garbageCollect(ctx context.Context) {
@@ -189,9 +178,7 @@ func (s *Sessions) garbageCollect(ctx context.Context) {
 			}
 
 			for _, uuid := range expiredSessions {
-				session := s.sessions[uuid]
 				delete(s.sessions, uuid)
-				sessionPool.Put(session)
 			}
 
 			s.mu.Unlock()
