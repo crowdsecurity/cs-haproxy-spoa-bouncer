@@ -72,6 +72,14 @@ func (w *WorkerClient) del(command, submodule string, args ...string) error {
 	return w.write(w.formatHeaderBytes("del", command, submodule, args))
 }
 
+func (w *WorkerClient) decode(i interface{}) {
+	if err := w.decoder.Decode(i); err != nil {
+		log.Errorf("error decoding: %s", err)
+	} else {
+		log.Info("decoded: ", i)
+	}
+}
+
 // GetIP returns the remediation for a given IP checks both the ip and the range
 func (w *WorkerClient) GetIP(ip string) remediation.Remediation {
 	w.mutex.Lock()
@@ -80,10 +88,7 @@ func (w *WorkerClient) GetIP(ip string) remediation.Remediation {
 
 	remediation := remediation.Allow
 
-	err := w.decoder.Decode(&remediation)
-	if err != nil {
-		log.Errorf("error decoding: %s", err)
-	}
+	w.decode(&remediation)
 
 	return remediation
 }
@@ -96,10 +101,7 @@ func (w *WorkerClient) GetCN(cn string) remediation.Remediation {
 	remediation := remediation.Allow
 	w.get("cn", "", cn)
 
-	err := w.decoder.Decode(&remediation)
-	if err != nil {
-		log.Errorf("error decoding: %s", err)
-	}
+	w.decode(&remediation)
 
 	return remediation
 }
@@ -110,7 +112,7 @@ func (w *WorkerClient) GetGeoIso(ip string) string {
 	defer w.mutex.Unlock()
 	w.get("geo", "iso", ip)
 	iso := ""
-	w.decoder.Decode(&iso)
+	w.decode(&iso)
 	return iso
 }
 
@@ -120,7 +122,7 @@ func (w *WorkerClient) GetHost(h string) *host.Host {
 	defer w.mutex.Unlock()
 	w.get("hosts", "", h)
 	var hStruct *host.Host
-	w.decoder.Decode(&hStruct)
+	w.decode(&hStruct)
 	return hStruct
 }
 
@@ -130,7 +132,7 @@ func (w *WorkerClient) GetHostCookie(h string, ssl string) http.Cookie {
 	defer w.mutex.Unlock()
 	w.get("host", "cookie", h, ssl)
 	cookie := http.Cookie{}
-	w.decoder.Decode(&cookie)
+	w.decode(&cookie)
 	return cookie
 }
 
@@ -139,7 +141,7 @@ func (w *WorkerClient) GetHostSessionKey(h, s, k string) string {
 	defer w.mutex.Unlock()
 	w.get("host", "session", h, s, k)
 	key := ""
-	w.decoder.Decode(&key)
+	w.decode(&key)
 	return key
 }
 
@@ -148,29 +150,35 @@ func (w *WorkerClient) ValHostCookie(h, cookie string) string {
 	defer w.mutex.Unlock()
 	w.val("host", "cookie", h, cookie)
 	uuid := ""
-	w.decoder.Decode(&uuid)
+	w.decode(&uuid)
 	return uuid
 }
 
-func (w *WorkerClient) ValHostCaptcha(h, captcha string) bool {
+func (w *WorkerClient) ValHostCaptcha(host, uuid, captcha string) bool {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	w.val("host", "captcha", h, captcha)
+	w.val("host", "captcha", host, uuid, captcha)
 	valid := false
-	w.decoder.Decode(&valid)
+	w.decode(&valid)
 	return valid
 }
 
-func (w *WorkerClient) SetHostSessionKey(h, s, k, v string) {
+func (w *WorkerClient) SetHostSessionKey(h, s, k, v string) bool {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 	w.set("host", "session", h, s, k, v)
+	set := false
+	w.decode(&set)
+	return set
 }
 
-func (w *WorkerClient) DeleteHostSessionKey(h, s, k string) {
+func (w *WorkerClient) DeleteHostSessionKey(h, s, k string) bool {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 	w.del("host", "session", h, s, k)
+	deleted := false
+	w.decode(&deleted)
+	return deleted
 }
 
 func NewWorkerClient(path string) *WorkerClient {
