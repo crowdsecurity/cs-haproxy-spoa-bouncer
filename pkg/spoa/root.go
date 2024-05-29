@@ -271,6 +271,12 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
 		}
 
+		if uuid == "" {
+			// We should never hit this but safety net
+			log.Error("failed to get uuid from cookie")
+			return
+		}
+
 		url, err = readKeyFromMessage[string](mes, "url")
 
 		if err != nil {
@@ -314,7 +320,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				log.Printf("failed to read body: %v", err)
 				return
 			}
-			if valid := s.workerClient.ValHostCaptcha(*hoststring, string(*body)); valid {
+			if valid := s.workerClient.ValHostCaptcha(*hoststring, uuid, string(*body)); valid {
 				s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS, captcha.Valid)
 			}
 		}

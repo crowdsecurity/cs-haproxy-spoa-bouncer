@@ -117,6 +117,12 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 					return "", err
 				}
 
+				sess := h.Captcha.Sessions.GetSession(uuid)
+
+				if sess == nil {
+					return "", nil
+				}
+
 				return uuid, nil
 			},
 		},
@@ -142,39 +148,39 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 
 				h := a.HostManager.MatchFirstHost(args[0])
 				if h == nil {
-					return "", nil
+					return false, nil
 				}
 
 				ses := h.Captcha.Sessions.GetSession(args[1])
 
 				if ses == nil {
-					return "", nil
+					return false, nil
 				}
 
 				ses.Delete(args[2])
 
-				return "", nil
+				return true, nil
 			},
 		},
 		"set:host:session": {
 			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 4, 4); err != nil {
-					return "", err
+					return nil, err
 				}
 
 				h := a.HostManager.MatchFirstHost(args[0])
 				if h == nil {
-					return "", nil
+					return false, nil
 				}
 
 				ses := h.Captcha.Sessions.GetSession(args[1])
 
 				if ses == nil {
-					return "", nil
+					return false, nil
 				}
 
 				ses.Set(args[2], args[3])
-				return "", nil
+				return true, nil
 			},
 		},
 		"get:host:session": {
@@ -194,7 +200,13 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 					return "", nil
 				}
 
-				return ses.Get(args[2]), nil
+				val := ses.Get(args[2])
+
+				if val == nil {
+					val = ""
+				}
+
+				return val, nil
 			},
 		},
 		"get:host:cookie": {
@@ -237,7 +249,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 				h := a.HostManager.MatchFirstHost(args[0])
 
 				if h == nil {
-					return "", nil
+					return nil, nil
 				}
 
 				// return a new host derived from the host object
@@ -433,8 +445,10 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 			log.Error("Error handling command:", err)
 			continue
 		}
-
-		sc.Encoder.Encode(value)
+		log.Info(value)
+		if err := sc.Encoder.Encode(value); err != nil {
+			log.Error("Error encoding response:", err)
+		}
 		log.Info("handled command")
 	}
 }
