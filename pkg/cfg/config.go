@@ -25,7 +25,7 @@ type PrometheusConfig struct {
 type BouncerConfig struct {
 	Logging          cslogging.LoggingConfig `yaml:",inline"`
 	Hosts            []*host.Host            `yaml:"hosts"`
-	HostsFolder      string                  `yaml:"hosts_folder"`
+	HostsDir         string                  `yaml:"hosts_dir"`
 	Geo              geo.GeoDatabase         `yaml:",inline"`
 	Workers          []*worker.Worker        `yaml:"workers"`
 	WorkerUser       string                  `yaml:"worker_user"`

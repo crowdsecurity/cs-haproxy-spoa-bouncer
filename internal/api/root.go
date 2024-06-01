@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
@@ -162,6 +163,30 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 				return true, nil
 			},
 		},
+		"del:hosts": {
+			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+				if permission == apiPermission.WorkerPermission {
+					return nil, fmt.Errorf("permission denied")
+				}
+
+				if err := ArgsCheck(args, 1, 1); err != nil {
+					return nil, err
+				}
+
+				h := a.HostManager.MatchFirstHost(args[0])
+
+				if h == nil {
+					return false, nil
+				}
+
+				a.HostManager.Chan <- host.HostOp{
+					Host: h,
+					Op:   host.OpRemove,
+				}
+
+				return true, nil
+			},
+		},
 		"set:host:session": {
 			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 4, 4); err != nil {
@@ -233,15 +258,15 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 		"get:hosts": {
 			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
 				if len(args) == 0 && permission == apiPermission.WorkerPermission {
-					return nil, fmt.Errorf("permission denied")
+					return &host.Host{}, fmt.Errorf("permission denied")
 				}
 
 				if len(args) == 0 && permission == apiPermission.AdminPermission {
-					return a.HostManager.Hosts, nil
+					return a.HostManager.String(), nil
 				}
 
 				if err := ArgsCheck(args, 1, 1); err != nil {
-					return nil, err
+					return &host.Host{}, err
 				}
 
 				log.Info("Checking host", args[0])
@@ -249,7 +274,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 				h := a.HostManager.MatchFirstHost(args[0])
 
 				if h == nil {
-					return nil, nil
+					return &host.Host{}, nil
 				}
 
 				// return a new host derived from the host object
@@ -278,9 +303,11 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 				}
 
 				r := a.Dataset.CheckIP(&val)
+
 				if permission == apiPermission.WorkerPermission {
 					return r, nil
 				}
+
 				return r.String(), nil
 			},
 		},
@@ -332,7 +359,11 @@ func (a *Api) Run() error {
 		select {
 		case sc := <-a.ConnChan:
 			log.Info("New connection")
-			go a.handleConnection(sc)
+			if sc.Permission == apiPermission.WorkerPermission {
+				go a.handleWorkerConnection(sc)
+				continue
+			}
+			go a.handleAdminConnection(sc)
 		case <-a.ctx.Done():
 			return nil
 		}
@@ -377,7 +408,7 @@ func flushConn(conn net.Conn) error {
 	return nil
 }
 
-func (a *Api) handleConnection(sc server.SocketConn) {
+func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 	defer func() {
 		err := sc.Conn.Close()
 		if err != nil {
@@ -453,6 +484,54 @@ func (a *Api) handleConnection(sc server.SocketConn) {
 	}
 }
 
+func (a *Api) handleAdminConnection(sc server.SocketConn) {
+	defer func() {
+		err := sc.Conn.Close()
+		if err != nil {
+			log.Error("Error closing connection:", err)
+		}
+	}()
+
+	dataBuffer := make([]byte, 10240)
+	for {
+		n, err := sc.Conn.Read(dataBuffer)
+		if err != nil {
+			if err == io.EOF {
+				// Client closed the connection gracefully
+				break
+			}
+			log.Error("Read error:", err)
+			return
+		}
+
+		if n == 0 {
+			continue
+		}
+
+		apiCommand, args, _, err := parseCommand(dataBuffer[:n])
+		if err != nil {
+			log.Error("Error parsing command:", err)
+			continue
+		}
+
+		if len(apiCommand) == 0 {
+			log.Error("Empty command")
+			continue
+		}
+
+		value, err := a.HandleCommand(strings.Join(apiCommand, ":"), args, sc.Permission)
+
+		if err != nil {
+			log.Errorf("%+v, %+v", apiCommand, args)
+			log.Error("Error handling command:", err)
+			continue
+		}
+
+		sc.Conn.Write([]byte(fmt.Sprintf("%v\n", value)))
+
+	}
+}
+
 // readHeaderFromBytes reads the header bytes and returns the data length, verb, module, and sub-module.
 func readHeaderFromBytes(hb []byte) (int, string, string, string, error) {
 	dataLen, err := strconv.Atoi(cleanNullBytes(hb[:16]))
@@ -525,6 +604,14 @@ func parseCommand(data []byte) ([]string, []string, []byte, error) {
 		}
 
 		if i == len(data)-1 {
+			if len(apiCommand) == 1 {
+				module := string(_b)
+				if !IsValidModule(module) {
+					return nil, nil, nil, fmt.Errorf("invalid module please use help")
+				}
+				apiCommand = append(apiCommand, module)
+				return apiCommand, args, nil, nil
+			}
 			if len(apiCommand) == 2 && len(args) == 1 {
 				subModule := string(_b)
 				apiCommand = append(apiCommand, subModule)

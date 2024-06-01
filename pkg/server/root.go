@@ -18,7 +18,6 @@ var (
 type Server struct {
 	listeners       []*net.Listener             // Listener
 	permission      apiPermission.ApiPermission // Worker or Admin
-	maxBufferSize   int                         // To protect against DoS if socket is compromised
 	logger          *log.Entry                  // Logger
 	connChan        chan SocketConn             // Channel to send new connections
 	workerSocketDir string                      // Directory for worker sockets
@@ -27,16 +26,14 @@ type Server struct {
 type SocketConn struct {
 	Conn       net.Conn                    // underlying connection
 	Permission apiPermission.ApiPermission // Permission of the socket admin|worker
-	MaxBuffer  int                         // Placeholder for max buffer might be dropped
 	Encoder    *gob.Encoder                // Unique encoder for socket connection
 }
 
 func NewAdminSocket(connChan chan SocketConn) (*Server, error) {
 	as := &Server{
-		permission:    apiPermission.AdminPermission,
-		logger:        log.New().WithField("server", "admin"),
-		maxBufferSize: 1024,
-		connChan:      connChan,
+		permission: apiPermission.AdminPermission,
+		logger:     log.New().WithField("server", "admin"),
+		connChan:   connChan,
 	}
 
 	return as, nil
@@ -46,7 +43,6 @@ func NewWorkerSocket(connChan chan SocketConn, dir string) (*Server, error) {
 	ws := &Server{
 		permission:      apiPermission.WorkerPermission,
 		logger:          log.New().WithField("server", "worker"),
-		maxBufferSize:   128,
 		connChan:        connChan,
 		workerSocketDir: dir,
 	}
@@ -63,7 +59,6 @@ func (s *Server) Run(l *net.Listener) error {
 		s.connChan <- SocketConn{
 			Conn:       conn,
 			Permission: s.permission,
-			MaxBuffer:  s.maxBufferSize,
 			Encoder:    gob.NewEncoder(conn),
 		}
 	}
@@ -71,12 +66,15 @@ func (s *Server) Run(l *net.Listener) error {
 
 func (s *Server) NewAdminListener(path string) error {
 	l, err := newUnixSocket(path)
+
 	if err != nil {
 		return err
 	}
+
 	if err := configAdminSocket(path); err != nil {
 		return err
 	}
+
 	s.listeners = append(s.listeners, &l)
 
 	go s.Run(&l)
@@ -88,12 +86,15 @@ func (s *Server) NewWorkerListener(name string, gid int) (string, error) {
 	socketString := fmt.Sprintf("%s%s%s.sock", s.workerSocketDir, WORKER_SOCKET_PREFIX, name)
 
 	l, err := newUnixSocket(socketString)
+
 	if err != nil {
 		return "", err
 	}
+
 	if err := configWorkerSocket(socketString, gid); err != nil {
 		return "", err
 	}
+
 	s.listeners = append(s.listeners, &l)
 
 	go s.Run(&l)

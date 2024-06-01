@@ -187,20 +187,42 @@ func Execute() error {
 	})
 
 	HostManager := host.NewManager(ctx)
+
 	g.Go(func() error {
 		HostManager.Run()
 		return nil
 	})
 
 	for _, h := range config.Hosts {
-		HostManager.CreateChan <- h
+		HostManager.Chan <- host.HostOp{
+			Host: h,
+			Op:   host.OpAdd,
+		}
+	}
+
+	if config.HostsDir != "" {
+		if err := HostManager.LoadFromDirectory(config.HostsDir); err != nil {
+			return fmt.Errorf("failed to load hosts from directory: %w", err)
+		}
 	}
 
 	socketConnChan := make(chan server.SocketConn)
 
 	workerServer, err := server.NewWorkerSocket(socketConnChan, config.WorkerSocketDir)
+
 	if err != nil {
 		return fmt.Errorf("failed to create worker server: %w", err)
+	}
+
+	if config.AdminSocket != "" {
+		adminServer, err := server.NewAdminSocket(socketConnChan)
+
+		if err != nil {
+			return fmt.Errorf("failed to create admin server: %w", err)
+		}
+
+		adminServer.NewAdminListener(config.AdminSocket)
+		defer adminServer.Close()
 	}
 
 	workerManager := worker.NewManager(ctx, workerServer)
