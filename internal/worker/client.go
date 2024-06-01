@@ -121,6 +121,12 @@ func (w *WorkerClient) GetHost(h string) *host.Host {
 	w.get("hosts", "", h)
 	var hStruct *host.Host
 	w.decode(&hStruct)
+
+	// if the host is empty, it means it was not found
+	if hStruct != nil && hStruct.Host == "" {
+		return nil
+	}
+
 	return hStruct
 }
 

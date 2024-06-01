@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
+	"github.com/crowdsecurity/go-cs-lib/ptr"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -33,8 +34,7 @@ func (c *CookieGenerator) Init(logger *log.Entry, name, secret string) {
 func (c *CookieGenerator) SetDefaults() {
 	// Default to sign cookies
 	if c.SignCookies == nil {
-		c.SignCookies = new(bool)
-		*c.SignCookies = true
+		c.SignCookies = ptr.Of(true)
 	}
 	// Default Secure to auto
 	if c.Secure == "" {
@@ -42,8 +42,7 @@ func (c *CookieGenerator) SetDefaults() {
 	}
 	// Default httpOnly to true
 	if c.HttpOnly == nil {
-		c.HttpOnly = new(bool)
-		*c.HttpOnly = true
+		c.HttpOnly = ptr.Of(true)
 	}
 }
 

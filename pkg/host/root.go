@@ -2,16 +2,32 @@ package host
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"text/template"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/ban"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v2"
 )
+
+const (
+	OpAdd    Op = "add"
+	OpRemove Op = "remove"
+	OpPatch  Op = "patch"
+)
+
+type Op string
+
+type HostOp struct {
+	Host *Host
+	Op   Op
+}
 
 type Host struct {
 	Host     string          `yaml:"host"`
@@ -23,19 +39,37 @@ type Host struct {
 }
 
 type Manager struct {
-	Hosts      []*Host `yaml:"-"`
-	ctx        context.Context
-	CreateChan chan *Host
-	cache      map[string]*Host
+	Hosts []*Host
+	ctx   context.Context
+	Chan  chan HostOp
+	cache map[string]*Host
 	sync.RWMutex
+}
+
+const t = `
+{{ range .Hosts -}}
+Host: {{ .Host }}
+{{ end -}}
+`
+
+func (m *Manager) String() string {
+	tmpl, err := template.New("test").Parse(t)
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	if err := tmpl.Execute(&b, m); err != nil {
+		return ""
+	}
+	return b.String()
 }
 
 func NewManager(ctx context.Context) *Manager {
 	return &Manager{
-		ctx:        ctx,
-		Hosts:      make([]*Host, 0),
-		CreateChan: make(chan *Host),
-		cache:      make(map[string]*Host),
+		ctx:   ctx,
+		Hosts: make([]*Host, 0),
+		Chan:  make(chan HostOp),
+		cache: make(map[string]*Host),
 	}
 }
 
@@ -61,11 +95,19 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 func (h *Manager) Run() {
 	for {
 		select {
-		case host := <-h.CreateChan:
+		case instruction := <-h.Chan:
 			h.Lock()
-			h.cache = make(map[string]*Host) //reset cache before adding new host
-			h.AddHost(host)
-			h.Sort()
+			switch instruction.Op {
+			case OpRemove:
+				h.cache = make(map[string]*Host)
+				h.removeHost(instruction.Host)
+			case OpAdd:
+				h.cache = make(map[string]*Host)
+				h.addHost(instruction.Host)
+				h.sort()
+			case OpPatch:
+				h.patchHost(instruction.Host)
+			}
 			h.Unlock()
 		case <-h.ctx.Done():
 			return
@@ -73,7 +115,40 @@ func (h *Manager) Run() {
 	}
 }
 
-func (h *Manager) Sort() {
+func (h *Manager) LoadFromDirectory(path string) error {
+	files, err := filepath.Glob(filepath.Join(path, "*.yaml"))
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		host, err := LoadHostFromFile(file)
+		if err != nil {
+			return err
+		}
+		h.Chan <- HostOp{
+			Host: host,
+			Op:   OpAdd,
+		}
+	}
+	return nil
+}
+
+func LoadHostFromFile(path string) (*Host, error) {
+	host := &Host{}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Unmarshal the YAML content into the struct
+	err = yaml.Unmarshal(content, &host)
+	if err != nil {
+		return nil, err
+	}
+	return host, nil
+}
+
+func (h *Manager) sort() {
 	// If there are less than 2 hosts, no need to sort
 	if len(h.Hosts) < 2 {
 		return
@@ -95,12 +170,10 @@ func (h *Manager) Sort() {
 	})
 }
 
-func (hM *Manager) RemoveHost(host *Host) {
-	hM.Lock()
-	defer hM.Unlock()
-
+func (hM *Manager) removeHost(host *Host) {
 	for i, h := range hM.Hosts {
 		if h == host {
+			host.Captcha.Cancel()
 			if i == len(hM.Hosts)-1 {
 				hM.Hosts = hM.Hosts[:i]
 			} else {
@@ -111,7 +184,11 @@ func (hM *Manager) RemoveHost(host *Host) {
 	}
 }
 
-func (h *Manager) AddHost(host *Host) {
+func (h *Manager) patchHost(host *Host) {
+	//TODO
+}
+
+func (h *Manager) addHost(host *Host) {
 	clog := log.New()
 
 	if host.LogLevel != nil {
@@ -119,6 +196,7 @@ func (h *Manager) AddHost(host *Host) {
 	}
 
 	host.logger = clog.WithField("host", host.Host)
+
 	if err := host.Captcha.Init(host.logger, h.ctx); err != nil {
 		host.logger.Error(err)
 	}

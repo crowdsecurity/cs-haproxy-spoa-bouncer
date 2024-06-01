@@ -321,7 +321,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				log.Printf("failed to read body: %v", err)
 				return
 			}
-			if valid := s.workerClient.ValHostCaptcha(*hoststring, uuid, string(*body)); valid {
+			if s.workerClient.ValHostCaptcha(*hoststring, uuid, string(*body)) {
 				s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS, captcha.Valid)
 			}
 		}

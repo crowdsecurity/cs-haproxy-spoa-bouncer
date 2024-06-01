@@ -30,20 +30,32 @@ type Captcha struct {
 	Sessions            session.Sessions       `yaml:",inline"`              // sessions that are being traced for captcha
 	logger              *log.Entry             `yaml:"-"`
 	client              *http.Client           `yaml:"-"`
+	Cancel              context.CancelFunc     `yaml:"-"`
 }
 
 func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
 	c.InitLogger(logger)
+
+	var cancelCtx context.Context
+	cancelCtx, c.Cancel = context.WithCancel(ctx)
+
 	c.client = &http.Client{
 		Transport: &http.Transport{MaxIdleConns: 10, IdleConnTimeout: 30 * time.Second},
 		Timeout:   5 * time.Second,
 	}
+
 	if c.FallbackRemediation == "" {
 		c.logger.Info("no fallback remediation specified defaulting to ban")
 		c.FallbackRemediation = "ban"
 	}
-	c.Sessions.Init(c.logger, ctx)
+
+	if err := c.IsValid(); err != nil {
+		return err
+	}
+
+	c.Sessions.Init(c.logger, cancelCtx)
 	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie", c.SecretKey)
+
 	return nil
 }
 
@@ -54,7 +66,8 @@ func (c *Captcha) InitLogger(logger *log.Entry) {
 // Inject key values injects the captcha provider key values into the HAProxy transaction
 func (c *Captcha) InjectKeyValues(actions *action.Actions) error {
 
-	if err := c.IsValid(); err != nil {
+	// We check if the captcha configuration is valid for the front-end
+	if err := c.IsFrontEndValid(); err != nil {
 		return err
 	}
 
@@ -129,8 +142,8 @@ func (c *Captcha) Validate(uuid, toParse string) bool {
 	return captchaRes.Success
 }
 
-func (c *Captcha) IsValid() error {
-
+// IsFrontEndValid checks if the captcha configuration is valid for the front-end
+func (c *Captcha) IsFrontEndValid() error {
 	if c.Provider == "" {
 		return fmt.Errorf("empty captcha provider")
 	}
@@ -146,6 +159,19 @@ func (c *Captcha) IsValid() error {
 	tRem := remediation.FromString(c.FallbackRemediation)
 	if tRem != remediation.Ban && tRem != remediation.Allow {
 		return fmt.Errorf("invalid fallback remediation %s", c.FallbackRemediation)
+	}
+
+	return nil
+}
+
+// IsValid checks if the captcha configuration is valid for the back-end most notably the secret key
+func (c *Captcha) IsValid() error {
+	if err := c.IsFrontEndValid(); err != nil {
+		return err
+	}
+
+	if c.SecretKey == "" {
+		return fmt.Errorf("empty captcha secret key")
 	}
 
 	return nil

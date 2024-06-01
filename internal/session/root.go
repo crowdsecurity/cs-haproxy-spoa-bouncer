@@ -167,6 +167,12 @@ func (s *Sessions) garbageCollect(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.logger.Trace("checking for sessions to garbage collect")
+
+			if len(s.sessions) == 0 {
+				s.logger.Trace("no sessions to garbage collect")
+				continue
+			}
+
 			s.mu.Lock()
 			expiredSessions := make([]string, 0)
 

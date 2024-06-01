@@ -23,6 +23,9 @@ insecure_skip_verify: false
 # asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
 # city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
 
+#admin socket
+#admin_socket: /run/crowdsec-spoa-admin.sock
+
 
 prometheus:
   enabled: false
