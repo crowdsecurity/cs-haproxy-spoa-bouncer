@@ -164,6 +164,7 @@ func (s *Sessions) garbageCollect(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			s.logger.Debug("stopping session garbage collection goroutine")
 			return
 		case <-ticker.C:
 			s.logger.Trace("checking for sessions to garbage collect")
