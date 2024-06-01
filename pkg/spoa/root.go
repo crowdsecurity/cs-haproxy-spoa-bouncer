@@ -206,7 +206,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		log.Debug("remediation: ", *rstring)
 		r = remediation.FromString(*rstring)
 	} else {
-		log.Printf("ip remediation was not found in message, defaulting to allow")
+		log.Info("ip remediation was not found in message, defaulting to allow")
 	}
 
 	hoststring, err := readKeyFromMessage[string](mes, "host")
@@ -216,7 +216,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	// defer a function that always add the remediation to the request at end of processing
 	defer func() {
 		if host == nil && r == remediation.Captcha {
-			log.Info("host was not found in the message cannot issue captcha remediation reverting to ban")
+			log.Warn("remediation is captcha, no matching host was found cannot issue captcha remediation reverting to ban")
 			r = remediation.Ban
 		}
 		rString := r.String()
