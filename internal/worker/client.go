@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/gob"
+	"errors"
 	"net"
 	"net/http"
 	"strconv"
@@ -12,9 +13,21 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	headerLength = 52
+	lengthIndex  = 0
+	lengthSize   = 16
+	verbIndex    = 16
+	verbSize     = 4
+	commandIndex = 20
+	commandSize  = 16
+	submodIndex  = 36
+	submodSize   = 16
+)
+
 type WorkerClient struct {
 	conn    net.Conn
-	mutex   *sync.Mutex
+	mutex   sync.Mutex
 	decoder *gob.Decoder
 }
 
@@ -28,168 +41,234 @@ func (w *WorkerClient) write(_b []byte) error {
 }
 
 func (w *WorkerClient) joinArgsBytes(args []string) []byte {
-	_b := make([]byte, 0)
+	totalLength := 0
 	for _, a := range args {
-		_b = append(_b, []byte(a)...)
-		_b = append(_b, 0)
+		totalLength += len(a) + 1
+	}
+	totalLength--
+
+	_b := make([]byte, totalLength)
+	offset := 0
+	for i, a := range args {
+		copy(_b[offset:], a)
+		offset += len(a)
+		if i < len(args)-1 {
+			_b[offset] = 0
+			offset++
+		}
 	}
 	return _b
 }
 
-/*
-First 52 bytes of the message are the header:
-0 - 16: length of data as string
-16 - 20: verb // get, set, val, help so 4 bytes max
-20 - 36: command
-36 - 52: submodule
-52 - 52+dl: data
-*/
 func (w *WorkerClient) formatHeaderBytes(verb, command, submodule string, args []string) []byte {
 	_jd := w.joinArgsBytes(args)
 	_dl := len(_jd)
-	_b := make([]byte, 52+_dl)
-	copy(_b[0:16], strconv.Itoa(_dl))
-	copy(_b[16:20], verb)
-	copy(_b[20:36], command)
-	copy(_b[36:52], submodule)
-	copy(_b[52:], _jd)
+	_b := make([]byte, headerLength+_dl)
+	copy(_b[lengthIndex:lengthIndex+lengthSize], strconv.Itoa(_dl))
+	copy(_b[verbIndex:verbIndex+verbSize], verb)
+	copy(_b[commandIndex:commandIndex+commandSize], command)
+	copy(_b[submodIndex:submodIndex+submodSize], submodule)
+	copy(_b[headerLength:], _jd)
 	return _b
 }
 
+func (w *WorkerClient) executeCommand(verb, command, submodule string, args ...string) error {
+	return w.write(w.formatHeaderBytes(verb, command, submodule, args))
+}
+
 func (w *WorkerClient) get(command, submodule string, args ...string) error {
-	return w.write(w.formatHeaderBytes("get", command, submodule, args))
+	return w.executeCommand("get", command, submodule, args...)
 }
 
 func (w *WorkerClient) set(command, submodule string, args ...string) error {
-	return w.write(w.formatHeaderBytes("set", command, submodule, args))
+	return w.executeCommand("set", command, submodule, args...)
 }
 
 func (w *WorkerClient) val(command, submodule string, args ...string) error {
-	return w.write(w.formatHeaderBytes("val", command, submodule, args))
+	return w.executeCommand("val", command, submodule, args...)
 }
 
 func (w *WorkerClient) del(command, submodule string, args ...string) error {
-	return w.write(w.formatHeaderBytes("del", command, submodule, args))
+	return w.executeCommand("del", command, submodule, args...)
 }
 
-func (w *WorkerClient) decode(i interface{}) {
+func (w *WorkerClient) decode(i interface{}) error {
 	if err := w.decoder.Decode(i); err != nil {
 		log.Errorf("error decoding: %s", err)
+		return err
 	}
+	return nil
 }
 
-// GetIP returns the remediation for a given IP checks both the ip and the range
-func (w *WorkerClient) GetIP(ip string) remediation.Remediation {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-	w.get("ip", "", ip)
-
-	remediation := remediation.Allow
-
-	w.decode(&remediation)
-
-	return remediation
-}
-
-// GetCN returns the remediation for a given CN
-func (w *WorkerClient) GetCN(cn string) remediation.Remediation {
+func (w *WorkerClient) GetIP(ip string) (remediation.Remediation, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	remediation := remediation.Allow
-	w.get("cn", "", cn)
+	if err := w.get("ip", "", ip); err != nil {
+		return remediation.Allow, err
+	}
 
-	w.decode(&remediation)
+	var rem remediation.Remediation
+	if err := w.decode(&rem); err != nil {
+		return remediation.Allow, err
+	}
 
-	return remediation
+	return rem, nil
 }
 
-// GetGeoIso returns the iso code for a given IP
-func (w *WorkerClient) GetGeoIso(ip string) string {
+func (w *WorkerClient) GetCN(cn string) (remediation.Remediation, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	w.get("geo", "iso", ip)
-	iso := ""
-	w.decode(&iso)
-	return iso
+
+	if err := w.get("cn", "", cn); err != nil {
+		return remediation.Allow, err
+	}
+
+	var rem remediation.Remediation
+	if err := w.decode(&rem); err != nil {
+		return remediation.Allow, err
+	}
+
+	return rem, nil
 }
 
-// GetHost return the first host matching the string
-func (w *WorkerClient) GetHost(h string) *host.Host {
+func (w *WorkerClient) GetGeoIso(ip string) (string, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	w.get("hosts", "", h)
+
+	if err := w.get("geo", "iso", ip); err != nil {
+		return "", err
+	}
+
+	var iso string
+	if err := w.decode(&iso); err != nil {
+		return "", err
+	}
+
+	return iso, nil
+}
+
+func (w *WorkerClient) GetHost(h string) (*host.Host, error) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if err := w.get("hosts", "", h); err != nil {
+		return nil, err
+	}
+
 	var hStruct *host.Host
-	w.decode(&hStruct)
-
-	// if the host is empty, it means it was not found
-	if hStruct != nil && hStruct.Host == "" {
-		return nil
+	if err := w.decode(&hStruct); err != nil {
+		return nil, err
 	}
 
-	return hStruct
+	if hStruct != nil && hStruct.Host == "" {
+		return nil, errors.New("host not found")
+	}
+
+	return hStruct, nil
 }
 
-// GetHostCookie returns a new random cookie for a given host
-func (w *WorkerClient) GetHostCookie(h string, ssl string) http.Cookie {
+func (w *WorkerClient) GetHostCookie(h string, ssl string) (http.Cookie, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	w.get("host", "cookie", h, ssl)
-	cookie := http.Cookie{}
-	w.decode(&cookie)
-	return cookie
+
+	if err := w.get("host", "cookie", h, ssl); err != nil {
+		return http.Cookie{}, err
+	}
+
+	var cookie http.Cookie
+	if err := w.decode(&cookie); err != nil {
+		return http.Cookie{}, err
+	}
+
+	return cookie, nil
 }
 
-func (w *WorkerClient) GetHostSessionKey(h, s, k string) string {
+func (w *WorkerClient) GetHostSessionKey(h, s, k string) (string, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	w.get("host", "session", h, s, k)
-	key := ""
-	w.decode(&key)
-	return key
+
+	if err := w.get("host", "session", h, s, k); err != nil {
+		return "", err
+	}
+
+	var key string
+	if err := w.decode(&key); err != nil {
+		return "", err
+	}
+
+	return key, nil
 }
 
-func (w *WorkerClient) ValHostCookie(h, cookie string) string {
+func (w *WorkerClient) ValHostCookie(h, cookie string) (string, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	w.val("host", "cookie", h, cookie)
-	uuid := ""
-	w.decode(&uuid)
-	return uuid
+
+	if err := w.val("host", "cookie", h, cookie); err != nil {
+		return "", err
+	}
+
+	var uuid string
+	if err := w.decode(&uuid); err != nil {
+		return "", err
+	}
+
+	return uuid, nil
 }
 
-func (w *WorkerClient) ValHostCaptcha(host, uuid, captcha string) bool {
+func (w *WorkerClient) ValHostCaptcha(host, uuid, captcha string) (bool, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	w.val("host", "captcha", host, uuid, captcha)
-	valid := false
-	w.decode(&valid)
-	return valid
+
+	if err := w.val("host", "captcha", host, uuid, captcha); err != nil {
+		return false, err
+	}
+
+	var valid bool
+	if err := w.decode(&valid); err != nil {
+		return false, err
+	}
+
+	return valid, nil
 }
 
-func (w *WorkerClient) SetHostSessionKey(h, s, k, v string) bool {
+func (w *WorkerClient) SetHostSessionKey(h, s, k, v string) (bool, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	w.set("host", "session", h, s, k, v)
-	set := false
-	w.decode(&set)
-	return set
+
+	if err := w.set("host", "session", h, s, k, v); err != nil {
+		return false, err
+	}
+
+	var set bool
+	if err := w.decode(&set); err != nil {
+		return false, err
+	}
+
+	return set, nil
 }
 
-func (w *WorkerClient) DeleteHostSessionKey(h, s, k string) bool {
+func (w *WorkerClient) DeleteHostSessionKey(h, s, k string) (bool, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	w.del("host", "session", h, s, k)
-	deleted := false
-	w.decode(&deleted)
-	return deleted
+
+	if err := w.del("host", "session", h, s, k); err != nil {
+		return false, err
+	}
+
+	var deleted bool
+	if err := w.decode(&deleted); err != nil {
+		return false, err
+	}
+
+	return deleted, nil
 }
 
-func NewWorkerClient(path string) *WorkerClient {
+func NewWorkerClient(path string) (*WorkerClient, error) {
 	c, err := net.Dial("unix", path)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	wGob := gob.NewDecoder(c)
-	return &WorkerClient{conn: c, mutex: &sync.Mutex{}, decoder: wGob}
+	return &WorkerClient{conn: c, decoder: wGob}, nil
 }

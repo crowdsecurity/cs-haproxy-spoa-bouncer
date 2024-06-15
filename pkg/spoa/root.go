@@ -54,13 +54,19 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 
 	clog.SetLevel(logLevel)
 
+	client, err := worker.NewWorkerClient(socket)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create worker client: %v", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
+
 	s := &Spoa{
 		HAWaitGroup:  &sync.WaitGroup{},
 		ctx:          ctx,
 		cancel:       cancel,
 		logger:       clog.WithField("worker", name),
-		workerClient: worker.NewWorkerClient(socket),
+		workerClient: client,
 	}
 
 	if tcpAddr != "" {
@@ -227,10 +233,10 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		return
 	}
 
-	host = s.workerClient.GetHost(*hoststring)
+	host, err = s.workerClient.GetHost(*hoststring)
 
 	// if the host is not found we cannot alter the remediation or do appsec checks
-	if host == nil {
+	if host == nil || err != nil {
 		return
 	}
 
@@ -255,7 +261,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		uuid := ""
 
 		if cookieB64 != nil {
-			uuid = s.workerClient.ValHostCookie(*hoststring, *cookieB64)
+			uuid, _ = s.workerClient.ValHostCookie(*hoststring, *cookieB64)
 		}
 
 		if uuid == "" {
@@ -265,16 +271,18 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				log.Error(err)
 			}
 
-			cookie := s.workerClient.GetHostCookie(*hoststring, fmt.Sprint(*ssl))
+			cookie, _ := s.workerClient.GetHostCookie(*hoststring, fmt.Sprint(*ssl))
 
-			uuid = s.workerClient.ValHostCookie(*hoststring, cookie.Value)
+			uuid, _ = s.workerClient.ValHostCookie(*hoststring, cookie.Value)
 
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
 		}
 
 		if uuid == "" {
 			// We should never hit this but safety net
+			// As a fallback we set the remediation to the fallback remediation
 			log.Error("failed to get uuid from cookie")
+			r = remediation.FromString(host.Captcha.FallbackRemediation)
 			return
 		}
 
@@ -286,12 +294,17 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 
 		// if captcha is not valid then update the url in the session
-		if s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS) != captcha.Valid {
+		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val != captcha.Valid {
 			// Update the incoming url if it is different from the stored url for the session ignore favicon requests
-			if storedUrl := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI); (storedUrl == "" || url != nil && *url != storedUrl) && !strings.HasSuffix(*url, ".ico") {
+			storedUrl, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
+			if err != nil {
+				log.Error(err)
+			}
+
+			if err == nil && (storedUrl == "" || url != nil && *url != storedUrl) && !strings.HasSuffix(*url, ".ico") {
 				log.WithField("session", uuid).Debugf("updating stored url %s", *url)
 				s.workerClient.SetHostSessionKey(*hoststring, uuid, session.URI, *url)
-			} // !TODO we should ignore static files also
+			}
 		}
 
 		method, err = readKeyFromMessage[string](mes, "method")
@@ -314,27 +327,22 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 
 		// Check if the request is a captcha validation request
-		if s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS) == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
+		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
 			body, err = readKeyFromMessage[[]byte](mes, "body")
 
 			if err != nil {
 				log.Printf("failed to read body: %v", err)
 				return
 			}
-			if s.workerClient.ValHostCaptcha(*hoststring, uuid, string(*body)) {
+			if val, _ := s.workerClient.ValHostCaptcha(*hoststring, uuid, string(*body)); val {
 				s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS, captcha.Valid)
 			}
 		}
 
-		if err != nil {
-			log.Printf("failed to read url: %v", err)
-			return
-		}
-
 		// if the session has a valid captcha status we allow the request
-		if s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS) == captcha.Valid {
+		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val == captcha.Valid {
 			r = remediation.Allow
-			storedUrl := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
+			storedUrl, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
 			// On first valid captcha we redirect to the stored url
 			if storedUrl != "" {
 				log.Debug("redirecting to: ", storedUrl)
@@ -376,12 +384,12 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	r := remediation.Allow
 	ipStr := ipType.String()
 
-	r = s.workerClient.GetIP(ipStr)
+	r, _ = s.workerClient.GetIP(ipStr)
 
 	if r < remediation.Unknown {
-		iso := s.workerClient.GetGeoIso(ipStr)
+		iso, _ := s.workerClient.GetGeoIso(ipStr)
 		if iso != "" {
-			r = s.workerClient.GetCN(iso)
+			r, _ = s.workerClient.GetCN(iso)
 			req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
 		}
 	}

@@ -242,6 +242,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 
 				h := a.HostManager.MatchFirstHost(args[0])
 				ses, err := h.Captcha.Sessions.NewRandomSession()
+
 				if err != nil {
 					return nil, err
 				}
@@ -269,15 +270,14 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 					return &host.Host{}, err
 				}
 
-				log.Info("Checking host", args[0])
-
 				h := a.HostManager.MatchFirstHost(args[0])
 
+				// We cant return nil, so we return an empty host
 				if h == nil {
 					return &host.Host{}, nil
 				}
 
-				// return a new host derived from the host object
+				// return a new host derived from the host object to redact sensitive information
 				return &host.Host{
 					Host: h.Host,
 					Captcha: captcha.Captcha{
@@ -455,6 +455,7 @@ func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 
 		dataBuffer := make([]byte, _dl)
 		n, err = sc.Conn.Read(dataBuffer)
+
 		if err != nil || n == 0 {
 			if flushErr := flushConn(sc.Conn); flushErr != nil {
 				log.Error("Error flushing connection buffer:", flushErr)
@@ -467,7 +468,17 @@ func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 		if _sm != "" {
 			command += ":" + _sm
 		}
-		dataParts := splitBytesByNull(dataBuffer[:n])
+
+		var dataParts []string
+
+		// We have to handle appsec request differently as we don't know what bytes are contained within the body of the request
+		if _sm == "appsec" {
+			// We know the first null bytes separates the host from the rest of the data
+			dataParts = splitBytesByNullN(dataBuffer[:n], 2)
+		} else {
+			dataParts = splitBytesByNull(dataBuffer[:n])
+		}
+
 		log.Infof("data: %+v", dataParts)
 		value, err := a.HandleCommand(command, dataParts, sc.Permission)
 
@@ -476,11 +487,10 @@ func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 			log.Error("Error handling command:", err)
 			continue
 		}
-		log.Info(value)
+
 		if err := sc.Encoder.Encode(value); err != nil {
 			log.Error("Error encoding response:", err)
 		}
-		log.Info("handled command")
 	}
 }
 
@@ -524,6 +534,7 @@ func (a *Api) handleAdminConnection(sc server.SocketConn) {
 		if err != nil {
 			log.Errorf("%+v, %+v", apiCommand, args)
 			log.Error("Error handling command:", err)
+			sc.Conn.Write([]byte(fmt.Sprintf("%v\n", err))) // We return the error message back to admin sockets
 			continue
 		}
 
@@ -551,6 +562,17 @@ func cleanNullBytes(b []byte) string {
 
 func splitBytesByNull(b []byte) []string {
 	s := bytes.Split(b, []byte{0})
+	str := make([]string, 0)
+	for _, v := range s {
+		if len(v) > 0 {
+			str = append(str, string(v))
+		}
+	}
+	return str
+}
+
+func splitBytesByNullN(b []byte, n int) []string {
+	s := bytes.SplitN(b, []byte{0}, n)
 	str := make([]string, 0)
 	for _, v := range s {
 		if len(v) > 0 {

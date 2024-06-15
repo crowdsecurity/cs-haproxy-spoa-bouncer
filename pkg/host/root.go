@@ -78,6 +78,7 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 	defer h.RUnlock()
 
 	if host, ok := h.cache[toMatch]; ok {
+		host.logger.WithField("value", toMatch).Debug("matched host from cache")
 		return host
 	}
 
