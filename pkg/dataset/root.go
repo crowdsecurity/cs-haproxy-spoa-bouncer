@@ -17,7 +17,6 @@ type DataSet struct {
 }
 
 func New() *DataSet {
-	log.Info("Using new datasets")
 	PrefixSet := PrefixSet{}
 	PrefixSet.Init("CIDRSet")
 	CNSet := CNSet{}
