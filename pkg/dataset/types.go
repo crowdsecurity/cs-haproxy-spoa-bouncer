@@ -2,7 +2,7 @@ package dataset
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"slices"
 	"sync"
 
@@ -58,142 +58,58 @@ func (rM *RemediationIdsMap) AddId(clog *log.Entry, r remediation.Remediation, i
 	(*rM)[r] = append(ids, id)
 }
 
-type StringSet struct {
-	sync.RWMutex
-	Items  map[string]RemediationIdsMap
-	logger *log.Entry
-}
-
-type RangeSet struct {
-	sync.RWMutex
-	Items []struct {
-		CIDR         *net.IPNet
-		Remediations RemediationIdsMap
+func (rM *RemediationIdsMap) GetRemediation() remediation.Remediation {
+	keys := make([]remediation.Remediation, 0, len(*rM))
+	for k := range *rM {
+		keys = append(keys, k)
 	}
+	return slices.Max(keys)
+}
+
+type Set[T string | netip.Prefix | netip.Addr] struct {
+	sync.RWMutex
+	Items  map[T]RemediationIdsMap
 	logger *log.Entry
 }
 
-type CIDRSet struct {
-	RangeSet
+type PrefixSet struct {
+	Set[netip.Prefix]
 }
 
 type IPSet struct {
-	StringSet
+	Set[netip.Addr]
 }
 
 type CNSet struct {
-	StringSet
+	Set[string]
 }
 
-func (s *RangeSet) Init(logAlias string) {
-	s.Items = make([]struct {
-		CIDR         *net.IPNet
-		Remediations RemediationIdsMap
-	}, 0)
-	s.logger = log.WithField("type", "range").WithField("alias", logAlias)
+func (s *Set[T]) Init(logAlias string) {
+	s.Items = make(map[T]RemediationIdsMap, 0)
+	s.logger = log.WithField("alias", logAlias)
 	s.logger.Debugf("initialized")
 }
 
-func (s *RangeSet) Add(cidr *net.IPNet, r remediation.Remediation, id int64) {
-	valueLog := s.logger.WithField("value", cidr.String())
-	valueLog.Debug("adding")
-	defer s.Unlock()
-	for i := range s.Items {
-		if s.Items[i].CIDR.String() == cidr.String() {
-			s.Lock()
-			valueLog.Debug("already exists")
-			s.Items[i].Remediations.AddId(valueLog, r, id)
-			return
-		}
-	}
-	s.Lock()
-	valueLog.Debug("not found, creating new entry")
-	s.Items = append(s.Items, struct {
-		CIDR         *net.IPNet
-		Remediations RemediationIdsMap
-	}{CIDR: cidr, Remediations: map[remediation.Remediation][]int64{r: {id}}})
-}
-
-func (s *RangeSet) Remove(cidr *net.IPNet, r remediation.Remediation, id int64) {
-	valueLog := s.logger.WithField("value", cidr.String())
-	valueLog.Debugf("removing id: %d", id)
-	for index, v := range s.Items {
-		if v.CIDR.String() == cidr.String() {
-			s.Lock()
-			defer s.Unlock()
-			valueLog.Debug("found")
-
-			if err := v.Remediations.RemoveId(valueLog, r, id); err != nil {
-				valueLog.Error(err)
-				return
-			}
-
-			if len(v.Remediations) == 0 {
-				valueLog.Debug("removing as it has no active remediations")
-				if index < len(s.Items)-1 {
-					s.Items = append(s.Items[:index], s.Items[index+1:]...)
-				} else {
-					s.Items = s.Items[:index]
-				}
-			}
-			return
-		}
-	}
-	valueLog.Error("not found")
-}
-
-func (s *RangeSet) Contains(ip *net.IP) remediation.Remediation {
-	s.RLock()
-	defer s.RUnlock()
-	valueLog := s.logger.WithField("value", ip.String())
-	valueLog.Debug("checking value")
-	s.logger.Tracef("current items: %+v", s.Items)
-	r := remediation.Allow
-	keys := make([]remediation.Remediation, 0)
-	for _, v := range s.Items {
-		if v.CIDR.Contains(*ip) {
-			valueLog.Debugf("value matches CIDR: %s", v.CIDR.String())
-			// Loop over all remediations
-			for k := range v.Remediations {
-				keys = append(keys, k)
-			}
-		}
-	}
-	if len(keys) > 0 {
-		r = slices.Max(keys)
-	}
-	valueLog.Debugf("remediation: %s", r.String())
-	return r
-}
-
-func (s *StringSet) Init(logAlias string) {
-	s.Items = make(map[string]RemediationIdsMap, 0)
-	s.logger = log.WithField("type", "string").WithField("alias", logAlias)
-	s.logger.Debugf("initialized")
-}
-
-func (s *StringSet) Add(toAdd string, r remediation.Remediation, id int64) {
+func (s *Set[T]) Add(item T, r remediation.Remediation, id int64) {
 	s.Lock()
 	defer s.Unlock()
-	valueLog := s.logger.WithField("value", toAdd)
+	valueLog := s.logger.WithField("value", item).WithField("remediation", r.String())
 	valueLog.Debug("adding")
-	s.logger.Tracef("current items: %+v", s.Items)
-	if v, ok := s.Items[toAdd]; ok {
+	if v, ok := s.Items[item]; ok {
 		valueLog.Debug("already exists")
 		v.AddId(valueLog, r, id)
 		return
 	}
 	valueLog.Debug("not found, creating new entry")
-	s.Items[toAdd] = map[remediation.Remediation][]int64{r: {id}}
+	s.Items[item] = map[remediation.Remediation][]int64{r: {id}}
 }
 
-func (s *StringSet) Remove(toRemove string, r remediation.Remediation, id int64) {
+func (s *Set[T]) Remove(item T, r remediation.Remediation, id int64) {
 	s.Lock()
 	defer s.Unlock()
-	valueLog := s.logger.WithField("value", toRemove)
-	valueLog.Debugf("removing id: %d", id)
+	valueLog := s.logger.WithField("value", item).WithField("remediation", r.String())
 	s.logger.Tracef("current items: %+v", s.Items)
-	v, ok := s.Items[toRemove]
+	v, ok := s.Items[item]
 	if !ok {
 		valueLog.Error("not found")
 		return
@@ -205,13 +121,32 @@ func (s *StringSet) Remove(toRemove string, r remediation.Remediation, id int64)
 		return
 	}
 
-	if len(s.Items[toRemove]) == 0 {
+	if len(s.Items[item]) == 0 {
 		valueLog.Debugf("removing as it has no active remediations")
-		delete(s.Items, toRemove)
+		delete(s.Items, item)
 	}
 }
 
-func (s *StringSet) Contains(toCheck string) remediation.Remediation {
+func (s *PrefixSet) Contains(ip netip.Addr) remediation.Remediation {
+	s.RLock()
+	defer s.RUnlock()
+	valueLog := s.logger.WithField("value", ip.String())
+	valueLog.Debug("checking value")
+	s.logger.Tracef("current items: %+v", s.Items)
+	r := remediation.Allow
+	for k, v := range s.Items {
+		if k.Contains(ip) {
+			prefixRemediation := v.GetRemediation()
+			if prefixRemediation > r {
+				r = prefixRemediation
+			}
+		}
+	}
+	valueLog.Debugf("remediation: %s", r.String())
+	return r
+}
+
+func (s *IPSet) Contains(toCheck netip.Addr) remediation.Remediation {
 	s.RLock()
 	defer s.RUnlock()
 	valueLog := s.logger.WithField("value", toCheck)
@@ -220,11 +155,22 @@ func (s *StringSet) Contains(toCheck string) remediation.Remediation {
 	r := remediation.Allow
 	if v, ok := s.Items[toCheck]; ok {
 		valueLog.Debug("found")
-		keys := make([]remediation.Remediation, 0, len(v))
-		for k := range v {
-			keys = append(keys, k)
-		}
-		r = slices.Max(keys)
+		r = v.GetRemediation()
+	}
+	valueLog.Debugf("remediation: %s", r.String())
+	return r
+}
+
+func (s *CNSet) Contains(toCheck string) remediation.Remediation {
+	s.RLock()
+	defer s.RUnlock()
+	valueLog := s.logger.WithField("value", toCheck)
+	valueLog.Debug("checking value")
+	s.logger.Tracef("current items: %+v", s.Items)
+	r := remediation.Allow
+	if v, ok := s.Items[toCheck]; ok {
+		valueLog.Debug("found")
+		r = v.GetRemediation()
 	}
 	valueLog.Debugf("remediation: %s", r.String())
 	return r

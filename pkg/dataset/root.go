@@ -2,7 +2,7 @@ package dataset
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"strings"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
@@ -11,22 +11,23 @@ import (
 )
 
 type DataSet struct {
-	CIDRSet *CIDRSet
-	IPSet   *IPSet
-	CNSet   *CNSet
+	PrefixSet *PrefixSet
+	IPSet     *IPSet
+	CNSet     *CNSet
 }
 
 func New() *DataSet {
-	CIDRSet := CIDRSet{}
-	CIDRSet.Init("CIDRSet")
+	log.Info("Using new datasets")
+	PrefixSet := PrefixSet{}
+	PrefixSet.Init("CIDRSet")
 	CNSet := CNSet{}
 	CNSet.Init("CNSet")
 	IPSet := IPSet{}
 	IPSet.Init("IPSet")
 	return &DataSet{
-		CIDRSet: &CIDRSet,
-		CNSet:   &CNSet,
-		IPSet:   &IPSet,
+		PrefixSet: &PrefixSet,
+		CNSet:     &CNSet,
+		IPSet:     &IPSet,
 	}
 }
 
@@ -46,12 +47,15 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	}
 }
 
-func (d *DataSet) CheckIP(ip *net.IP) remediation.Remediation {
-	ipCheck := d.IPSet.Contains(ip.String())
-	if ipCheck > remediation.Unknown {
-		return ipCheck
+func (d *DataSet) CheckIP(ipString string) (remediation.Remediation, error) {
+	ip, err := netip.ParseAddr(ipString)
+	if err != nil || !ip.IsValid() {
+		return remediation.Allow, err
 	}
-	return d.CIDRSet.Contains(ip)
+	if ipCheck := d.IPSet.Contains(ip); ipCheck > remediation.Unknown {
+		return ipCheck, nil
+	}
+	return d.PrefixSet.Contains(ip), nil
 }
 
 func (d *DataSet) CheckCN(cn string) remediation.Remediation {
@@ -83,17 +87,18 @@ func (d *DataSet) AddDecision(decision *models.Decision) error {
 }
 
 func (d *DataSet) AddCIDR(cidr *string, r remediation.Remediation, id int64) error {
-	_, ipnet, err := net.ParseCIDR(*cidr)
+	prefix, err := netip.ParsePrefix(*cidr)
 	if err != nil {
 		return err
 	}
-	d.CIDRSet.Add(ipnet, r, id)
+	d.PrefixSet.Add(prefix, r, id)
 	return nil
 }
 
-func (d *DataSet) AddIP(ip string, r remediation.Remediation, id int64) error {
-	if ip == "" {
-		return fmt.Errorf("empty IP")
+func (d *DataSet) AddIP(ipString string, r remediation.Remediation, id int64) error {
+	ip, err := netip.ParseAddr(ipString)
+	if err != nil || !ip.IsValid() {
+		return err
 	}
 	d.IPSet.Add(ip, r, id)
 	return nil
@@ -108,11 +113,11 @@ func (d *DataSet) AddCN(cn string, r remediation.Remediation, id int64) error {
 }
 
 func (d *DataSet) RemoveCIDR(cidr *string, r remediation.Remediation, id int64) error {
-	_, ipnet, err := net.ParseCIDR(*cidr)
+	prefix, err := netip.ParsePrefix(*cidr)
 	if err != nil {
 		return err
 	}
-	d.CIDRSet.Remove(ipnet, r, id)
+	d.PrefixSet.Remove(prefix, r, id)
 	return nil
 }
 
@@ -124,9 +129,10 @@ func (d *DataSet) RemoveCN(cn string, r remediation.Remediation, id int64) error
 	return nil
 }
 
-func (d *DataSet) RemoveIP(ip string, r remediation.Remediation, id int64) error {
-	if ip == "" {
-		return fmt.Errorf("empty IP")
+func (d *DataSet) RemoveIP(ipString string, r remediation.Remediation, id int64) error {
+	ip, err := netip.ParseAddr(ipString)
+	if err != nil || !ip.IsValid() {
+		return err
 	}
 	d.IPSet.Remove(ip, r, id)
 	return nil
