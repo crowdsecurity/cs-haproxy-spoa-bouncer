@@ -296,13 +296,12 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 				}
 
 				log.Infof("Checking IP %s", args[0])
-				val := net.ParseIP(args[0])
 
-				if val == nil {
-					return nil, fmt.Errorf("invalid IP")
+				r, err := a.Dataset.CheckIP(args[0])
+
+				if err != nil {
+					return nil, err
 				}
-
-				r := a.Dataset.CheckIP(&val)
 
 				if permission == apiPermission.WorkerPermission {
 					return r, nil
