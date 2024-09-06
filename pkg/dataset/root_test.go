@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"net/netip"
 	"testing"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
@@ -19,6 +20,19 @@ type toCheck struct {
 
 func TestDataSet(t *testing.T) {
 	dataSet := New()
+	t.Run("Test Init", func(t *testing.T) {
+		// Test new returns the types we expect
+		assert.NotNil(t, dataSet)
+		assert.IsType(t, &PrefixSet{}, dataSet.PrefixSet)
+		assert.IsType(t, &CNSet{}, dataSet.CNSet)
+		assert.IsType(t, &IPSet{}, dataSet.IPSet)
+		assert.NotNil(t, dataSet.PrefixSet)
+		assert.NotNil(t, dataSet.CNSet)
+		assert.NotNil(t, dataSet.IPSet)
+		assert.IsType(t, map[netip.Prefix]RemediationIdsMap{}, dataSet.PrefixSet.Items)
+		assert.IsType(t, map[string]RemediationIdsMap{}, dataSet.CNSet.Items)
+		assert.IsType(t, map[netip.Addr]RemediationIdsMap{}, dataSet.IPSet.Items)
+	})
 	tests := []struct {
 		name     string
 		toAdd    models.GetDecisionsResponse
