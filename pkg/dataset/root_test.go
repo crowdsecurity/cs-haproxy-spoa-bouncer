@@ -127,25 +127,25 @@ func TestDataSet(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if len(tt.toAdd) > 0 {
 				dataSet.Add(tt.toAdd)
-				if tt.toCheck == nil {
-					t.Fatalf("toCheck is nil")
-				}
-				var r remediation.Remediation
-				var err error
-				switch tt.toCheck.Scope {
-				case "IP":
-					r, err = dataSet.CheckIP(tt.toCheck.Value)
-				case "Country":
-					r = dataSet.CheckCN(tt.toCheck.Value)
-				default:
-					t.Fatalf("unknown scope %s", tt.toCheck.Scope)
-				}
-				require.NoError(t, err)
-				assert.Equal(t, r, tt.toCheck.Type)
 			}
 			if len(tt.toDelete) > 0 {
 				dataSet.Remove(tt.toDelete)
 			}
+			if tt.toCheck == nil {
+				t.Fatalf("toCheck is nil")
+			}
+			var r remediation.Remediation
+			var err error
+			switch tt.toCheck.Scope {
+			case "IP":
+				r, err = dataSet.CheckIP(tt.toCheck.Value)
+			case "Country":
+				r = dataSet.CheckCN(tt.toCheck.Value)
+			default:
+				t.Fatalf("unknown scope %s", tt.toCheck.Scope)
+			}
+			require.NoError(t, err)
+			assert.Equal(t, r, tt.toCheck.Type)
 		})
 	}
 
