@@ -15,7 +15,6 @@ require (
 	golang.org/x/sync v0.7.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v2 v2.4.0
-	gotest.tools/v3 v3.5.0
 )
 
 require (
@@ -37,7 +36,6 @@ require (
 	github.com/go-openapi/validate v0.22.1 // indirect
 	github.com/goccy/go-yaml v1.11.2 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
-	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
