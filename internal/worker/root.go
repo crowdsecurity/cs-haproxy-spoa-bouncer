@@ -16,10 +16,10 @@ type Worker struct {
 	ListenAddr   string     `yaml:"listen_addr"`
 	ListenSocket string     `yaml:"listen_socket"`
 	LogLevel     *log.Level `yaml:"log_level"`
-	Uid          int        `yaml:"-"`
-	Gid          int        `yaml:"-"`
+	Uid          int        `yaml:"-"` // Set by the worker manager
+	Gid          int        `yaml:"-"` // Set by the worker manager
 	Command      *exec.Cmd  `yaml:"-"`
-	SocketPath   string     `yaml:"-"`
+	SocketPath   string     `yaml:"-"` // Set by combining the socket dir and the worker name
 }
 
 func (w *Worker) Run(socket string) error {
@@ -61,14 +61,18 @@ type Manager struct {
 	CreateChan chan *Worker    `yaml:"-"`
 	Ctx        context.Context `yaml:"-"`
 	Server     *server.Server  `yaml:"-"`
+	WorkerUid  int             `yaml:"-"`
+	WorkerGid  int             `yaml:"-"`
 }
 
-func NewManager(ctx context.Context, s *server.Server) *Manager {
+func NewManager(ctx context.Context, s *server.Server, uid, gid int) *Manager {
 	return &Manager{
 		CreateChan: make(chan *Worker),
 		Workers:    make([]*Worker, 0),
 		Ctx:        ctx,
 		Server:     s,
+		WorkerUid:  uid,
+		WorkerGid:  gid,
 	}
 }
 
@@ -85,6 +89,8 @@ func (m *Manager) Run() error {
 }
 
 func (m *Manager) AddWorker(w *Worker) {
+	w.Uid = m.WorkerUid
+	w.Gid = m.WorkerGid
 	socketString, err := m.Server.NewWorkerListener(w.Name, w.Gid)
 	if err != nil {
 		log.Errorf("failed to create worker listener: %s", err)
