@@ -225,7 +225,7 @@ func Execute() error {
 		defer adminServer.Close()
 	}
 
-	workerManager := worker.NewManager(ctx, workerServer)
+	workerManager := worker.NewManager(ctx, workerServer, config.WorkerUid, config.WorkerGid)
 
 	g.Go(func() error {
 		return workerManager.Run()

@@ -86,11 +86,6 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 		return nil, fmt.Errorf("failed to convert gid %s: %w", g.Gid, err)
 	}
 
-	for _, w := range config.Workers {
-		w.Gid = config.WorkerGid
-		w.Uid = config.WorkerUid
-	}
-
 	if config.WorkerSocketDir == "" {
 		config.WorkerSocketDir = "/run/"
 	}
