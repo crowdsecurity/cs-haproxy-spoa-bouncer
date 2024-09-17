@@ -19,7 +19,7 @@ RUN apk add --no-cache socat
 ## Add the same haproxy user as the official haproxy image
 RUN addgroup -g 99 -S haproxy && adduser -S -D -H -u 99 -h /var/lib/haproxy -s /sbin/nologin -G haproxy -g haproxy haproxy
 ## Add worker user
-RUN addgroup -S crowdsec-spoa && adduser -S -D -H -s /usr/sbin/nologin -g crowdsec-spoa crowdsec-spoa
+RUN addgroup -S crowdsec-spoa && adduser -S -D -H -s /sbin/nologin -g crowdsec-spoa crowdsec-spoa
 
 ## Create a socket for the spoa to inherit crowdsec-spoa:haproxy user from official haproxy image
 RUN mkdir -p /run/crowdsec-spoa/ && chown crowdsec-spoa:haproxy /run/crowdsec-spoa/ && chmod 770 /run/crowdsec-spoa/
