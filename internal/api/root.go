@@ -300,7 +300,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 
 				log.Infof("Checking IP %s", args[0])
 
-				r, err := a.Dataset.CheckIP(args[0])
+				r, origin, err := a.Dataset.CheckIP(args[0])
 
 				if err != nil {
 					return nil, err
@@ -316,7 +316,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 					metrics.TotalProcessedRequests.With(prometheus.Labels{"ip_type": ipType}).Inc()
 
 					if r > remediation.Unknown {
-						metrics.TotalBlockedRequests.With(prometheus.Labels{"ip_type": ipType, "origin": "FIXME", "remediation": r.String()}).Inc()
+						metrics.TotalBlockedRequests.With(prometheus.Labels{"ip_type": ipType, "origin": origin, "remediation": r.String()}).Inc()
 					}
 
 					return r, nil
@@ -327,15 +327,22 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 		},
 		"get:cn": {
 			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 1, 1); err != nil {
+				if err := ArgsCheck(args, 2, 2); err != nil {
 					return nil, err
 				}
 				if args[0] == "" {
 					return nil, fmt.Errorf("invalid argument")
 				}
-				r := a.Dataset.CheckCN(args[0])
+				r, origin := a.Dataset.CheckCN(args[0])
 
 				if permission == apiPermission.WorkerPermission {
+					if r > remediation.Unknown {
+						ipType := "ipv4"
+						if strings.Contains(args[1], ":") {
+							ipType = "ipv6"
+						}
+						metrics.TotalBlockedRequests.With(prometheus.Labels{"ip_type": ipType, "origin": origin, "remediation": r.String()}).Inc()
+					}
 					return r, nil
 				}
 
