@@ -111,7 +111,7 @@ func (s *Set[T]) Remove(item T, r remediation.Remediation, id int64) {
 	s.logger.Tracef("current items: %+v", s.Items)
 	v, ok := s.Items[item]
 	if !ok {
-		valueLog.Error("not found")
+		valueLog.Debug("value not found")
 		return
 	}
 	valueLog.Debug("found")

@@ -122,7 +122,7 @@ func (c *LoggingConfig) Setup(fileName string) error {
 		return err
 	}
 
-	if err := c.ConfigureLogger(log.New()); err != nil {
+	if err := c.ConfigureLogger(log.StandardLogger()); err != nil {
 		return err
 	}
 
