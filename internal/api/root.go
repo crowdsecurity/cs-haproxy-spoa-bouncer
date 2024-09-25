@@ -441,7 +441,7 @@ func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 
 		_dl, _v, _m, _sm, err := readHeaderFromBytes(headerBuffer)
 
-		log.Info("received header bytes", _dl, _v, _m, _sm)
+		log.Debugf("received header bytes: datalength: %d | verb: %s, | module: %s | submodule: %s", _dl, _v, _m, _sm)
 
 		if err != nil || !IsValidVerb(_v) || !IsValidModule(_m) {
 			log.Error("Error reading header:", err)
@@ -478,7 +478,7 @@ func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 			dataParts = splitBytesByNull(dataBuffer[:n])
 		}
 
-		log.Infof("data: %+v", dataParts)
+		log.Debugf("data: %+v", dataParts)
 		value, err := a.HandleCommand(command, dataParts, sc.Permission)
 
 		if err != nil {

@@ -36,7 +36,7 @@ func (w *WorkerClient) write(_b []byte) error {
 	if err != nil {
 		return err
 	}
-	log.Info("wrote ", n, " bytes")
+	log.Debugf("wrote %d bytes", n)
 	return nil
 }
 
