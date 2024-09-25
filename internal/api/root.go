@@ -13,13 +13,16 @@ import (
 
 	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
 	"github.com/crowdsecurity/go-cs-lib/ptr"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -304,6 +307,18 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 				}
 
 				if permission == apiPermission.WorkerPermission {
+					//Only count processed requests if coming from worker
+					ipType := "ipv4"
+					if strings.Contains(args[0], ":") {
+						ipType = "ipv6"
+					}
+
+					metrics.TotalProcessedRequests.With(prometheus.Labels{"ip_type": ipType}).Inc()
+
+					if r > remediation.Unknown {
+						metrics.TotalBlockedRequests.With(prometheus.Labels{"ip_type": ipType, "origin": "FIXME", "remediation": r.String()}).Inc()
+					}
+
 					return r, nil
 				}
 
