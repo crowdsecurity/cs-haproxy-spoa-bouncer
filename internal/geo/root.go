@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/oschwald/geoip2-golang"
 	log "github.com/sirupsen/logrus"
 )
@@ -29,7 +28,6 @@ type GeoDatabase struct {
 
 func (g *GeoDatabase) Init(ctx context.Context) {
 
-	spew.Dump(g)
 	if g.ASNPath == "" && g.CityPath == "" {
 		log.Warnf("geo database paths not configured, disabling module")
 		g.loadFailed = true
