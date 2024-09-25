@@ -354,10 +354,15 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 				if val == nil {
 					return nil, fmt.Errorf("invalid IP")
 				}
+
 				record, err := a.GeoDatabase.GetCity(&val)
 
-				if err != nil && !errors.Is(err, geo.NotValidConfig) {
+				if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
 					return nil, err
+				}
+
+				if record == nil {
+					return nil, nil
 				}
 
 				return geo.GetIsoCodeFromRecord(record), nil
@@ -494,12 +499,20 @@ func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 		}
 
 		log.Debugf("data: %+v", dataParts)
+		log.Debugf("calling command %s with data: %+v and permissions %d", command, dataParts, sc.Permission)
+
 		value, err := a.HandleCommand(command, dataParts, sc.Permission)
 
+		log.Debugf("command %s returned %+v", command, value)
 		if err != nil {
 			//TODO handle error
 			log.Error("Error handling command:", err)
 			continue
+		}
+
+		if value == nil {
+			// nil cannot be encoded, so we send an empty string
+			value = ""
 		}
 
 		if err := sc.Encoder.Encode(value); err != nil {
