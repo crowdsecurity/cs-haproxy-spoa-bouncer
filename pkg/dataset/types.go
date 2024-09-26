@@ -143,13 +143,13 @@ func (s *PrefixSet) Contains(ip netip.Addr) (remediation.Remediation, string) {
 	valueLog.Debug("checking value")
 	s.logger.Tracef("current items: %+v", s.Items)
 	r := remediation.Allow
-	prefixRemediation := remediation.Allow
 	origin := ""
 	for k, v := range s.Items {
 		if k.Contains(ip) {
-			prefixRemediation, origin = v.GetRemediationAndOrigin()
+			prefixRemediation, prefixOrigin := v.GetRemediationAndOrigin()
 			if prefixRemediation > r {
 				r = prefixRemediation
+				origin = prefixOrigin
 			}
 		}
 	}
