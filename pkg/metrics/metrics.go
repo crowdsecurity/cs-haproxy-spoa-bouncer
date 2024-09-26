@@ -5,7 +5,7 @@ import "github.com/prometheus/client_golang/prometheus"
 const (
 	BlockedRequestMetricName   = "crowdsec_haproxy_spoa_bouncer_blocked_requests"
 	ProcessedRequestMetricName = "crowdsec_haproxy_spoa_bouncer_processed_requests"
-	ActiveBannedIPsMetricName  = "crowdsec_haproxy_spoa_bouncer_banned_ips"
+	ActiveDecisionsMetricName  = "crowdsec_haproxy_spoa_bouncer_active_decisions"
 )
 
 var TotalBlockedRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -20,7 +20,7 @@ var TotalProcessedRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
 }, []string{"ip_type"})
 var LastProcessedRequestValue map[string]float64 = make(map[string]float64)
 
-var TotalActiveBannedIPs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-	Name: ActiveBannedIPsMetricName,
-	Help: "Total number of active banned IPs",
-}, []string{"origin", "ip_type"})
+var TotalActiveDecisions = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	Name: ActiveDecisionsMetricName,
+	Help: "Total number of active decisions",
+}, []string{"origin", "ip_type", "scope"})

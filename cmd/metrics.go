@@ -40,11 +40,12 @@ func metricsUpdater(met *models.RemediationComponentsMetrics, updateInterval tim
 	for _, metricFamily := range promMetrics {
 		for _, metric := range metricFamily.GetMetric() {
 			switch metricFamily.GetName() {
-			case metrics.ActiveBannedIPsMetricName:
+			case metrics.ActiveDecisionsMetricName:
 				labels := metric.GetLabel()
 				value := metric.GetGauge().GetValue()
 				origin := getLabelValue(labels, "origin")
-				ipType := getLabelValue(labels, "type")
+				ipType := getLabelValue(labels, "ip_type")
+				scope := getLabelValue(labels, "scope")
 				log.Debugf("Sending active decisions for %s %s | current value: %f", origin, ipType, value)
 				met.Metrics[0].Items = append(met.Metrics[0].Items, &models.MetricsDetailItem{
 					Name:  ptr.Of("active_decisions"),
@@ -52,12 +53,13 @@ func metricsUpdater(met *models.RemediationComponentsMetrics, updateInterval tim
 					Labels: map[string]string{
 						"origin":  origin,
 						"ip_type": ipType,
+						"scope":   scope,
 					},
 					Unit: ptr.Of("ip"),
 				})
 			case metrics.BlockedRequestMetricName:
 				labels := metric.GetLabel()
-				value := metric.GetGauge().GetValue()
+				value := metric.GetCounter().GetValue()
 				origin := getLabelValue(labels, "origin")
 				ipType := getLabelValue(labels, "ip_type")
 				remediation := getLabelValue(labels, "remediation")
@@ -70,24 +72,24 @@ func metricsUpdater(met *models.RemediationComponentsMetrics, updateInterval tim
 						"origin":  origin,
 						"ip_type": ipType,
 					},
-					Unit: ptr.Of("byte"),
+					Unit: ptr.Of("request"),
 				})
 				metrics.LastBlockedRequestValue[key] = value
 			case metrics.ProcessedRequestMetricName:
 				labels := metric.GetLabel()
-				value := metric.GetGauge().GetValue()
+				value := metric.GetCounter().GetValue()
 				origin := getLabelValue(labels, "origin")
 				ipType := getLabelValue(labels, "ip_type")
 				key := origin + ipType
 				log.Debugf("Sending processed requests for %s %s %f | current value: %f | previous value: %f\n", origin, ipType, value-metrics.LastProcessedRequestValue[key], value, metrics.LastProcessedRequestValue[key])
 				met.Metrics[0].Items = append(met.Metrics[0].Items, &models.MetricsDetailItem{
-					Name:  ptr.Of("dropped"),
+					Name:  ptr.Of("processed"),
 					Value: ptr.Of(value - metrics.LastProcessedRequestValue[key]),
 					Labels: map[string]string{
 						"origin":  origin,
 						"ip_type": ipType,
 					},
-					Unit: ptr.Of("packet"),
+					Unit: ptr.Of("request"),
 				})
 				metrics.LastProcessedRequestValue[key] = value
 			}
