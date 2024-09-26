@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
 	"github.com/crowdsecurity/crowdsec/pkg/models"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -75,13 +77,28 @@ func (d *DataSet) RemoveDecision(decision *models.Decision) error {
 }
 
 func (d *DataSet) AddDecision(decision *models.Decision) error {
+	origin := *decision.Origin
+	if origin == "lists" {
+		origin = *decision.Origin + ":" + *decision.Scenario
+	}
 	switch strings.ToLower(*decision.Scope) {
 	case "ip":
-		return d.AddIP(*decision.Value, *decision.Origin, remediation.FromString(*decision.Type), decision.ID)
+		ipType := "ipv4"
+		if strings.Contains(*decision.Value, ":") {
+			ipType = "ipv6"
+		}
+		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Inc()
+		return d.AddIP(*decision.Value, origin, remediation.FromString(*decision.Type), decision.ID)
 	case "range":
-		return d.AddCIDR(decision.Value, *decision.Origin, remediation.FromString(*decision.Type), decision.ID)
+		ipType := "ipv4"
+		if strings.Contains(*decision.Value, ":") {
+			ipType = "ipv6"
+		}
+		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
+		return d.AddCIDR(decision.Value, origin, remediation.FromString(*decision.Type), decision.ID)
 	case "country":
-		return d.AddCN(*decision.Value, *decision.Origin, remediation.FromString(*decision.Type), decision.ID)
+		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": "", "scope": "country"}).Inc()
+		return d.AddCN(*decision.Value, origin, remediation.FromString(*decision.Type), decision.ID)
 	}
 	return fmt.Errorf("unknown scope %s", *decision.Scope)
 }

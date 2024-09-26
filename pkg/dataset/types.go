@@ -75,17 +75,6 @@ func (rM *RemediationIdsMap) GetRemediationAndOrigin() (remediation.Remediation,
 
 }
 
-func (rm *RemediationIdsMap) GetOrigin(id int64) string {
-	for _, v := range *rm {
-		for _, d := range v {
-			if d.Id == id {
-				return d.Origin
-			}
-		}
-	}
-	return ""
-}
-
 type Set[T string | netip.Prefix | netip.Addr] struct {
 	sync.RWMutex
 	Items  map[T]RemediationIdsMap
