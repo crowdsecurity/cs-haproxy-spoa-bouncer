@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
 	"github.com/crowdsecurity/crowdsec/pkg/models"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -46,18 +48,19 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	}
 }
 
-func (d *DataSet) CheckIP(ipString string) (remediation.Remediation, error) {
+func (d *DataSet) CheckIP(ipString string) (remediation.Remediation, string, error) {
 	ip, err := netip.ParseAddr(ipString)
 	if err != nil || !ip.IsValid() {
-		return remediation.Allow, err
+		return remediation.Allow, "", err
 	}
-	if ipCheck := d.IPSet.Contains(ip); ipCheck > remediation.Unknown {
-		return ipCheck, nil
+	if ipCheck, origin := d.IPSet.Contains(ip); ipCheck > remediation.Unknown {
+		return ipCheck, origin, nil
 	}
-	return d.PrefixSet.Contains(ip), nil
+	r, origin := d.PrefixSet.Contains(ip)
+	return r, origin, nil
 }
 
-func (d *DataSet) CheckCN(cn string) remediation.Remediation {
+func (d *DataSet) CheckCN(cn string) (remediation.Remediation, string) {
 	return d.CNSet.Contains(cn)
 }
 
@@ -74,40 +77,55 @@ func (d *DataSet) RemoveDecision(decision *models.Decision) error {
 }
 
 func (d *DataSet) AddDecision(decision *models.Decision) error {
+	origin := *decision.Origin
+	if origin == "lists" {
+		origin = *decision.Origin + ":" + *decision.Scenario
+	}
 	switch strings.ToLower(*decision.Scope) {
 	case "ip":
-		return d.AddIP(*decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		ipType := "ipv4"
+		if strings.Contains(*decision.Value, ":") {
+			ipType = "ipv6"
+		}
+		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Inc()
+		return d.AddIP(*decision.Value, origin, remediation.FromString(*decision.Type), decision.ID)
 	case "range":
-		return d.AddCIDR(decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		ipType := "ipv4"
+		if strings.Contains(*decision.Value, ":") {
+			ipType = "ipv6"
+		}
+		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
+		return d.AddCIDR(decision.Value, origin, remediation.FromString(*decision.Type), decision.ID)
 	case "country":
-		return d.AddCN(*decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": "", "scope": "country"}).Inc()
+		return d.AddCN(*decision.Value, origin, remediation.FromString(*decision.Type), decision.ID)
 	}
 	return fmt.Errorf("unknown scope %s", *decision.Scope)
 }
 
-func (d *DataSet) AddCIDR(cidr *string, r remediation.Remediation, id int64) error {
+func (d *DataSet) AddCIDR(cidr *string, origin string, r remediation.Remediation, id int64) error {
 	prefix, err := netip.ParsePrefix(*cidr)
 	if err != nil {
 		return err
 	}
-	d.PrefixSet.Add(prefix, r, id)
+	d.PrefixSet.Add(prefix, origin, r, id)
 	return nil
 }
 
-func (d *DataSet) AddIP(ipString string, r remediation.Remediation, id int64) error {
+func (d *DataSet) AddIP(ipString string, origin string, r remediation.Remediation, id int64) error {
 	ip, err := netip.ParseAddr(ipString)
 	if err != nil || !ip.IsValid() {
 		return err
 	}
-	d.IPSet.Add(ip, r, id)
+	d.IPSet.Add(ip, origin, r, id)
 	return nil
 }
 
-func (d *DataSet) AddCN(cn string, r remediation.Remediation, id int64) error {
+func (d *DataSet) AddCN(cn string, origin string, r remediation.Remediation, id int64) error {
 	if cn == "" {
 		return fmt.Errorf("empty CN")
 	}
-	d.CNSet.Add(cn, r, id)
+	d.CNSet.Add(cn, origin, r, id)
 	return nil
 }
 

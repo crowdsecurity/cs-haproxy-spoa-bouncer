@@ -36,7 +36,7 @@ func (w *WorkerClient) write(_b []byte) error {
 	if err != nil {
 		return err
 	}
-	log.Info("wrote ", n, " bytes")
+	log.Debugf("wrote %d bytes", n)
 	return nil
 }
 
@@ -116,11 +116,11 @@ func (w *WorkerClient) GetIP(ip string) (remediation.Remediation, error) {
 	return rem, nil
 }
 
-func (w *WorkerClient) GetCN(cn string) (remediation.Remediation, error) {
+func (w *WorkerClient) GetCN(cn string, ip string) (remediation.Remediation, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	if err := w.get("cn", "", cn); err != nil {
+	if err := w.get("cn", "", cn, ip); err != nil {
 		return remediation.Allow, err
 	}
 

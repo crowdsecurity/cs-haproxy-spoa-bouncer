@@ -23,6 +23,7 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/spoa"
 	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
@@ -145,10 +146,19 @@ func Execute() error {
 		return errors.New("bouncer stream halted")
 	})
 
+	metricsProvider, err := csbouncer.NewMetricsProvider(bouncer.APIClient, name, metricsUpdater, log.StandardLogger())
+
+	if err != nil {
+		return fmt.Errorf("failed to create metrics provider: %w", err)
+	}
+
+	g.Go(func() error {
+		return metricsProvider.Run(ctx)
+	})
+
+	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests)
+
 	if config.PrometheusConfig.Enabled {
-
-		prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError)
-
 		go func() {
 			http.Handle("/metrics", promhttp.Handler())
 

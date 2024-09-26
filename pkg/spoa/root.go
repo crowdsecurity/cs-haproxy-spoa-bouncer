@@ -389,7 +389,7 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	if r < remediation.Unknown {
 		iso, _ := s.workerClient.GetGeoIso(ipStr)
 		if iso != "" {
-			r, _ = s.workerClient.GetCN(iso)
+			r, _ = s.workerClient.GetCN(iso, ipStr)
 			req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
 		}
 	}
