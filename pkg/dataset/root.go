@@ -65,13 +65,46 @@ func (d *DataSet) CheckCN(cn string) (remediation.Remediation, string) {
 }
 
 func (d *DataSet) RemoveDecision(decision *models.Decision) error {
+	origin := *decision.Origin
+	if origin == "lists" {
+		origin = *decision.Origin + ":" + *decision.Scenario
+	}
 	switch strings.ToLower(*decision.Scope) {
 	case "ip":
-		return d.RemoveIP(*decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		removed, err := d.RemoveIP(*decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		if err != nil {
+			return err
+		}
+		if removed {
+			ipType := "ipv4"
+			if strings.Contains(*decision.Value, ":") {
+				ipType = "ipv6"
+			}
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Dec()
+		}
+		return nil
 	case "range":
-		return d.RemoveCIDR(decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		removed, err := d.RemoveCIDR(decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		if err != nil {
+			return err
+		}
+		if removed {
+			ipType := "ipv4"
+			if strings.Contains(*decision.Value, ":") {
+				ipType = "ipv6"
+			}
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Dec()
+		}
+		return nil
 	case "country":
-		return d.RemoveCN(*decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		removed, err := d.RemoveCN(*decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		if err != nil {
+			return err
+		}
+		if removed {
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": "", "scope": "country"}).Dec()
+		}
+		return nil
 	}
 	return fmt.Errorf("unknown scope %s", *decision.Scope)
 }
@@ -129,28 +162,28 @@ func (d *DataSet) AddCN(cn string, origin string, r remediation.Remediation, id 
 	return nil
 }
 
-func (d *DataSet) RemoveCIDR(cidr *string, r remediation.Remediation, id int64) error {
+func (d *DataSet) RemoveCIDR(cidr *string, r remediation.Remediation, id int64) (bool, error) {
 	prefix, err := netip.ParsePrefix(*cidr)
 	if err != nil {
-		return err
+		return false, err
 	}
-	d.PrefixSet.Remove(prefix, r, id)
-	return nil
+	removed := d.PrefixSet.Remove(prefix, r, id)
+	return removed, nil
 }
 
-func (d *DataSet) RemoveCN(cn string, r remediation.Remediation, id int64) error {
+func (d *DataSet) RemoveCN(cn string, r remediation.Remediation, id int64) (bool, error) {
 	if cn == "" {
-		return fmt.Errorf("empty CN")
+		return false, fmt.Errorf("empty CN")
 	}
-	d.CNSet.Remove(cn, r, id)
-	return nil
+	removed := d.CNSet.Remove(cn, r, id)
+	return removed, nil
 }
 
-func (d *DataSet) RemoveIP(ipString string, r remediation.Remediation, id int64) error {
+func (d *DataSet) RemoveIP(ipString string, r remediation.Remediation, id int64) (bool, error) {
 	ip, err := netip.ParseAddr(ipString)
 	if err != nil || !ip.IsValid() {
-		return err
+		return false, err
 	}
-	d.IPSet.Remove(ip, r, id)
-	return nil
+	removed := d.IPSet.Remove(ip, r, id)
+	return removed, nil
 }
