@@ -62,10 +62,11 @@ func TestDataSet(t *testing.T) {
 			name: "Test IP Delete",
 			toDelete: models.GetDecisionsResponse{
 				{
-					Scope: ptr.Of("IP"),
-					Value: ptr.Of("192.168.1.1"),
-					Type:  ptr.Of("ban"),
-					ID:    1,
+					Scope:  ptr.Of("IP"),
+					Value:  ptr.Of("192.168.1.1"),
+					Type:   ptr.Of("ban"),
+					Origin: ptr.Of("crowdsec"),
+					ID:     1,
 				},
 			},
 			toCheck: &toCheck{
@@ -96,10 +97,11 @@ func TestDataSet(t *testing.T) {
 			name: "Test Range Delete",
 			toDelete: models.GetDecisionsResponse{
 				{
-					Scope: ptr.Of("Range"),
-					Value: ptr.Of("192.168.1.0/24"),
-					Type:  ptr.Of("ban"),
-					ID:    2,
+					Scope:  ptr.Of("Range"),
+					Value:  ptr.Of("192.168.1.0/24"),
+					Type:   ptr.Of("ban"),
+					Origin: ptr.Of("crowdsec"),
+					ID:     2,
 				},
 			},
 			toCheck: &toCheck{
@@ -130,10 +132,11 @@ func TestDataSet(t *testing.T) {
 			name: "Test Country Delete",
 			toDelete: models.GetDecisionsResponse{
 				{
-					Scope: ptr.Of("Country"),
-					Value: ptr.Of("FR"),
-					Type:  ptr.Of("ban"),
-					ID:    3,
+					Scope:  ptr.Of("Country"),
+					Value:  ptr.Of("FR"),
+					Type:   ptr.Of("ban"),
+					Origin: ptr.Of("crowdsec"),
+					ID:     3,
 				},
 			},
 			toCheck: &toCheck{

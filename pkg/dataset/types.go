@@ -113,7 +113,7 @@ func (s *Set[T]) Add(item T, origin string, r remediation.Remediation, id int64)
 	s.Items[item] = RemediationIdsMap{r: []RemediationDetails{{id, origin}}}
 }
 
-func (s *Set[T]) Remove(item T, r remediation.Remediation, id int64) {
+func (s *Set[T]) Remove(item T, r remediation.Remediation, id int64) bool {
 	s.Lock()
 	defer s.Unlock()
 	valueLog := s.logger.WithField("value", item).WithField("remediation", r.String())
@@ -121,19 +121,20 @@ func (s *Set[T]) Remove(item T, r remediation.Remediation, id int64) {
 	v, ok := s.Items[item]
 	if !ok {
 		valueLog.Debug("value not found")
-		return
+		return false
 	}
 	valueLog.Debug("found")
 
 	if err := v.RemoveId(valueLog, r, id); err != nil {
 		valueLog.Error(err)
-		return
+		return false
 	}
 
 	if len(s.Items[item]) == 0 {
 		valueLog.Debugf("removing as it has no active remediations")
 		delete(s.Items, item)
 	}
+	return true
 }
 
 func (s *PrefixSet) Contains(ip netip.Addr) (remediation.Remediation, string) {
