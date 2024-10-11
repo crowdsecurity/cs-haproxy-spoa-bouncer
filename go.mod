@@ -1,6 +1,6 @@
 module github.com/crowdsecurity/crowdsec-spoa
 
-go 1.22.2
+go 1.22
 
 require (
 	github.com/crowdsecurity/crowdsec v1.6.0
