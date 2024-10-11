@@ -13,9 +13,10 @@ import (
 
 // toCheck is a struct to check the result of the addition or deletion of a decision
 type toCheck struct {
-	Value string // IP, Country
-	Scope string // IP, Country
-	Type  remediation.Remediation
+	Value  string // IP, Country
+	Scope  string // IP, Country
+	Origin string
+	Type   remediation.Remediation
 }
 
 func TestDataSet(t *testing.T) {
@@ -43,26 +44,29 @@ func TestDataSet(t *testing.T) {
 			name: "Test IP Add",
 			toAdd: models.GetDecisionsResponse{
 				{
-					Scope: ptr.Of("IP"),
-					Value: ptr.Of("192.168.1.1"),
-					Type:  ptr.Of("ban"),
-					ID:    1,
+					Scope:  ptr.Of("IP"),
+					Value:  ptr.Of("192.168.1.1"),
+					Type:   ptr.Of("ban"),
+					Origin: ptr.Of("crowdsec"),
+					ID:     1,
 				},
 			},
 			toCheck: &toCheck{
-				Value: "192.168.1.1",
-				Scope: "IP",
-				Type:  remediation.Ban,
+				Value:  "192.168.1.1",
+				Scope:  "IP",
+				Origin: "crowdsec",
+				Type:   remediation.Ban,
 			},
 		},
 		{
 			name: "Test IP Delete",
 			toDelete: models.GetDecisionsResponse{
 				{
-					Scope: ptr.Of("IP"),
-					Value: ptr.Of("192.168.1.1"),
-					Type:  ptr.Of("ban"),
-					ID:    1,
+					Scope:  ptr.Of("IP"),
+					Value:  ptr.Of("192.168.1.1"),
+					Type:   ptr.Of("ban"),
+					Origin: ptr.Of("crowdsec"),
+					ID:     1,
 				},
 			},
 			toCheck: &toCheck{
@@ -75,26 +79,29 @@ func TestDataSet(t *testing.T) {
 			name: "Test Range Add",
 			toAdd: models.GetDecisionsResponse{
 				{
-					Scope: ptr.Of("Range"),
-					Value: ptr.Of("192.168.1.0/24"),
-					Type:  ptr.Of("ban"),
-					ID:    2,
+					Scope:  ptr.Of("Range"),
+					Value:  ptr.Of("192.168.1.0/24"),
+					Type:   ptr.Of("ban"),
+					Origin: ptr.Of("crowdsec"),
+					ID:     2,
 				},
 			},
 			toCheck: &toCheck{
-				Value: "192.168.1.24",
-				Scope: "IP",
-				Type:  remediation.Ban,
+				Value:  "192.168.1.24",
+				Scope:  "IP",
+				Origin: "crowdsec",
+				Type:   remediation.Ban,
 			},
 		},
 		{
 			name: "Test Range Delete",
 			toDelete: models.GetDecisionsResponse{
 				{
-					Scope: ptr.Of("Range"),
-					Value: ptr.Of("192.168.1.0/24"),
-					Type:  ptr.Of("ban"),
-					ID:    2,
+					Scope:  ptr.Of("Range"),
+					Value:  ptr.Of("192.168.1.0/24"),
+					Type:   ptr.Of("ban"),
+					Origin: ptr.Of("crowdsec"),
+					ID:     2,
 				},
 			},
 			toCheck: &toCheck{
@@ -107,26 +114,29 @@ func TestDataSet(t *testing.T) {
 			name: "Test Country Add",
 			toAdd: models.GetDecisionsResponse{
 				{
-					Scope: ptr.Of("Country"),
-					Value: ptr.Of("FR"),
-					Type:  ptr.Of("ban"),
-					ID:    3,
+					Scope:  ptr.Of("Country"),
+					Value:  ptr.Of("FR"),
+					Type:   ptr.Of("ban"),
+					Origin: ptr.Of("crowdsec"),
+					ID:     3,
 				},
 			},
 			toCheck: &toCheck{
-				Value: "FR",
-				Scope: "Country",
-				Type:  remediation.Ban,
+				Value:  "FR",
+				Scope:  "Country",
+				Origin: "crowdsec",
+				Type:   remediation.Ban,
 			},
 		},
 		{
 			name: "Test Country Delete",
 			toDelete: models.GetDecisionsResponse{
 				{
-					Scope: ptr.Of("Country"),
-					Value: ptr.Of("FR"),
-					Type:  ptr.Of("ban"),
-					ID:    3,
+					Scope:  ptr.Of("Country"),
+					Value:  ptr.Of("FR"),
+					Type:   ptr.Of("ban"),
+					Origin: ptr.Of("crowdsec"),
+					ID:     3,
 				},
 			},
 			toCheck: &toCheck{
@@ -150,16 +160,18 @@ func TestDataSet(t *testing.T) {
 			}
 			var r remediation.Remediation
 			var err error
+			var origin string
 			switch tt.toCheck.Scope {
 			case "IP":
-				r, err = dataSet.CheckIP(tt.toCheck.Value)
+				r, origin, err = dataSet.CheckIP(tt.toCheck.Value)
 			case "Country":
-				r = dataSet.CheckCN(tt.toCheck.Value)
+				r, origin = dataSet.CheckCN(tt.toCheck.Value)
 			default:
 				t.Fatalf("unknown scope %s", tt.toCheck.Scope)
 			}
 			require.NoError(t, err)
 			assert.Equal(t, r, tt.toCheck.Type)
+			assert.Equal(t, origin, tt.toCheck.Origin)
 		})
 	}
 

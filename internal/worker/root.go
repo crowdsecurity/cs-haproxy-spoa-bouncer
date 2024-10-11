@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -22,16 +21,18 @@ type Worker struct {
 	SocketPath   string     `yaml:"-"` // Set by combining the socket dir and the worker name
 }
 
-func (w *Worker) Run(socket string) error {
+func (w *Worker) Run(socket string) {
 	args := []string{
 		"-worker",
 	}
+
 	if w.ListenAddr != "" {
 		args = append(args, "-tcp", w.ListenAddr)
 	}
 	if w.ListenSocket != "" {
 		args = append(args, "-unix", w.ListenSocket)
 	}
+
 	command := exec.Command(os.Args[0], args...)
 
 	command.Env = []string{
@@ -43,17 +44,25 @@ func (w *Worker) Run(socket string) error {
 		command.Env = append(command.Env, "LOG_LEVEL="+w.LogLevel.String())
 	}
 
+	log.Infof("Starting worker %s with cmd %s %v", w.Name, os.Args[0], args)
+
 	command.SysProcAttr = &syscall.SysProcAttr{}
 	command.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(w.Uid), Gid: uint32(w.Gid)}
+	//Needed to allow to run the bouncer as non-root
+	command.SysProcAttr.Credential.NoSetGroups = true
+
 	// !TODO worker should have there own log files
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	// !TODO worker should have there own log files
 	w.Command = command
+
 	if err := command.Run(); err != nil {
-		return fmt.Errorf("failed to start worker: %w", err)
+		log.Errorf("worker %s exited with error: %s", w.Name, err)
+		w.Command = nil
 	}
-	return nil
+
+	log.Infof("Worker %s exited", w.Name)
 }
 
 type Manager struct {
@@ -102,6 +111,8 @@ func (m *Manager) AddWorker(w *Worker) {
 
 func (m *Manager) Stop() {
 	for _, w := range m.Workers {
-		w.Command.Process.Signal(os.Interrupt)
+		if w.Command != nil {
+			w.Command.Process.Signal(os.Interrupt)
+		}
 	}
 }
