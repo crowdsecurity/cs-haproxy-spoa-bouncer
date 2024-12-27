@@ -86,11 +86,6 @@ func (g *GeoDatabase) IsValid() bool {
 }
 
 func (g *GeoDatabase) GetASN(ip *net.IP) (*geoip2.ASN, error) {
-
-	if !g.IsValid() {
-		return nil, NotValidConfig
-	}
-
 	g.RLock()
 	defer g.RUnlock()
 	record := &geoip2.ASN{}
@@ -104,11 +99,6 @@ func (g *GeoDatabase) GetASN(ip *net.IP) (*geoip2.ASN, error) {
 }
 
 func (g *GeoDatabase) GetCity(ip *net.IP) (*geoip2.City, error) {
-
-	if !g.IsValid() {
-		return nil, NotValidConfig
-	}
-
 	g.RLock()
 	defer g.RUnlock()
 	record := &geoip2.City{}
