@@ -333,16 +333,21 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 					return nil, err
 				}
 
-				log.Infof("Checking IP %s", args[0])
+				if !a.GeoDatabase.IsValid() {
+					return "", nil
+				}
+
+				log.Tracef("Checking geo:iso IP %s", args[0])
 				val := net.ParseIP(args[0])
 
 				if val == nil {
 					return nil, fmt.Errorf("invalid IP")
 				}
+
 				record, err := a.GeoDatabase.GetCity(&val)
 
 				if err != nil && !errors.Is(err, geo.NotValidConfig) {
-					return nil, err
+					return "", err
 				}
 
 				return geo.GetIsoCodeFromRecord(record), nil
