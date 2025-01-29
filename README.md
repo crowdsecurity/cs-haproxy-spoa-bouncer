@@ -38,14 +38,14 @@ This outlines the goals of the project, and the current status of each.
   - [ ] Ban Remediation
     - [ ] Documentation
     - [x] Configuration File
-    - [ ] Template File
+    - [x] Template File
   - [ ] Captcha Remediation
     - [ ] Documentation
-    - [ ] Configuration File
-    - [ ] Template File
+    - [x] Configuration File
+    - [x] Template File
   - [ ] Country Remediation
     - [ ] Documentation
-    - [ ] Configuration File
+    - [x] Configuration File
   - [ ] AppSec
     - [ ] Documentation
     - [ ] Configuration File
