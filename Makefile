@@ -1,6 +1,3 @@
-BUILD_REQUIRE_GO_MAJOR ?= 1
-BUILD_REQUIRE_GO_MINOR ?= 20
-
 GOCMD=go
 GOBUILD=$(GOCMD) build
 GOTEST=$(GOCMD) test
@@ -17,6 +14,10 @@ LD_OPTS_VARS=\
 -X 'github.com/crowdsecurity/go-cs-lib/version.Version=$(BUILD_VERSION)' \
 -X 'github.com/crowdsecurity/go-cs-lib/version.BuildDate=$(BUILD_TIMESTAMP)' \
 -X 'github.com/crowdsecurity/go-cs-lib/version.Tag=$(BUILD_TAG)'
+
+ifneq (,$(DOCKER_BUILD))
+LD_OPTS_VARS += -X 'github.com/crowdsecurity/go-cs-lib/version.System=docker'
+endif
 
 export CGO_ENABLED=0
 export LD_OPTS=-ldflags "-a -s -w -extldflags '-static' $(LD_OPTS_VARS)" \
@@ -55,7 +56,7 @@ clean: clean-release-dir clean-debian clean-rpm
 #
 
 .PHONY: binary
-binary: goversion
+binary:
 	$(GOBUILD) $(LD_OPTS) -o $(BINARY_NAME)
 
 .PHONY: build
@@ -74,7 +75,7 @@ API_KEY:=test
 export API_KEY
 
 .PHONY: test
-test: goversion
+test:
 	@$(GOTEST) $(LD_OPTS) ./...
 
 .PHONY: func-tests
@@ -128,7 +129,5 @@ release: clean tarball
 #
 
 .PHONY: platform-all
-platform-all: goversion clean
+platform-all: clean
 	python3 .github/release.py run-build $(BINARY_NAME)
-
-include mk/goversion.mk
