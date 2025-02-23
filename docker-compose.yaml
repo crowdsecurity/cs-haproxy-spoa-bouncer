@@ -1,6 +1,7 @@
 services:
   spoa:
     image: crowdsecurity/crowdsec-spoa:latest
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile
@@ -31,6 +32,7 @@ services:
 
   haproxy:
     image: haproxy:2.9.7-alpine
+    restart: unless-stopped
     volumes:
       - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
       - ./config/crowdsec.cfg:/usr/local/etc/haproxy/crowdsec.cfg
@@ -48,6 +50,7 @@ services:
   
   crowdsec:
     image: crowdsecurity/crowdsec:latest
+    restart: unless-stopped
     environment:
       - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
       - DISABLE_ONLINE_API=true
