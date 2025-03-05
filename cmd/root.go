@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -62,21 +63,25 @@ func Execute() error {
 	showConfig := flag.Bool("T", false, "show full config (.yaml + .yaml.local) and exit")
 
 	// Worker flags
-	tcpAddr := flag.String("tcp", "", "tcp listener address")
-	unixAddr := flag.String("unix", "", "unix listener address")
+	workerConfigString := flag.String("config", "", "whole worker configuration as json")
 	workerMode := flag.Bool("worker", false, "run as worker")
 
 	flag.Parse()
 
-	if !*workerMode && (*tcpAddr != "" || *unixAddr != "") {
-		return fmt.Errorf("parent process cannot have listener address")
+	if !*workerMode && (*workerConfigString != "") {
+		return fmt.Errorf("parent process cannot have worker config")
 	}
 
 	if *workerMode {
-		if *tcpAddr == "" && *unixAddr == "" {
+		var workerConfig worker.WorkerConfig
+		err := json.Unmarshal([]byte(*workerConfigString), &workerConfig)
+		if err != nil {
+			return fmt.Errorf("unable to unmarshal worker config: %w", err)
+		}
+		if workerConfig.TcpAddr == "" && workerConfig.UnixAddr == "" {
 			return fmt.Errorf("worker process must have one listener address")
 		}
-		return WorkerExecute(*tcpAddr, *unixAddr)
+		return WorkerExecute(workerConfig)
 	}
 
 	if *bouncerVersion {
@@ -259,7 +264,7 @@ func Execute() error {
 	return nil
 }
 
-func WorkerExecute(tcpAddr, unixAddr string) error {
+func WorkerExecute(workerConfig worker.WorkerConfig) error {
 
 	g, ctx := errgroup.WithContext(context.Background())
 
@@ -267,7 +272,7 @@ func WorkerExecute(tcpAddr, unixAddr string) error {
 		return HandleSignals(ctx)
 	})
 
-	spoad, err := spoa.New(tcpAddr, unixAddr)
+	spoad, err := spoa.New(workerConfig)
 
 	if err != nil {
 		return fmt.Errorf("failed to create SPOA: %w", err)

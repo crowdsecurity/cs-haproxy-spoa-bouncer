@@ -9,6 +9,7 @@ import (
 
 	"gopkg.in/yaml.v2"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
@@ -35,6 +36,7 @@ type BouncerConfig struct {
 	WorkerSocketDir  string                  `yaml:"worker_socket"`
 	WorkerUid        int                     `yaml:"-"`
 	WorkerGid        int                     `yaml:"-"`
+	AppSec           *appsec.AppsecConfig    `yaml:"appsec"`
 }
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).

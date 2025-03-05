@@ -10,6 +10,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
@@ -20,6 +21,15 @@ import (
 	"github.com/negasus/haproxy-spoe-go/message"
 	"github.com/negasus/haproxy-spoe-go/request"
 	log "github.com/sirupsen/logrus"
+)
+
+const (
+	crowdsecAppsecIPHeader   = "X-Crowdsec-Appsec-Ip"
+	crowdsecAppsecURIHeader  = "X-Crowdsec-Appsec-Uri"
+	crowdsecAppsecHostHeader = "X-Crowdsec-Appsec-Host"
+	crowdsecAppsecVerbHeader = "X-Crowdsec-Appsec-Verb"
+	crowdsecAppsecHeader     = "X-Crowdsec-Appsec-Api-Key"
+	crowdsecAppsecUserAgent  = "X-Crowdsec-Appsec-User-Agent"
 )
 
 var (
@@ -35,9 +45,10 @@ type Spoa struct {
 	cancel       context.CancelFunc
 	logger       *log.Entry
 	workerClient *worker.WorkerClient
+	appsec       *appsec.AppsecConfig
 }
 
-func New(tcpAddr, unixAddr string) (*Spoa, error) {
+func New(workerConfig worker.WorkerConfig) (*Spoa, error) {
 	clog := log.New()
 	socket, ok := os.LookupEnv("WORKERSOCKET")
 
@@ -67,26 +78,27 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		cancel:       cancel,
 		logger:       clog.WithField("worker", name),
 		workerClient: client,
+		appsec:       workerConfig.AppSecConfig,
 	}
 
-	if tcpAddr != "" {
-		addr, err := net.Listen("tcp", tcpAddr)
+	if workerConfig.TcpAddr != "" {
+		addr, err := net.Listen("tcp", workerConfig.TcpAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", tcpAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %v", workerConfig.TcpAddr, err)
 		}
 		s.ListenAddr = addr
 	}
 
-	if unixAddr != "" {
+	if workerConfig.UnixAddr != "" {
 		// Get current process uid/gid usually worker node
 		uid := os.Getuid()
 		gid := os.Getgid()
 
 		// Get existing socket stat
-		fileInfo, err := os.Stat(unixAddr)
+		fileInfo, err := os.Stat(workerConfig.UnixAddr)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to stat socket %s: %v", unixAddr, err)
+				return nil, fmt.Errorf("failed to stat socket %s: %v", workerConfig.UnixAddr, err)
 			}
 		} else {
 			stat, ok := fileInfo.Sys().(*syscall.Stat_t)
@@ -98,9 +110,9 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		}
 
 		// Remove existing socket
-		if err := os.Remove(unixAddr); err != nil {
+		if err := os.Remove(workerConfig.UnixAddr); err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to remove socket %s: %v", unixAddr, err)
+				return nil, fmt.Errorf("failed to remove socket %s: %v", workerConfig.UnixAddr, err)
 			}
 		}
 
@@ -108,17 +120,17 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		origUmask := syscall.Umask(0o777)
 
 		// Create new socket
-		addr, err := net.Listen("unix", unixAddr)
+		addr, err := net.Listen("unix", workerConfig.UnixAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", unixAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %v", workerConfig.UnixAddr, err)
 		}
 
 		// Reset umask
 		syscall.Umask(origUmask)
 
 		// Change socket owner and permissions
-		os.Chown(unixAddr, uid, gid)
-		os.Chmod(unixAddr, 0o660)
+		os.Chown(workerConfig.UnixAddr, uid, gid)
+		os.Chmod(workerConfig.UnixAddr, 0o660)
 
 		s.ListenSocket = addr
 	}
@@ -245,6 +257,54 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	var body *[]byte
 	var headers http.Header
 
+	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
+	if r > remediation.Unknown && !s.appsec.Enabled { //&& !host.AppSec.AlwaysSend {
+		return
+	}
+
+	if s.appsec.Enabled {
+		id, err := readKeyFromMessage[string](mes, "unique-id")
+
+		if err != nil {
+			log.Printf("failed to read headers: %v", err)
+			return
+		}
+
+		if s.appsec.AppsecRequests[*id] == nil { //should already exists but safety net
+			s.appsec.AppsecRequests[*id] = &appsec.AppsecRequest{}
+		}
+
+		h := headers.Clone()
+		s.appsec.AppsecRequests[*id].AddHeaders(&h)
+		userAgent := headers.Get("User-Agent")
+		s.appsec.AppsecRequests[*id].AddHeaders(&http.Header{
+			crowdsecAppsecUserAgent:  []string{userAgent},
+			crowdsecAppsecURIHeader:  []string{*url},
+			crowdsecAppsecHostHeader: []string{*hoststring},
+			crowdsecAppsecVerbHeader: []string{*method},
+			crowdsecAppsecHeader:     []string{s.appsec.ApiKey},
+		})
+
+		s.appsec.AppsecRequests[*id].SetBody(*body)
+		s.appsec.AppsecRequests[*id].SetMethod(*method)
+		client := &http.Client{}
+		resp, err := client.Do(s.appsec.AppsecRequests[*id].GenerateHTTPRequest())
+		if err != nil {
+			log.Fatalf("sending request failed: %v", err)
+		}
+		switch resp.StatusCode {
+		case http.StatusOK:
+			log.Tracef("request was allowed %v", id)
+		case http.StatusForbidden:
+			log.Tracef("request was denied %v", id)
+			r = remediation.Ban
+		default:
+			log.Errorf("unexpected status code %d", resp.StatusCode)
+		}
+		defer resp.Body.Close()
+
+	}
+
 	switch r {
 	case remediation.Allow:
 		// !TODO Check if cookie is sent and session is valid if not valid then issue an unset cookie
@@ -353,23 +413,6 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 	}
 
-	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
-	if r > remediation.Unknown && !host.AppSec.AlwaysSend {
-		return
-	}
-	// !TODO APPSEC STUFF
-
-	// headers, err := readHeaders(*headersType)
-	// if err != nil {
-	// 	log.Printf("failed to parse headers: %v", err)
-	// }
-
-	// request, err := http.NewRequest(method, url, strings.NewReader(body))
-	// if err != nil {
-	// 	log.Printf("failed to create request: %v", err)
-	// 	return
-	// }
-	// request.Header = headers
 }
 
 // Handles checking the IP address against the dataset
@@ -395,6 +438,21 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	}
 
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
+	if s.appsec.Enabled {
+
+		id, err := readKeyFromMessage[string](mes, "unique-id")
+		if err != nil {
+			log.Error(err)
+			return
+		}
+		if s.appsec.AppsecRequests[*id] == nil {
+			s.appsec.AppsecRequests[*id] = &appsec.AppsecRequest{}
+		}
+		s.appsec.AppsecRequests[*id].AddHeaders(&http.Header{
+			"X-Crowdsec-Appsec-Ip": []string{ipStr}},
+		)
+		s.appsec.AppsecRequests[*id].ValidateTCP()
+	}
 }
 
 func handlerWrapper(s *Spoa) func(req *request.Request) {

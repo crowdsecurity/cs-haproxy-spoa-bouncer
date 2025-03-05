@@ -2,24 +2,33 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
 	log "github.com/sirupsen/logrus"
 )
 
 type Worker struct {
-	Name         string     `yaml:"name"`
-	ListenAddr   string     `yaml:"listen_addr"`
-	ListenSocket string     `yaml:"listen_socket"`
-	LogLevel     *log.Level `yaml:"log_level"`
-	Uid          int        `yaml:"-"` // Set by the worker manager
-	Gid          int        `yaml:"-"` // Set by the worker manager
-	Command      *exec.Cmd  `yaml:"-"`
-	SocketPath   string     `yaml:"-"` // Set by combining the socket dir and the worker name
+	Name         string       `yaml:"name"`
+	ListenAddr   string       `yaml:"listen_addr"`
+	ListenSocket string       `yaml:"listen_socket"`
+	LogLevel     *log.Level   `yaml:"log_level"`
+	Uid          int          `yaml:"-"` // Set by the worker manager
+	Gid          int          `yaml:"-"` // Set by the worker manager
+	Command      *exec.Cmd    `yaml:"-"`
+	SocketPath   string       `yaml:"-"` // Set by combining the socket dir and the worker name
+	InnerConfig  WorkerConfig `yaml:"-"`
+}
+
+type WorkerConfig struct {
+	TcpAddr      string
+	UnixAddr     string
+	AppSecConfig *appsec.AppsecConfig
 }
 
 func (w *Worker) Run(socket string) error {
@@ -32,6 +41,13 @@ func (w *Worker) Run(socket string) error {
 	if w.ListenSocket != "" {
 		args = append(args, "-unix", w.ListenSocket)
 	}
+
+	config, err := json.Marshal(&w.InnerConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal appsec config: %w", err)
+	}
+
+	args = append(args, "-config", string(config))
 	command := exec.Command(os.Args[0], args...)
 
 	command.Env = []string{
