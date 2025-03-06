@@ -23,12 +23,12 @@ type AppsecRequest struct {
 }
 
 type AppsecConfig struct {
-	Enabled        bool       `yaml:"enabled"`
-	AppsecUrl      string     `yaml:"appsec_url"`
-	logger         *log.Entry `yaml:"-"`
-	AppsecRequests map[string]*AppsecRequest
-	httpChan       <-chan *http.Request
-	ApiKey         string
+	Enabled        bool                      `yaml:"enabled"`
+	AppsecUrl      string                    `yaml:"appsec_url"`
+	logger         *log.Entry                `yaml:"-"`
+	AppsecRequests map[string]*AppsecRequest `yaml:"-"`
+	httpChan       <-chan *http.Request      `yaml:"-"`
+	ApiKey         string                    `yaml:"api_key"`
 }
 
 // idempotent function, can be called multiple times

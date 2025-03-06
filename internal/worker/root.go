@@ -13,36 +13,28 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type Worker struct {
-	Name         string       `yaml:"name"`
-	ListenAddr   string       `yaml:"listen_addr"`
-	ListenSocket string       `yaml:"listen_socket"`
-	LogLevel     *log.Level   `yaml:"log_level"`
-	Uid          int          `yaml:"-"` // Set by the worker manager
-	Gid          int          `yaml:"-"` // Set by the worker manager
-	Command      *exec.Cmd    `yaml:"-"`
-	SocketPath   string       `yaml:"-"` // Set by combining the socket dir and the worker name
-	InnerConfig  WorkerConfig `yaml:"-"`
+type Prout struct {
+	WorkerName string
 }
 
-type WorkerConfig struct {
-	TcpAddr      string
-	UnixAddr     string
-	AppSecConfig *appsec.AppsecConfig
+type Worker struct {
+	Name         string               `yaml:"name"`
+	LogLevel     *log.Level           `yaml:"log_level"`
+	ListenAddr   string               `yaml:"listen_addr"`
+	ListenSocket string               `yaml:"listen_socket"`
+	AppSecConfig *appsec.AppsecConfig `yaml:"appsec_config"`
+	Uid          int                  `yaml:"-"` // Set by the worker manager
+	Gid          int                  `yaml:"-"` // Set by the worker manager
+	Command      *exec.Cmd            `yaml:"-"`
+	SocketPath   string               `yaml:"-"` // Set by combining the socket dir and the worker name
 }
 
 func (w *Worker) Run(socket string) error {
 	args := []string{
 		"-worker",
 	}
-	if w.ListenAddr != "" {
-		args = append(args, "-tcp", w.ListenAddr)
-	}
-	if w.ListenSocket != "" {
-		args = append(args, "-unix", w.ListenSocket)
-	}
 
-	config, err := json.Marshal(&w.InnerConfig)
+	config, err := json.Marshal(*w)
 	if err != nil {
 		return fmt.Errorf("failed to marshal appsec config: %w", err)
 	}
@@ -76,12 +68,13 @@ type Manager struct {
 	Workers    []*Worker       `yaml:"-"`
 	CreateChan chan *Worker    `yaml:"-"`
 	Ctx        context.Context `yaml:"-"`
-	Server     *server.Server  `yaml:"-"`
-	WorkerUid  int             `yaml:"-"`
-	WorkerGid  int             `yaml:"-"`
+	Cancel     context.CancelFunc
+	Server     *server.Server `yaml:"-"`
+	WorkerUid  int            `yaml:"-"`
+	WorkerGid  int            `yaml:"-"`
 }
 
-func NewManager(ctx context.Context, s *server.Server, uid, gid int) *Manager {
+func NewManager(ctx context.Context, cancel context.CancelFunc, s *server.Server, uid, gid int) *Manager {
 	return &Manager{
 		CreateChan: make(chan *Worker),
 		Workers:    make([]*Worker, 0),
@@ -112,7 +105,13 @@ func (m *Manager) AddWorker(w *Worker) {
 		log.Errorf("failed to create worker listener: %s", err)
 		return
 	}
-	go w.Run(socketString)
+	go func() {
+		err := w.Run(socketString)
+		if err != nil {
+			log.Errorf("worker failed with: %s", err)
+		}
+		m.Cancel()
+	}()
 	m.Workers = append(m.Workers, w)
 }
 

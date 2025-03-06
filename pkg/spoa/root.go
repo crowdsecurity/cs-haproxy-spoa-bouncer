@@ -48,7 +48,7 @@ type Spoa struct {
 	appsec       *appsec.AppsecConfig
 }
 
-func New(workerConfig worker.WorkerConfig) (*Spoa, error) {
+func New(workerConfig *worker.Worker) (*Spoa, error) {
 	clog := log.New()
 	socket, ok := os.LookupEnv("WORKERSOCKET")
 
@@ -81,24 +81,24 @@ func New(workerConfig worker.WorkerConfig) (*Spoa, error) {
 		appsec:       workerConfig.AppSecConfig,
 	}
 
-	if workerConfig.TcpAddr != "" {
-		addr, err := net.Listen("tcp", workerConfig.TcpAddr)
+	if workerConfig.ListenAddr != "" {
+		addr, err := net.Listen("tcp", workerConfig.ListenAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", workerConfig.TcpAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %v", workerConfig.ListenAddr, err)
 		}
 		s.ListenAddr = addr
 	}
 
-	if workerConfig.UnixAddr != "" {
+	if workerConfig.ListenSocket != "" {
 		// Get current process uid/gid usually worker node
 		uid := os.Getuid()
 		gid := os.Getgid()
 
 		// Get existing socket stat
-		fileInfo, err := os.Stat(workerConfig.UnixAddr)
+		fileInfo, err := os.Stat(workerConfig.ListenSocket)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to stat socket %s: %v", workerConfig.UnixAddr, err)
+				return nil, fmt.Errorf("failed to stat socket %s: %v", workerConfig.ListenSocket, err)
 			}
 		} else {
 			stat, ok := fileInfo.Sys().(*syscall.Stat_t)
@@ -110,9 +110,9 @@ func New(workerConfig worker.WorkerConfig) (*Spoa, error) {
 		}
 
 		// Remove existing socket
-		if err := os.Remove(workerConfig.UnixAddr); err != nil {
+		if err := os.Remove(workerConfig.ListenSocket); err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to remove socket %s: %v", workerConfig.UnixAddr, err)
+				return nil, fmt.Errorf("failed to remove socket %s: %v", workerConfig.ListenSocket, err)
 			}
 		}
 
@@ -120,17 +120,17 @@ func New(workerConfig worker.WorkerConfig) (*Spoa, error) {
 		origUmask := syscall.Umask(0o777)
 
 		// Create new socket
-		addr, err := net.Listen("unix", workerConfig.UnixAddr)
+		addr, err := net.Listen("unix", workerConfig.ListenSocket)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", workerConfig.UnixAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %v", workerConfig.ListenSocket, err)
 		}
 
 		// Reset umask
 		syscall.Umask(origUmask)
 
 		// Change socket owner and permissions
-		os.Chown(workerConfig.UnixAddr, uid, gid)
-		os.Chmod(workerConfig.UnixAddr, 0o660)
+		os.Chown(workerConfig.ListenSocket, uid, gid)
+		os.Chmod(workerConfig.ListenSocket, 0o660)
 
 		s.ListenSocket = addr
 	}

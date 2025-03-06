@@ -73,13 +73,13 @@ func Execute() error {
 	}
 
 	if *workerMode {
-		var workerConfig worker.WorkerConfig
-		err := json.Unmarshal([]byte(*workerConfigString), &workerConfig)
+		var workerConfig *worker.Worker = &worker.Worker{}
+		err := json.Unmarshal([]byte(*workerConfigString), workerConfig)
 		if err != nil {
 			return fmt.Errorf("unable to unmarshal worker config: %w", err)
 		}
-		if workerConfig.TcpAddr == "" && workerConfig.UnixAddr == "" {
-			return fmt.Errorf("worker process must have one listener address")
+		if workerConfig.ListenAddr == "" && workerConfig.ListenSocket == "" {
+			return fmt.Errorf("worker process must have one listener address: %+v", *workerConfigString)
 		}
 		return WorkerExecute(workerConfig)
 	}
@@ -115,7 +115,8 @@ func Execute() error {
 	}
 
 	log.Infof("Starting %s %s", name, version.String())
-
+	log.Debugf("Configuration: %+v", config.Workers[0])
+	log.Debugf("Configuration: %+v", *config.AppSec)
 	bouncer := &csbouncer.StreamBouncer{}
 
 	err = bouncer.ConfigReader(strings.NewReader(configExpanded))
@@ -230,7 +231,8 @@ func Execute() error {
 		defer adminServer.Close()
 	}
 
-	workerManager := worker.NewManager(ctx, workerServer, config.WorkerUid, config.WorkerGid)
+	ctx, cancel := context.WithCancel(context.Background())
+	workerManager := worker.NewManager(ctx, cancel, workerServer, config.WorkerUid, config.WorkerGid)
 
 	g.Go(func() error {
 		return workerManager.Run()
@@ -239,6 +241,7 @@ func Execute() error {
 	apiServer := api.NewApi(ctx, workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
 
 	for _, worker := range config.Workers {
+		log.Debugf("Adding worker %v", worker)
 		workerManager.CreateChan <- worker
 	}
 
@@ -264,7 +267,7 @@ func Execute() error {
 	return nil
 }
 
-func WorkerExecute(workerConfig worker.WorkerConfig) error {
+func WorkerExecute(workerConfig *worker.Worker) error {
 
 	g, ctx := errgroup.WithContext(context.Background())
 
