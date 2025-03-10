@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	NotValidConfig = fmt.Errorf("geo database is not initialized")
+	ErrNotValidConfig = fmt.Errorf("geo database is not initialized")
 )
 
 type GeoDatabase struct {
@@ -22,18 +22,22 @@ type GeoDatabase struct {
 	asnReader    *geoip2.Reader       `yaml:"-"`                  // Reader for the ASN database
 	cityReader   *geoip2.Reader       `yaml:"-"`                  // Reader for the city database
 	lastModTime  map[string]time.Time `yaml:"-"`                  // Last modification time of the databases
+	loadFailed   bool                 `yaml:"-"`                  // Whether the databases failed to load
 	sync.RWMutex `yaml:"-"`
 }
 
 func (g *GeoDatabase) Init(ctx context.Context) {
 
-	if !g.IsValid() {
+	if g.ASNPath == "" && g.CityPath == "" {
 		log.Warnf("geo database paths not configured, disabling module")
+		g.loadFailed = true
 		return
 	}
 
 	if err := g.open(); err != nil {
 		log.Errorf("failed to open databases: %s", err)
+		g.loadFailed = true
+		return
 	}
 
 	g.lastModTime = make(map[string]time.Time)
@@ -47,6 +51,10 @@ func (g *GeoDatabase) reload() error {
 }
 
 func (g *GeoDatabase) open() error {
+	if !g.IsValid() {
+		return ErrNotValidConfig
+	}
+
 	g.Lock()
 	defer g.Unlock()
 	var err error
@@ -82,13 +90,22 @@ func (g *GeoDatabase) close() {
 }
 
 func (g *GeoDatabase) IsValid() bool {
-	return g.ASNPath != "" && g.CityPath != ""
+	return !g.loadFailed
 }
 
 func (g *GeoDatabase) GetASN(ip *net.IP) (*geoip2.ASN, error) {
+
+	if !g.IsValid() {
+		return nil, ErrNotValidConfig
+	}
+
 	g.RLock()
 	defer g.RUnlock()
 	record := &geoip2.ASN{}
+
+	if g.asnReader == nil {
+		return record, nil
+	}
 
 	record, err := g.asnReader.ASN(*ip)
 	if err != nil {
@@ -99,9 +116,17 @@ func (g *GeoDatabase) GetASN(ip *net.IP) (*geoip2.ASN, error) {
 }
 
 func (g *GeoDatabase) GetCity(ip *net.IP) (*geoip2.City, error) {
+	if !g.IsValid() {
+		return nil, ErrNotValidConfig
+	}
+
 	g.RLock()
 	defer g.RUnlock()
 	record := &geoip2.City{}
+
+	if g.cityReader == nil {
+		return record, nil
+	}
 
 	record, err := g.cityReader.City(*ip)
 	if err != nil {
@@ -113,6 +138,10 @@ func (g *GeoDatabase) GetCity(ip *net.IP) (*geoip2.City, error) {
 
 // Just a simple helper function to get the ISO code from the record in the same order as CrowdSec
 func GetIsoCodeFromRecord(record *geoip2.City) string {
+	if record == nil {
+		return ""
+	}
+
 	if record.Country.IsoCode != "" {
 		return record.Country.IsoCode
 	}
@@ -141,18 +170,18 @@ func (g *GeoDatabase) WatchFiles(ctx context.Context) {
 			if asnLastModTime, ok := g.lastModTime[g.ASNPath]; ok {
 				info, err := os.Stat(g.ASNPath)
 				if err != nil {
-					log.Printf("failed to stat ASN database: %s", err)
+					log.Warnf("failed to stat ASN database: %s", err)
 					continue
 				}
 				if info.ModTime().After(asnLastModTime) {
-					log.Printf("ASN database has been updated, reloading")
+					log.Infof("ASN database has been updated, reloading")
 					shouldUpdate = true
 					g.lastModTime[g.ASNPath] = info.ModTime()
 				}
 			} else {
 				info, err := os.Stat(g.ASNPath)
 				if err != nil {
-					log.Printf("failed to stat ASN database: %s", err)
+					log.Warnf("failed to stat ASN database: %s", err)
 					continue
 				}
 				g.lastModTime[g.ASNPath] = info.ModTime()
@@ -160,25 +189,25 @@ func (g *GeoDatabase) WatchFiles(ctx context.Context) {
 			if cityLastModTime, ok := g.lastModTime[g.CityPath]; ok {
 				info, err := os.Stat(g.CityPath)
 				if err != nil {
-					log.Printf("failed to stat city database: %s", err)
+					log.Warnf("failed to stat city database: %s", err)
 					continue
 				}
 				if info.ModTime().After(cityLastModTime) {
-					log.Printf("City database has been updated, reloading")
+					log.Infof("City database has been updated, reloading")
 					shouldUpdate = true
 					g.lastModTime[g.CityPath] = info.ModTime()
 				}
 			} else {
 				info, err := os.Stat(g.CityPath)
 				if err != nil {
-					log.Printf("failed to stat city database: %s", err)
+					log.Warnf("failed to stat city database: %s", err)
 					continue
 				}
 				g.lastModTime[g.CityPath] = info.ModTime()
 			}
 			if shouldUpdate {
 				if err := g.reload(); err != nil {
-					log.Printf("failed to reload databases: %s", err)
+					log.Warnf("failed to reload databases: %s", err)
 				}
 			}
 		}
