@@ -10,6 +10,7 @@ require (
 	github.com/negasus/haproxy-spoe-go v1.0.5
 	github.com/oschwald/geoip2-golang v1.9.0
 	github.com/prometheus/client_golang v1.20.4
+	github.com/prometheus/client_model v0.6.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/sync v0.8.0
@@ -48,7 +49,6 @@ require (
 	github.com/oklog/ulid v1.3.1 // indirect
 	github.com/oschwald/maxminddb-golang v1.12.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.59.1 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	go.mongodb.org/mongo-driver v1.17.0 // indirect
