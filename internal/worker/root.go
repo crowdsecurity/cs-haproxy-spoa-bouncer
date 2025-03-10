@@ -13,10 +13,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type Prout struct {
-	WorkerName string
-}
-
 type Worker struct {
 	Name         string               `yaml:"name"`
 	LogLevel     *log.Level           `yaml:"log_level"`
@@ -65,20 +61,21 @@ func (w *Worker) Run(socket string) error {
 }
 
 type Manager struct {
-	Workers    []*Worker       `yaml:"-"`
-	CreateChan chan *Worker    `yaml:"-"`
-	Ctx        context.Context `yaml:"-"`
-	Cancel     context.CancelFunc
-	Server     *server.Server `yaml:"-"`
-	WorkerUid  int            `yaml:"-"`
-	WorkerGid  int            `yaml:"-"`
+	Workers    []*Worker           `yaml:"-"`
+	CreateChan chan *Worker        `yaml:"-"`
+	Ctx        context.Context     `yaml:"-"`
+	Cancel     *context.CancelFunc `yaml:"-"`
+	Server     *server.Server      `yaml:"-"`
+	WorkerUid  int                 `yaml:"-"`
+	WorkerGid  int                 `yaml:"-"`
 }
 
-func NewManager(ctx context.Context, cancel context.CancelFunc, s *server.Server, uid, gid int) *Manager {
+func NewManager(ctx context.Context, cancel *context.CancelFunc, s *server.Server, uid, gid int) *Manager {
 	return &Manager{
 		CreateChan: make(chan *Worker),
 		Workers:    make([]*Worker, 0),
 		Ctx:        ctx,
+		Cancel:     cancel,
 		Server:     s,
 		WorkerUid:  uid,
 		WorkerGid:  gid,
@@ -110,7 +107,7 @@ func (m *Manager) AddWorker(w *Worker) {
 		if err != nil {
 			log.Errorf("worker failed with: %s", err)
 		}
-		m.Cancel()
+		defer (*m.Cancel)()
 	}()
 	m.Workers = append(m.Workers, w)
 }

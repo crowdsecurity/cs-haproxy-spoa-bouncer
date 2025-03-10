@@ -232,7 +232,7 @@ func Execute() error {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	workerManager := worker.NewManager(ctx, cancel, workerServer, config.WorkerUid, config.WorkerGid)
+	workerManager := worker.NewManager(ctx, &cancel, workerServer, config.WorkerUid, config.WorkerGid)
 
 	g.Go(func() error {
 		return workerManager.Run()

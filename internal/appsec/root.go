@@ -131,3 +131,15 @@ func (a *AppsecConfig) AddHeaders(id string, headers *http.Header) {
 		}
 	}
 }
+
+func (a *AppsecConfig) ValidateConfiguration() error {
+
+	if a.AppsecUrl == "" {
+		return fmt.Errorf("appsec_url is empty")
+	}
+
+	if a.ApiKey == "" {
+		return fmt.Errorf("api_key is empty")
+	}
+	return nil
+}

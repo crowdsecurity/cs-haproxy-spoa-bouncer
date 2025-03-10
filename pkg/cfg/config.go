@@ -96,5 +96,15 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 		config.WorkerSocketDir = config.WorkerSocketDir + "/"
 	}
 
+	if config.AppSec == nil {
+		config.AppSec = &appsec.AppsecConfig{
+			Enabled: false}
+	}
+	if config.AppSec.Enabled {
+		err = config.AppSec.ValidateConfiguration()
+		if err != nil {
+			return nil, fmt.Errorf("failed to validate appsec configuration: %w", err)
+		}
+	}
 	return config, nil
 }

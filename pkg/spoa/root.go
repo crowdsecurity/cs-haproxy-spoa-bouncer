@@ -155,6 +155,8 @@ func (s *Spoa) ServeTCP(ctx context.Context) error {
 		}
 	}()
 
+	defer s.ListenAddr.Close()
+
 	select {
 	case err := <-errorChan:
 		return err
@@ -178,6 +180,8 @@ func (s *Spoa) ServeUnix(ctx context.Context) error {
 			errorChan <- err
 		}
 	}()
+
+	defer s.ListenSocket.Close()
 
 	select {
 	case err := <-errorChan:
