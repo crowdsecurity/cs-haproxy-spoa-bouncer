@@ -13,13 +13,16 @@ import (
 
 	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
 	"github.com/crowdsecurity/go-cs-lib/ptr"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -297,13 +300,25 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 
 				log.Infof("Checking IP %s", args[0])
 
-				r, err := a.Dataset.CheckIP(args[0])
+				r, origin, err := a.Dataset.CheckIP(args[0])
 
 				if err != nil {
 					return nil, err
 				}
 
 				if permission == apiPermission.WorkerPermission {
+					//Only count processed requests if coming from worker
+					ipType := "ipv4"
+					if strings.Contains(args[0], ":") {
+						ipType = "ipv6"
+					}
+
+					metrics.TotalProcessedRequests.With(prometheus.Labels{"ip_type": ipType}).Inc()
+
+					if r > remediation.Unknown {
+						metrics.TotalBlockedRequests.With(prometheus.Labels{"ip_type": ipType, "origin": origin, "remediation": r.String()}).Inc()
+					}
+
 					return r, nil
 				}
 
@@ -312,15 +327,22 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 		},
 		"get:cn": {
 			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 1, 1); err != nil {
+				if err := ArgsCheck(args, 2, 2); err != nil {
 					return nil, err
 				}
 				if args[0] == "" {
 					return nil, fmt.Errorf("invalid argument")
 				}
-				r := a.Dataset.CheckCN(args[0])
+				r, origin := a.Dataset.CheckCN(args[0])
 
 				if permission == apiPermission.WorkerPermission {
+					if r > remediation.Unknown {
+						ipType := "ipv4"
+						if strings.Contains(args[1], ":") {
+							ipType = "ipv6"
+						}
+						metrics.TotalBlockedRequests.With(prometheus.Labels{"ip_type": ipType, "origin": origin, "remediation": r.String()}).Inc()
+					}
 					return r, nil
 				}
 
@@ -346,8 +368,12 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 
 				record, err := a.GeoDatabase.GetCity(&val)
 
-				if err != nil && !errors.Is(err, geo.NotValidConfig) {
-					return "", err
+				if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
+					return nil, err
+				}
+
+				if record == nil {
+					return nil, nil
 				}
 
 				return geo.GetIsoCodeFromRecord(record), nil
@@ -446,7 +472,7 @@ func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 
 		_dl, _v, _m, _sm, err := readHeaderFromBytes(headerBuffer)
 
-		log.Info("received header bytes", _dl, _v, _m, _sm)
+		log.Debugf("received header bytes: datalength: %d | verb: %s, | module: %s | submodule: %s", _dl, _v, _m, _sm)
 
 		if err != nil || !IsValidVerb(_v) || !IsValidModule(_m) {
 			log.Error("Error reading header:", err)
@@ -483,13 +509,21 @@ func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 			dataParts = splitBytesByNull(dataBuffer[:n])
 		}
 
-		log.Infof("data: %+v", dataParts)
+		log.Debugf("data: %+v", dataParts)
+		log.Debugf("calling command %s with data: %+v and permissions %d", command, dataParts, sc.Permission)
+
 		value, err := a.HandleCommand(command, dataParts, sc.Permission)
 
+		log.Debugf("command %s returned %+v", command, value)
 		if err != nil {
 			//TODO handle error
 			log.Error("Error handling command:", err)
 			continue
+		}
+
+		if value == nil {
+			// nil cannot be encoded, so we send an empty string
+			value = ""
 		}
 
 		if err := sc.Encoder.Encode(value); err != nil {
