@@ -9,7 +9,6 @@ import (
 	"sync"
 	"text/template"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/ban"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	log "github.com/sirupsen/logrus"
@@ -33,7 +32,6 @@ type Host struct {
 	Host     string          `yaml:"host"`
 	Captcha  captcha.Captcha `yaml:"captcha"`
 	Ban      ban.Ban         `yaml:"ban"`
-	AppSec   appsec.AppSec   `yaml:"appsec"`
 	LogLevel *log.Level      `yaml:"log_level"`
 	logger   *log.Entry      `yaml:"-"`
 }
@@ -202,9 +200,6 @@ func (h *Manager) addHost(host *Host) {
 		host.logger.Error(err)
 	}
 	if err := host.Ban.Init(host.logger); err != nil {
-		host.logger.Error(err)
-	}
-	if err := host.AppSec.Init(host.logger, h.ctx); err != nil {
 		host.logger.Error(err)
 	}
 	h.Hosts = append(h.Hosts, host)

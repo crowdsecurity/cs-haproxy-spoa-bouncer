@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -62,21 +63,25 @@ func Execute() error {
 	showConfig := flag.Bool("T", false, "show full config (.yaml + .yaml.local) and exit")
 
 	// Worker flags
-	tcpAddr := flag.String("tcp", "", "tcp listener address")
-	unixAddr := flag.String("unix", "", "unix listener address")
+	workerConfigString := flag.String("config", "", "whole worker configuration as json")
 	workerMode := flag.Bool("worker", false, "run as worker")
 
 	flag.Parse()
 
-	if !*workerMode && (*tcpAddr != "" || *unixAddr != "") {
-		return fmt.Errorf("parent process cannot have listener address")
+	if !*workerMode && (*workerConfigString != "") {
+		return fmt.Errorf("parent process cannot have worker config")
 	}
 
 	if *workerMode {
-		if *tcpAddr == "" && *unixAddr == "" {
-			return fmt.Errorf("worker process must have one listener address")
+		var workerConfig *worker.Worker = &worker.Worker{}
+		err := json.Unmarshal([]byte(*workerConfigString), workerConfig)
+		if err != nil {
+			return fmt.Errorf("unable to unmarshal worker config: %w", err)
 		}
-		return WorkerExecute(*tcpAddr, *unixAddr)
+		if workerConfig.ListenAddr == "" && workerConfig.ListenSocket == "" {
+			return fmt.Errorf("worker process must have one listener address: %+v", *workerConfigString)
+		}
+		return WorkerExecute(workerConfig)
 	}
 
 	if *bouncerVersion {
@@ -110,7 +115,8 @@ func Execute() error {
 	}
 
 	log.Infof("Starting %s %s", name, version.String())
-
+	log.Debugf("Configuration: %+v", config.Workers[0])
+	log.Debugf("Configuration: %+v", *config.AppSec)
 	bouncer := &csbouncer.StreamBouncer{}
 
 	err = bouncer.ConfigReader(strings.NewReader(configExpanded))
@@ -225,7 +231,8 @@ func Execute() error {
 		defer adminServer.Close()
 	}
 
-	workerManager := worker.NewManager(ctx, workerServer, config.WorkerUid, config.WorkerGid)
+	ctx, cancel := context.WithCancel(context.Background())
+	workerManager := worker.NewManager(ctx, &cancel, workerServer, config.WorkerUid, config.WorkerGid)
 
 	g.Go(func() error {
 		return workerManager.Run()
@@ -234,6 +241,7 @@ func Execute() error {
 	apiServer := api.NewApi(ctx, workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
 
 	for _, worker := range config.Workers {
+		log.Debugf("Adding worker %v", worker)
 		workerManager.CreateChan <- worker
 	}
 
@@ -259,7 +267,7 @@ func Execute() error {
 	return nil
 }
 
-func WorkerExecute(tcpAddr, unixAddr string) error {
+func WorkerExecute(workerConfig *worker.Worker) error {
 
 	g, ctx := errgroup.WithContext(context.Background())
 
@@ -267,7 +275,7 @@ func WorkerExecute(tcpAddr, unixAddr string) error {
 		return HandleSignals(ctx)
 	})
 
-	spoad, err := spoa.New(tcpAddr, unixAddr)
+	spoad, err := spoa.New(workerConfig)
 
 	if err != nil {
 		return fmt.Errorf("failed to create SPOA: %w", err)
