@@ -2,6 +2,7 @@ package spoa
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -20,10 +21,15 @@ import (
 	"github.com/negasus/haproxy-spoe-go/message"
 	"github.com/negasus/haproxy-spoe-go/request"
 	log "github.com/sirupsen/logrus"
+
+	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
 )
 
-var (
-	message_names = []string{"crowdsec-http", "crowdsec-ip"}
+const (
+	crowdsec_http_message              = "crowdsec-http"
+	crowdsec_ip_message                = "crowdsec-ip"
+	crowdsec_appsec_small_body_message = "crowdsec-appsec-small-body"
+	crowdsec_appsec_large_body_message = "crowdsec-appsec-large-body"
 )
 
 type Spoa struct {
@@ -227,6 +233,10 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 		rString := r.String()
 		req.Actions.SetVar(action.ScopeTransaction, "remediation", rString)
+
+		if r <= remediation.Unknown || host.AppSec.AlwaysSend {
+			req.Actions.SetVar(action.ScopeTransaction, "send_to_appsec", true)
+		}
 	}()
 
 	if err != nil {
@@ -357,19 +367,6 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	if r > remediation.Unknown && !host.AppSec.AlwaysSend {
 		return
 	}
-	// !TODO APPSEC STUFF
-
-	// headers, err := readHeaders(*headersType)
-	// if err != nil {
-	// 	log.Printf("failed to parse headers: %v", err)
-	// }
-
-	// request, err := http.NewRequest(method, url, strings.NewReader(body))
-	// if err != nil {
-	// 	log.Printf("failed to create request: %v", err)
-	// 	return
-	// }
-	// request.Header = headers
 }
 
 // Handles checking the IP address against the dataset
@@ -397,6 +394,102 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
 }
 
+func (s *Spoa) handleAppsecRequest(req *request.Request, mes *message.Message) {
+	// !TODO APPSEC STUFF
+	//Probably better to do this in the worker ? But this means we need to send everything to the worker :(
+
+	// headers, err := readHeaders(*headersType)
+	// if err != nil {
+	// 	log.Printf("failed to parse headers: %v", err)
+	// }
+
+	// request, err := http.NewRequest(method, url, strings.NewReader(body))
+	// if err != nil {
+	// 	log.Printf("failed to create request: %v", err)
+	// 	return
+	// }
+	// request.Header = headers
+
+	clientIP, err := readKeyFromMessage[net.IP](mes, "src-ip")
+	if err != nil {
+		log.Errorf("failed to read client ip: %v", err)
+		return
+	}
+
+	method, err := readKeyFromMessage[string](mes, "method")
+	if err != nil {
+		log.Errorf("failed to read method: %v", err)
+		return
+	}
+
+	headers, err := readKeyFromMessage[string](mes, "headers")
+	if err != nil {
+		log.Errorf("failed to read headers: %v", err)
+		return
+	}
+
+	body, err := readKeyFromMessage[[]byte](mes, "body")
+	if err != nil && !errors.Is(err, errkeyNotFound) {
+		log.Errorf("failed to read body: %v", err)
+		return
+	}
+
+	path, err := readKeyFromMessage[string](mes, "path")
+	if err != nil {
+		log.Errorf("failed to read path: %v", err)
+		return
+	}
+
+	query, err := readKeyFromMessage[string](mes, "query")
+	if err != nil {
+		log.Errorf("failed to read query: %v", err)
+		return
+	}
+
+	log.Infof("method: %s, headers: %s, body: %s | path: %s | query: %s", *method, *headers, *body, *path, *query)
+
+	//FIXME: do this properly
+	appsecClient := &csbouncer.AppSec{}
+	appsecConfig := &csbouncer.AppSecConfig{
+		Url: "http://host.docker.internal:7422",
+	}
+	appsecClient.APIKey = "WK3mH5KsS1ZnnCErAOqqkgbwMuN27yuzVqT7k8nuX2Y"
+	appsecClient.AppSecConfig = appsecConfig
+	err = appsecClient.Init()
+
+	if err != nil {
+		log.Errorf("failed to init appsec client: %v", err)
+		return
+	}
+
+	requestUrl := *path
+	if query != nil {
+		requestUrl += "?" + *query
+	}
+
+	appsecRequest, err := http.NewRequest(*method, requestUrl, strings.NewReader(string(*body)))
+
+	if err != nil {
+		log.Errorf("failed to create appsec request: %v", err)
+		return
+	}
+
+	/*appsecRequest.Method = *method
+	appsecRequest.Header = http.Header{}
+
+	appsecRequest.URL.Path = *path
+	appsecRequest.URL.RawQuery = *query*/
+
+	appsecResponse, err := appsecClient.ForwardWithIP(appsecRequest, clientIP.String())
+
+	if err != nil {
+		log.Errorf("failed to forward request to appsec: %v", err)
+		return
+	}
+
+	log.Infof("appsec response: %+v", appsecResponse)
+}
+
 func handlerWrapper(s *Spoa) func(req *request.Request) {
 	return func(req *request.Request) {
 		s.HAWaitGroup.Add(1)
@@ -407,31 +500,42 @@ func handlerWrapper(s *Spoa) func(req *request.Request) {
 			return
 		}
 
-		for _, messageName := range message_names {
-			mes, err := req.Messages.GetByName(messageName)
+		msgCount := req.Messages.Len()
+
+		for i := 0; i < msgCount; i++ {
+			mes, err := req.Messages.GetByIndex(i)
 			if err != nil {
+				s.logger.Errorf("failed to get message by index: %s", err)
 				continue
 			}
-			s.logger.Trace("Received message: ", messageName)
-			switch messageName {
-			case "crowdsec-http":
+			s.logger.Infof("Received message: %s", mes.Name)
+			switch mes.Name {
+			case crowdsec_http_message:
 				s.handleHTTPRequest(req, mes)
-			case "crowdsec-ip":
+			case crowdsec_ip_message:
 				s.handleIPRequest(req, mes)
+			case crowdsec_appsec_small_body_message, crowdsec_appsec_large_body_message:
+				s.handleAppsecRequest(req, mes)
+			default:
+				s.logger.Warn("unknown message type: ", mes.Name)
 			}
 		}
 	}
 }
 
+var errkeyNotFound = fmt.Errorf("key not found")
+var errkeyWrongType = fmt.Errorf("key has wrong type")
+
 // readKeyFromMessage reads a key from a message and returns it as the type T
 func readKeyFromMessage[T string | net.IP | bool | []byte](msg *message.Message, key string) (*T, error) {
 	value, ok := msg.KV.Get(key)
 	if !ok {
-		return nil, fmt.Errorf("key %s not found", key)
+		return nil, errkeyNotFound
 	}
 	s, ok := value.(T)
 	if !ok {
-		return nil, fmt.Errorf("key %s has wrong type", key)
+		log.Errorf("key %s has wrong type (expected %T, found %T)", key, *new(T), value)
+		return nil, errkeyWrongType
 	}
 	return &s, nil
 }

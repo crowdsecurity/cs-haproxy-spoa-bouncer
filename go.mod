@@ -59,3 +59,5 @@ require (
 	gopkg.in/tomb.v2 v2.0.0-20161208151619-d5d1b5820637 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/crowdsecurity/go-cs-bouncer => github.com/LaurenceJJones/go-cs-bouncer v0.0.0-20241011153853-64120470982d
