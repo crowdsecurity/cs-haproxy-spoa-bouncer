@@ -91,12 +91,11 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 			t.Errorf("expected WORKERSOCKET in command env")
 		}
 	}
-	time.Sleep(1000 * time.Millisecond)
 	fmt.Printf("command: %+v", w.Command)
 
 	assert.NotNil(t, w.Command, "expected worker command to be set")
 	expectedCommandPrefix := "/tmp/go-build"
-	expectedCommandSuffix := `worker.test -worker -config {\"Name\":\"test-worker-1\",\"Config\":\"\",\"LogLevel\":null,\"Uid\":1000,\"Gid\":1000,\"Command\":null,\"SocketPath\":\"\"}`
+	expectedCommandSuffix := `worker.test -worker -config {"Name":"test-worker-1","Config":"","LogLevel":null,"Uid":1000,"Gid":1000,"Command":null,"SocketPath":""}`
 	commandString := w.Command.String()
 	assert.True(t, strings.HasPrefix(commandString, expectedCommandPrefix), "expected worker command to start with %s", expectedCommandPrefix)
 	assert.True(t, strings.HasSuffix(commandString, expectedCommandSuffix), "expected worker command to end with %s", expectedCommandSuffix)
@@ -123,7 +122,6 @@ func TestManagerAddWorkerNewWorkerListenerError(t *testing.T) {
 	mgr.AddWorker(w)
 
 	// Wait briefly.
-	time.Sleep(5000 * time.Millisecond)
 
 	assert.Equal(t, 1, len(mgr.Workers), "expected 0 workers due to NewWorkerListener error")
 
