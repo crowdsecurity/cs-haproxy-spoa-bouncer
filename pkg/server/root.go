@@ -97,7 +97,9 @@ func (s *Server) NewWorkerListener(name string, gid int) (string, error) {
 
 	s.listeners = append(s.listeners, &l)
 
-	go s.Run(&l)
+	go func() {
+		s.Run(&l)
+	}()
 
 	return socketString, nil
 }

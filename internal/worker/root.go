@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -11,28 +13,31 @@ import (
 )
 
 type Worker struct {
-	Name         string     `yaml:"name"`
-	ListenAddr   string     `yaml:"listen_addr"`
-	ListenSocket string     `yaml:"listen_socket"`
-	LogLevel     *log.Level `yaml:"log_level"`
-	Uid          int        `yaml:"-"` // Set by the worker manager
-	Gid          int        `yaml:"-"` // Set by the worker manager
-	Command      *exec.Cmd  `yaml:"-"`
-	SocketPath   string     `yaml:"-"` // Set by combining the socket dir and the worker name
+	Name       string     `yaml:"name"`
+	Config     string     `yaml:"config"`
+	LogLevel   *log.Level `yaml:"log_level"`
+	Uid        int        `yaml:"-"` // Set by the worker manager
+	Gid        int        `yaml:"-"` // Set by the worker manager
+	Command    *exec.Cmd  `yaml:"-"`
+	SocketPath string     `yaml:"-"` // Set by combining the socket dir and the worker name
 }
 
-func (w *Worker) Run(socket string) {
+type WorkerConfig struct {
+	ListenAddr   string `yaml:"listen_addr"`
+	ListenSocket string `yaml:"listen_socket"`
+}
+
+func (w *Worker) Run(socket string) error {
 	args := []string{
 		"-worker",
 	}
 
-	if w.ListenAddr != "" {
-		args = append(args, "-tcp", w.ListenAddr)
-	}
-	if w.ListenSocket != "" {
-		args = append(args, "-unix", w.ListenSocket)
+	config, err := json.Marshal(*w)
+	if err != nil {
+		return fmt.Errorf("failed to marshal appsec config: %w", err)
 	}
 
+	args = append(args, "-config", string(config))
 	command := exec.Command(os.Args[0], args...)
 
 	command.Env = []string{
@@ -63,6 +68,7 @@ func (w *Worker) Run(socket string) {
 	}
 
 	log.Infof("Worker %s exited", w.Name)
+	return nil
 }
 
 type Manager struct {
@@ -105,7 +111,12 @@ func (m *Manager) AddWorker(w *Worker) {
 		log.Errorf("failed to create worker listener: %s", err)
 		return
 	}
-	go w.Run(socketString)
+	go func() {
+		err := w.Run(socketString)
+		if err != nil {
+			m.Stop()
+		}
+	}()
 	m.Workers = append(m.Workers, w)
 }
 
