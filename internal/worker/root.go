@@ -48,7 +48,6 @@ func (w *Worker) Run(socket string) error {
 	if w.LogLevel != nil {
 		command.Env = append(command.Env, "LOG_LEVEL="+w.LogLevel.String())
 	}
-
 	log.Infof("Starting worker %s with cmd %s %v", w.Name, os.Args[0], args)
 
 	command.SysProcAttr = &syscall.SysProcAttr{}
@@ -111,12 +110,14 @@ func (m *Manager) AddWorker(w *Worker) {
 		log.Errorf("failed to create worker listener: %s", err)
 		return
 	}
+
 	go func() {
 		err := w.Run(socketString)
 		if err != nil {
 			m.Stop()
 		}
 	}()
+
 	m.Workers = append(m.Workers, w)
 }
 
