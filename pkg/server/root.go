@@ -77,8 +77,12 @@ func (s *Server) NewAdminListener(path string) error {
 
 	s.listeners = append(s.listeners, &l)
 
-	go s.Run(&l)
-
+	go func() {
+		err := s.Run(&l)
+		if err != nil {
+			s.logger.Infof("admin listener got an error: %s", err)
+		}
+	}()
 	return nil
 }
 
@@ -86,6 +90,7 @@ func (s *Server) NewWorkerListener(name string, gid int) (string, error) {
 	socketString := fmt.Sprintf("%s%s%s.sock", s.workerSocketDir, WORKER_SOCKET_PREFIX, name)
 
 	l, err := newUnixSocket(socketString)
+	s.logger.Infof("Creating worker socket %s", socketString)
 
 	if err != nil {
 		return "", err
@@ -98,7 +103,10 @@ func (s *Server) NewWorkerListener(name string, gid int) (string, error) {
 	s.listeners = append(s.listeners, &l)
 
 	go func() {
-		s.Run(&l)
+		err := s.Run(&l)
+		if err != nil {
+			s.logger.Infof("worker listener %s got an error: %s", name, err)
+		}
 	}()
 
 	return socketString, nil

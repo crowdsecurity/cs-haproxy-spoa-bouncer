@@ -69,12 +69,6 @@ func Execute() error {
 
 	flag.Parse()
 
-	g, ctx := errgroup.WithContext(context.Background())
-
-	g.Go(func() error {
-		return HandleSignals(ctx)
-	})
-
 	if !*workerMode && (*tcpAddr != "" || *unixAddr != "") {
 		return fmt.Errorf("parent process cannot have listener address")
 	}
@@ -130,6 +124,8 @@ func Execute() error {
 		return fmt.Errorf("unable to configure bouncer: %w", err)
 	}
 
+	g, ctx := errgroup.WithContext(context.Background())
+
 	config.Geo.Init(ctx)
 
 	if *testConfig {
@@ -140,6 +136,10 @@ func Execute() error {
 	if bouncer.InsecureSkipVerify != nil {
 		log.Debugf("InsecureSkipVerify is set to %t", *bouncer.InsecureSkipVerify)
 	}
+
+	g.Go(func() error {
+		return HandleSignals(ctx)
+	})
 
 	g.Go(func() error {
 		bouncer.Run(ctx)

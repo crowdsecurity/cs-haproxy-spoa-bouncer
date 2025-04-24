@@ -162,7 +162,7 @@ func (s *Spoa) ServeUnix(ctx context.Context) error {
 
 	go func() {
 		defer close(errorChan)
-		if err := s.Server.Serve(s.ListenAddr); err != nil {
+		if err := s.Server.Serve(s.ListenSocket); err != nil {
 			errorChan <- err
 		}
 	}()
