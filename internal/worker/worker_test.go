@@ -84,7 +84,7 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 	if len(mgr.Workers) != 1 {
 		t.Fatalf("expected 1 worker, got %d", len(mgr.Workers))
 	}
-	if w.Uid != 1000 || w.Gid != 1000 {
+	if w.Uid != uid || w.Gid != gid {
 		t.Errorf("expected worker Uid and Gid to be 1000, got %d and %d", w.Uid, w.Gid)
 	}
 
