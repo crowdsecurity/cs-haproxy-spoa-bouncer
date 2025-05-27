@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -102,17 +103,23 @@ func (f *lframe) Encode(dest io.Writer) (n int, err error) {
 
 type Messages []Message
 
+type KV struct {
+	Name  string `yaml:"name"`
+	Type  string `yaml:"type"`
+	Value string `yaml:"value"`
+}
+
 type Message struct {
-	Name string                 `yaml:"name"`
-	KV   map[string]interface{} `yaml:"kv"`
+	Name string `yaml:"name"`
+	KV   []KV   `yaml:"kv"`
 }
 
 type FrameYAML struct {
-	Type     string                 `yaml:"type"`
-	FrameID  uint64                 `yaml:"frame_id"`
-	StreamID uint64                 `yaml:"stream_id"`
-	KV       map[string]interface{} `yaml:"kv"`
-	Messages []Message              `yaml:"messages"`
+	Type     string    `yaml:"type"`
+	FrameID  uint64    `yaml:"frame_id"`
+	StreamID uint64    `yaml:"stream_id"`
+	KV       []KV      `yaml:"kv"`
+	Messages []Message `yaml:"messages"`
 }
 
 type TestCase struct {
@@ -147,45 +154,109 @@ func TestHandleSPOA(t *testing.T) {
 			err = yaml.Unmarshal(content, &tc)
 			require.NoError(t, err)
 
-			for index, test := range tc.Tests {
-				if test.Frame.KV != nil {
-					tc.Tests[index].Frame.KV = copyKV(test.Frame.KV)
-				}
-				if test.Frame.Messages != nil {
-					for i, msg := range test.Frame.Messages {
-						if msg.KV != nil {
-							tc.Tests[index].Frame.Messages[i].KV = copyKV(msg.KV)
-						}
-					}
-				}
-				fmt.Printf("Messages: %+v\n", spew.Sdump(tc.Tests))
-			}
+			// for index, test := range tc.Tests {
+			// 	if test.Frame.KV != nil {
+			// 		tc.Tests[index].Frame.KV = copyKV(test.Frame.KV)
+			// 	}
+			// 	if test.Frame.Messages != nil {
+			// 		for i, msg := range test.Frame.Messages {
+			// 			if msg.KV != nil {
+			// 				tc.Tests[index].Frame.Messages[i].KV = copyKV(msg.KV)
+			// 			}
+			// 		}
+			// 	}
+			// 	fmt.Printf("Messages: %+v\n", spew.Sdump(tc.Tests))
+			// }
 			runSpoaTestCase(t, tc)
 		})
 	}
 }
 
-func copyKV(kv map[string]interface{}) map[string]interface{} {
-	newKV := make(map[string]interface{})
-	for k, v := range kv {
-		switch v.(type) {
-		case map[string]interface{}:
-			newKV[k] = copyKV(v.(map[string]interface{}))
-		case int:
-			newKV[k] = uint32(v.(int))
-		case []interface{}:
-			bytes := make([]byte, len(v.([]interface{})))
-			for i, item := range v.([]interface{}) {
-				if num, ok := item.(int); ok {
-					bytes[i] = byte(num)
-				}
-			}
-			newKV[k] = bytes
-		default:
-			newKV[k] = v
+// func copyKV(kv map[string]interface{}) map[string]interface{} {
+// 	newKV := make(map[string]interface{})
+// 	for k, v := range kv {
+// 		switch v.(type) {
+// 		case map[string]interface{}:
+// 			newKV[k] = copyKV(v.(map[string]interface{}))
+// 		case int:
+// 			newKV[k] = uint32(v.(int))
+// 		case []interface{}:
+// 			bytes := make([]byte, len(v.([]interface{})))
+// 			for i, item := range v.([]interface{}) {
+// 				if num, ok := item.(int); ok {
+// 					bytes[i] = byte(num)
+// 				}
+// 			}
+// 			newKV[k] = bytes
+// 		default:
+// 			newKV[k] = v
+// 		}
+// 	}
+// 	return newKV
+// }
+
+func (kv *KV) UnmarshalKV() (interface{}, error) {
+	var err error
+
+	switch kv.Type {
+	case "string":
+		return kv.Value, nil
+	case "bool":
+		return strings.ToLower(kv.Value) == "true", nil
+	case "uint32":
+		var i int
+		i, err = strconv.Atoi(kv.Value)
+		if err != nil {
+			return nil, err
 		}
+		return uint32(i), nil
+	case "int32":
+		var i int
+		i, err = strconv.Atoi(kv.Value)
+		if err != nil {
+			return nil, err
+		}
+		return int32(i), nil
+	case "uint64":
+		var i int
+		i, err = strconv.Atoi(kv.Value)
+		if err != nil {
+			return nil, err
+		}
+		return uint64(i), nil
+	case "int64":
+		var i int
+		i, err = strconv.Atoi(kv.Value)
+		if err != nil {
+			return nil, err
+		}
+		return int32(i), nil
+	case "bytes":
+		bytes := make([]byte, len(kv.Value))
+		for i, c := range kv.Value {
+			bytes[i] = byte(c)
+		}
+		return bytes, nil
+	case "ipv4":
+		ip := net.ParseIP(kv.Value)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid ip address: %s", kv.Value)
+		}
+		ipBytes := make([]byte, 4)
+		copy(ipBytes, ip)
+		return ipBytes, nil
+	case "ipv6":
+		ip := net.ParseIP(kv.Value)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid ip address: %s", kv.Value)
+		}
+		ipBytes := make([]byte, 16)
+		copy(ipBytes, ip)
+		return ipBytes, nil
+	default:
+		return nil, fmt.Errorf("unknown type %s", kv.Type)
 	}
-	return newKV
+
 }
 
 func convertToFrame(fj *FrameYAML) (*lframe, error) {
@@ -206,13 +277,20 @@ func convertToFrame(fj *FrameYAML) (*lframe, error) {
 	f.StreamID = fj.StreamID
 
 	// cf https://github.com/haproxy/haproxy/blob/master/doc/SPOE.txt 3.2 (especially 3.2.4 and 3.2.6)
+	fmt.Printf("Yaml: %+v\n", spew.Sdump(fj))
 	if len(fj.KV) > 0 {
 		if fj.Messages != nil {
 			return nil, fmt.Errorf("kv and messages are mutually exclusive")
 		}
-		for k, v := range fj.KV {
-			f.KV.Add(k, v)
+		for _, kv := range fj.KV {
+			val, err := kv.UnmarshalKV()
+			if err != nil {
+				return nil, fmt.Errorf("failed to unmarshal kv %s: %v", kv.Name, err)
+			}
+			f.KV.Add(kv.Name, val)
+
 		}
+
 	}
 
 	if fj.Messages != nil {
@@ -225,14 +303,17 @@ func convertToFrame(fj *FrameYAML) (*lframe, error) {
 				Name: msg.Name,
 				KV:   kv.AcquireKV(),
 			}
-			for k, v := range msg.KV {
-				m.KV.Add(k, v)
+			for _, kv := range msg.KV {
+				val, err := kv.UnmarshalKV()
+				if err != nil {
+					return nil, fmt.Errorf("failed to unmarshal kv %s: %v", kv.Name, err)
+				}
+				m.KV.Add(kv.Name, val)
+
 			}
 			*f.Messages = append(*f.Messages, m)
 		}
-
 	}
-
 	return f, nil
 }
 
