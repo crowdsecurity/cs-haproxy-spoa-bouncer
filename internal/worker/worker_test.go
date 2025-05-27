@@ -58,12 +58,11 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 	// Create a fake server that returns a dummy socket string.
 	s := &server.Server{}
 
-	u, err := user.Current()
+	uid, gid, err := getCurrentUser()
 	if err != nil {
 		t.Fatalf("failed to get current user: %v", err)
+
 	}
-	uid, _ := strconv.Atoi(u.Uid)
-	gid, _ := strconv.Atoi(u.Gid)
 	// Create a Manager with a cancellable context.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -126,9 +125,15 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 func TestManagerAddWorkerNewWorkerListenerError(t *testing.T) {
 	s := &server.Server{}
 
+	uid, gid, err := getCurrentUser()
+	if err != nil {
+		t.Fatalf("failed to get current user: %v", err)
+
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	mgr := NewManager(ctx, s, 1000, 1000)
+	mgr := NewManager(ctx, s, uid, gid)
 
 	w := &Worker{
 		Name: "test-worker-2",
@@ -157,11 +162,18 @@ func TestManagerAddWorkerNewWorkerListenerError(t *testing.T) {
 // the worker is not added to the Manager.
 func TestManagerAddWorkersNewWorkerListenerError(t *testing.T) {
 	fmt.Println("TestManagerAddWorkersNewWorkerListenerError")
+
+	uid, gid, err := getCurrentUser()
+	if err != nil {
+		t.Fatalf("failed to get current user: %v", err)
+
+	}
+
 	s := &server.Server{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	mgr := NewManager(ctx, s, 1000, 1000)
+	mgr := NewManager(ctx, s, uid, gid)
 
 	w3 := &Worker{
 		Name: "test-worker-3",
@@ -183,11 +195,21 @@ func TestManagerAddWorkersNewWorkerListenerError(t *testing.T) {
 	assert.Nil(t, w2.Command, "expected worker command to be nil")
 	assert.Nil(t, mgr.Workers[1].Command, "expected worker command to be nil")
 	expectedCommandPrefix := "/tmp/go-build"
-	expectedCommandSuffix := `worker.test -worker -config {"Name":"test-worker-3","Config":"","LogLevel":null,"Uid":1000,"Gid":1000,"Command":null,"SocketPath":""}`
+	expectedCommandSuffix := fmt.Sprintf(`worker.test -worker -config {"Name":"test-worker-3","Config":"","LogLevel":null,"Uid":%d,"Gid":%d,"Command":null,"SocketPath":""}`, uid, gid)
 	commandString := w3.Command.String()
 	assert.True(t, strings.HasPrefix(commandString, expectedCommandPrefix), "expected worker command to start with %s", expectedCommandPrefix)
 	assert.True(t, strings.HasSuffix(commandString, expectedCommandSuffix), "expected worker command to end with %s", expectedCommandSuffix)
 
 	s.Close()
 
+}
+
+func getCurrentUser() (uid, gid int, err error) {
+	u, err := user.Current()
+	if err != nil {
+		return 0, 0, fmt.Errorf("unable to get current user: %s", err) // Default values if user lookup fails
+	}
+	uid, _ = strconv.Atoi(u.Uid)
+	gid, _ = strconv.Atoi(u.Gid)
+	return uid, gid, nil
 }
