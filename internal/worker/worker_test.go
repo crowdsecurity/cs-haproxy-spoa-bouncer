@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"os/user"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -56,10 +58,16 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 	// Create a fake server that returns a dummy socket string.
 	s := &server.Server{}
 
+	u, err := user.Current()
+	if err != nil {
+		t.Fatalf("failed to get current user: %v", err)
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
 	// Create a Manager with a cancellable context.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	mgr := NewManager(ctx, s, 1000, 1000)
+	mgr := NewManager(ctx, s, uid, gid)
 
 	// Create a worker.
 	w := &Worker{
