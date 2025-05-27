@@ -1,0 +1,43 @@
+name: Some basic tests
+tests:
+  - frame:
+      type: HaproxyHello
+      frame_id: 123
+      stream_id: 456
+      kv:
+        - name: supported-versions
+          type: string
+          value: 2.0
+        - name: max-frame-size
+          type: uint32
+          value: 4096
+        - name: engine-id
+          type: string
+          value: 582bd032-8a5e-4fa4-9dd4-19851707e5b1
+    assert:
+      not_empty_response: true
+      size: 103
+      type: AgentHello
+      responseSize: 71
+      frame_id: 123
+      stream_id: 456
+  - frame:
+      type: HaproxyNotify
+      frame_id: 123
+      stream_id: 456
+      messages:
+        - name: crowdsec-ip
+          kv:
+            - name: id
+              type: string
+              value: e2b1e1cf-fc61-47a1-a493-179f15f03924
+            - name: src-ip
+              type: ipv4
+              value: 1.1.1.1
+            - name: src-port
+              type: uint32
+              value: 12585
+    assert:
+      not_empty_response: true
+      frame_id: 123
+      stream_id: 456
