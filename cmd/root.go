@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
+	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/api"
@@ -54,20 +54,20 @@ func HandleSignals(ctx context.Context) error {
 }
 
 func Execute() error {
-	// Parent flags
-	configPath := flag.String("c", "", "path to crowdsec-spoa-bouncer.yaml")
-	verbose := flag.Bool("v", false, "set verbose mode")
-	bouncerVersion := flag.Bool("V", false, "display version and exit (deprecated)")
-	flag.BoolVar(bouncerVersion, "version", *bouncerVersion, "display version and exit")
-	testConfig := flag.Bool("t", false, "test config and exit")
-	showConfig := flag.Bool("T", false, "show full config (.yaml + .yaml.local) and exit")
+	// Parent pflags
+	configPath := pflag.String("c", "", "path to crowdsec-spoa-bouncer.yaml")
+	verbose := pflag.Bool("v", false, "set verbose mode")
+	bouncerVersion := pflag.Bool("V", false, "display version and exit (deprecated)")
+	pflag.BoolVar(bouncerVersion, "version", *bouncerVersion, "display version and exit")
+	testConfig := pflag.Bool("t", false, "test config and exit")
+	showConfig := pflag.Bool("T", false, "show full config (.yaml + .yaml.local) and exit")
 
-	// Worker flags
-	tcpAddr := flag.String("tcp", "", "tcp listener address")
-	unixAddr := flag.String("unix", "", "unix listener address")
-	workerMode := flag.Bool("worker", false, "run as worker")
+	// Worker pflags
+	tcpAddr := pflag.String("tcp", "", "tcp listener address")
+	unixAddr := pflag.String("unix", "", "unix listener address")
+	workerMode := pflag.Bool("worker", false, "run as worker")
 
-	flag.Parse()
+	pflag.Parse()
 
 	if !*workerMode && (*tcpAddr != "" || *unixAddr != "") {
 		return fmt.Errorf("parent process cannot have listener address")
