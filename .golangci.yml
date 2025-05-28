@@ -76,7 +76,6 @@ linters:
     - depguard
     - revive
 
-    - recvcheck   # manu
     - perfsprint
     - ineffassign  # manu
     - errorlint # manu
