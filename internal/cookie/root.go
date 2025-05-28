@@ -51,7 +51,7 @@ func (c *CookieGenerator) IsValid() error {
 	return nil
 }
 
-func (c CookieGenerator) GenerateUnsetCookie() *http.Cookie {
+func (c *CookieGenerator) GenerateUnsetCookie() *http.Cookie {
 	return &http.Cookie{
 		Name:     c.Name,
 		Value:    "",
@@ -87,7 +87,7 @@ func (c *CookieGenerator) GenerateCookie(session *session.Session, ssl *bool) (*
 		c.signCookie(cookie)
 	}
 
-	return cookie, c.urlEncodeValue(cookie)
+	return cookie, urlEncodeValue(cookie)
 }
 
 func (c *CookieGenerator) ValidateCookie(b64Value string) (string, error) {
@@ -106,7 +106,7 @@ func (c *CookieGenerator) ValidateCookie(b64Value string) (string, error) {
 	return string(value), nil
 }
 
-func (c CookieGenerator) urlEncodeValue(cookie *http.Cookie) error {
+func urlEncodeValue(cookie *http.Cookie) error {
 	cookie.Value = base64.URLEncoding.EncodeToString([]byte(cookie.Value))
 	if len(cookie.String()) > 4096 {
 		return fmt.Errorf("cookie value too long")
@@ -114,7 +114,7 @@ func (c CookieGenerator) urlEncodeValue(cookie *http.Cookie) error {
 	return nil
 }
 
-func (c CookieGenerator) signCookie(cookie *http.Cookie) {
+func (c *CookieGenerator) signCookie(cookie *http.Cookie) {
 	mac := hmac.New(sha256.New, []byte(c.Secret))
 	mac.Write([]byte(cookie.Name))
 	mac.Write([]byte(cookie.Value))
@@ -122,7 +122,7 @@ func (c CookieGenerator) signCookie(cookie *http.Cookie) {
 	cookie.Value = string(signature) + cookie.Value
 }
 
-func (c CookieGenerator) validateSignedCookieValue(signedValue string) (string, error) {
+func (c *CookieGenerator) validateSignedCookieValue(signedValue string) (string, error) {
 	if signedValue == "" {
 		return "", fmt.Errorf("invalid signature")
 	}
