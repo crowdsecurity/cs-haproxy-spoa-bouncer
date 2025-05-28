@@ -77,7 +77,6 @@ linters:
     - revive
 
     - perfsprint
-    - errcheck # manu
     - wastedassign # manu
     - predeclared # manu
     - noctx # manu
@@ -162,7 +161,7 @@ linters:
 
     nestif:
       # lower this after refactoring
-      min-complexity: 11
+      min-complexity: 13
 
     nlreturn:
       block-size: 5

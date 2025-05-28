@@ -117,8 +117,12 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		syscall.Umask(origUmask)
 
 		// Change socket owner and permissions
-		os.Chown(unixAddr, uid, gid)
-		os.Chmod(unixAddr, 0o660)
+		if err := os.Chown(unixAddr, uid, gid); err != nil {
+			return nil, fmt.Errorf("failed to change owner of socket %s: %w", unixAddr, err)
+		}
+		if err := os.Chmod(unixAddr, 0o660); err != nil {
+			return nil, fmt.Errorf("failed to change permissions of socket %s: %w", unixAddr, err)
+		}
 
 		s.ListenSocket = addr
 	}
@@ -303,7 +307,10 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 			if err == nil && (storedUrl == "" || url != nil && *url != storedUrl) && !strings.HasSuffix(*url, ".ico") {
 				log.WithField("session", uuid).Debugf("updating stored url %s", *url)
-				s.workerClient.SetHostSessionKey(*hoststring, uuid, session.URI, *url)
+				_, err2 := s.workerClient.SetHostSessionKey(*hoststring, uuid, session.URI, *url)
+				if err2 != nil {
+					log.Errorf("failed to set host session key: %v", err2)
+				}
 			}
 		}
 
@@ -335,20 +342,29 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				return
 			}
 			if val, _ := s.workerClient.ValHostCaptcha(*hoststring, uuid, string(*body)); val {
-				s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS, captcha.Valid)
+				_, err := s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS, captcha.Valid)
+				if err != nil {
+					log.Errorf("failed to set host session key: %v", err)
+				}
 			}
 		}
 
 		// if the session has a valid captcha status we allow the request
 		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val == captcha.Valid {
 			r = remediation.Allow
-			storedUrl, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
+			storedUrl, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
+			if err != nil {
+				log.Errorf("failed to get host session key: %v", err)
+			}
 			// On first valid captcha we redirect to the stored url
 			if storedUrl != "" {
 				log.Debug("redirecting to: ", storedUrl)
 				req.Actions.SetVar(action.ScopeTransaction, "redirect", storedUrl)
 				// Delete the URI from the session so we dont redirect loop
-				s.workerClient.DeleteHostSessionKey(*hoststring, uuid, session.URI)
+				_, err := s.workerClient.DeleteHostSessionKey(*hoststring, uuid, session.URI)
+				if err != nil {
+					log.Errorf("failed to delete host session key: %v", err)
+				}
 			}
 		}
 	}

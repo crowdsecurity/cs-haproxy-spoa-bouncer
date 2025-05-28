@@ -124,7 +124,12 @@ func (m *Manager) AddWorker(w *Worker) {
 func (m *Manager) Stop() {
 	for _, w := range m.Workers {
 		if w.Command != nil {
-			w.Command.Process.Signal(os.Interrupt)
+			err := w.Command.Process.Signal(os.Interrupt)
+			if err != nil {
+				log.Errorf("failed to stop worker %s: %s", w.Name, err)
+			} else {
+				log.Infof("stopped worker %s", w.Name)
+			}
 		}
 	}
 }
