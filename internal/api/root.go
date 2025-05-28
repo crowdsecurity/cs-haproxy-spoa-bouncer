@@ -415,7 +415,10 @@ func flushConn(conn net.Conn) error {
 	buffer := make([]byte, 1024)
 	for {
 		// Set a short read deadline to avoid blocking indefinitely
-		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		if err != nil {
+			return fmt.Errorf("error setting read deadline: %w", err)
+		}
 
 		// Try to read data into the buffer
 		n, err := conn.Read(buffer)
@@ -434,7 +437,10 @@ func flushConn(conn net.Conn) error {
 		}
 	}
 	// Reset the read deadline after flushing
-	conn.SetReadDeadline(time.Time{})
+	err := conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return fmt.Errorf("error setting read deadline: %w", err)
+	}
 	return nil
 }
 
@@ -572,11 +578,13 @@ func (a *Api) handleAdminConnection(sc server.SocketConn) {
 		if err != nil {
 			log.Errorf("%+v, %+v", apiCommand, args)
 			log.Error("Error handling command:", err)
-			sc.Conn.Write([]byte(fmt.Sprintf("%v\n", err))) // We return the error message back to admin sockets
+			_, err2 := sc.Conn.Write([]byte(fmt.Sprintf("%v\n", err))) // We return the error message back to admin sockets
+			log.Errorf("error returning the error back to admin socket: %v", err2)
 			continue
 		}
 
-		sc.Conn.Write([]byte(fmt.Sprintf("%v\n", value)))
+		_, err = sc.Conn.Write([]byte(fmt.Sprintf("%v\n", value)))
+		log.Errorf("error writing server: %v", err)
 
 	}
 }

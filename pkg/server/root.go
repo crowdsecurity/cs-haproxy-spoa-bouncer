@@ -77,7 +77,8 @@ func (s *Server) NewAdminListener(path string) error {
 
 	s.listeners = append(s.listeners, &l)
 
-	go s.Run(&l)
+	//TODO: improve the error handling here
+	go s.Run(&l) //nolint
 
 	return nil
 }
@@ -97,7 +98,8 @@ func (s *Server) NewWorkerListener(name string, gid int) (string, error) {
 
 	s.listeners = append(s.listeners, &l)
 
-	go s.Run(&l)
+	//TODO: improve the error handling here
+	go s.Run(&l) //nolint
 
 	return socketString, nil
 }
@@ -115,7 +117,7 @@ func configWorkerSocket(path string, gid int) error {
 		return err
 	}
 
-	if err := os.Chmod(path, 0660); err != nil {
+	if err := os.Chmod(path, 0o660); err != nil {
 		return err
 	}
 
@@ -123,7 +125,7 @@ func configWorkerSocket(path string, gid int) error {
 }
 
 func configAdminSocket(path string) error {
-	if err := os.Chmod(path, 0600); err != nil {
+	if err := os.Chmod(path, 0o600); err != nil {
 		return err
 	}
 	return nil

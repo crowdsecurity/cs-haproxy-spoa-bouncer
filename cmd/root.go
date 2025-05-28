@@ -231,7 +231,10 @@ func Execute() error {
 			return fmt.Errorf("failed to create admin server: %w", err)
 		}
 
-		adminServer.NewAdminListener(config.AdminSocket)
+		err = adminServer.NewAdminListener(config.AdminSocket)
+		if err != nil {
+			return fmt.Errorf("failed to create admin listener: %w", err)
+		}
 		defer adminServer.Close()
 	}
 
