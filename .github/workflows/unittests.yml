@@ -26,11 +26,3 @@ jobs:
     - name: Run tests
       run: go test -v ./...
 
-    # - name: Generate coverage report
-    #   run: go tool cover -html=coverage.out -o coverage.html
-
-    # - name: Deploy to GitHub Pages
-    #   uses: peaceiris/actions-gh-pages@v3
-    #   with:
-    #     github_token: ${{ secrets.GITHUB_TOKEN }}
-    #     publish_dir: ./coverage.html
