@@ -266,7 +266,7 @@ linters:
 #        - -ST1005
 #        - -ST1012
         - -QF1003
-        - -QF1012  # manu
+#        - -QF1012  # manu
 
     wsl:
       # Allow blocks to end with comments
