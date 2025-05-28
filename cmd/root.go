@@ -310,7 +310,7 @@ func WorkerExecute(tcpAddr, unixAddr string) error {
 	defer cancel()
 
 	if err := spoad.Shutdown(cancelCtx); err != nil {
-		return fmt.Errorf("failed to shutdown server: %s", err)
+		return fmt.Errorf("failed to shutdown server: %w", err)
 	}
 
 	return nil

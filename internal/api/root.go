@@ -411,6 +411,7 @@ func ArgsCheck(args []string, min int, max int) error {
 }
 
 func flushConn(conn net.Conn) error {
+	var ne net.Error
 	buffer := make([]byte, 1024)
 	for {
 		// Set a short read deadline to avoid blocking indefinitely
@@ -419,15 +420,14 @@ func flushConn(conn net.Conn) error {
 		// Try to read data into the buffer
 		n, err := conn.Read(buffer)
 		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				// If we hit a timeout, it likely means the buffer is flushed
+			switch {
+			case errors.As(err, &ne) && ne.Timeout():
 				break
-			}
-			if err == io.EOF {
-				// If we hit EOF, the buffer is flushed
+			case errors.Is(err, io.EOF):
 				break
+			default:
+				return err
 			}
-			return err
 		}
 		if n == 0 {
 			break
@@ -458,7 +458,7 @@ func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 	for {
 		n, err := sc.Conn.Read(headerBuffer)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				// Client closed the connection gracefully
 				break
 			}
@@ -544,7 +544,7 @@ func (a *Api) handleAdminConnection(sc server.SocketConn) {
 	for {
 		n, err := sc.Conn.Read(dataBuffer)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				// Client closed the connection gracefully
 				break
 			}

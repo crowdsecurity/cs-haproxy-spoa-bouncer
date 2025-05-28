@@ -56,7 +56,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 
 	client, err := worker.NewWorkerClient(socket)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create worker client: %v", err)
+		return nil, fmt.Errorf("failed to create worker client: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -72,7 +72,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 	if tcpAddr != "" {
 		addr, err := net.Listen("tcp", tcpAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", tcpAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %w", tcpAddr, err)
 		}
 		s.ListenAddr = addr
 	}
@@ -86,7 +86,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		fileInfo, err := os.Stat(unixAddr)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to stat socket %s: %v", unixAddr, err)
+				return nil, fmt.Errorf("failed to stat socket %s: %w", unixAddr, err)
 			}
 		} else {
 			stat, ok := fileInfo.Sys().(*syscall.Stat_t)
@@ -100,7 +100,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		// Remove existing socket
 		if err := os.Remove(unixAddr); err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to remove socket %s: %v", unixAddr, err)
+				return nil, fmt.Errorf("failed to remove socket %s: %w", unixAddr, err)
 			}
 		}
 
@@ -110,7 +110,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		// Create new socket
 		addr, err := net.Listen("unix", unixAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", unixAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %w", unixAddr, err)
 		}
 
 		// Reset umask
@@ -374,6 +374,8 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 // Handles checking the IP address against the dataset
 func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
+	var r remediation.Remediation
+
 	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
 
 	if err != nil {
@@ -381,7 +383,6 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 		return
 	}
 
-	r := remediation.Allow
 	ipStr := ipType.String()
 
 	r, _ = s.workerClient.GetIP(ipStr)
