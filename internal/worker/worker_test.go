@@ -58,11 +58,9 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 	// Create a fake server that returns a dummy socket string.
 	s := &server.Server{}
 
-	uid, gid, err := getCurrentUser()
-	if err != nil {
-		t.Fatalf("failed to get current user: %v", err)
+	uid := os.Getuid()
+	gid := os.Getgid()
 
-	}
 	// Create a Manager with a cancellable context.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -125,11 +123,8 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 func TestManagerAddWorkerNewWorkerListenerError(t *testing.T) {
 	s := &server.Server{}
 
-	uid, gid, err := getCurrentUser()
-	if err != nil {
-		t.Fatalf("failed to get current user: %v", err)
-
-	}
+	uid := os.Getuid()
+	gid := os.Getgid()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -163,11 +158,8 @@ func TestManagerAddWorkerNewWorkerListenerError(t *testing.T) {
 func TestManagerAddWorkersNewWorkerListenerError(t *testing.T) {
 	fmt.Println("TestManagerAddWorkersNewWorkerListenerError")
 
-	uid, gid, err := getCurrentUser()
-	if err != nil {
-		t.Fatalf("failed to get current user: %v", err)
-
-	}
+	uid := os.Getuid()
+	gid := os.Getgid()
 
 	s := &server.Server{}
 
@@ -202,14 +194,4 @@ func TestManagerAddWorkersNewWorkerListenerError(t *testing.T) {
 
 	s.Close()
 
-}
-
-func getCurrentUser() (uid, gid int, err error) {
-	u, err := user.Current()
-	if err != nil {
-		return 0, 0, fmt.Errorf("unable to get current user: %s", err) // Default values if user lookup fails
-	}
-	uid, _ = strconv.Atoi(u.Uid)
-	gid, _ = strconv.Atoi(u.Gid)
-	return uid, gid, nil
 }
