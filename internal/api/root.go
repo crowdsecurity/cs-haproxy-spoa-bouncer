@@ -578,12 +578,13 @@ func (a *Api) handleAdminConnection(sc server.SocketConn) {
 		if err != nil {
 			log.Errorf("%+v, %+v", apiCommand, args)
 			log.Error("Error handling command:", err)
-			_, err2 := sc.Conn.Write([]byte(fmt.Sprintf("%v\n", err))) // We return the error message back to admin sockets
+			_, err2 := fmt.Fprintf(sc.Conn, "%v\n", err) // We return the error message back to admin sockets
+
 			log.Errorf("error returning the error back to admin socket: %v", err2)
 			continue
 		}
 
-		_, err = sc.Conn.Write([]byte(fmt.Sprintf("%v\n", value)))
+		_, err = fmt.Fprintf(sc.Conn, "%v\n", value)
 		log.Errorf("error writing server: %v", err)
 
 	}
