@@ -77,8 +77,6 @@ linters:
     - revive
 
     - perfsprint
-    - ineffassign  # manu
-    - errorlint # manu
     - errcheck # manu
     - wastedassign # manu
     - predeclared # manu
