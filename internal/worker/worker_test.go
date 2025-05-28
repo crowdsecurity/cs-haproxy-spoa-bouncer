@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"os/user"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
