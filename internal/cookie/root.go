@@ -16,7 +16,7 @@ import (
 type CookieGenerator struct {
 	SignCookies *bool      `yaml:"sign_cookies"` // SignCookies signs the cookie value
 	Secure      string     `yaml:"secure"`       // Secure sets the secure flag on the cookie, valid arguments are "auto", "always", "never". "auto" relies on the `ssl_fc` flag from HAProxy
-	HttpOnly    *bool      `yaml:"http_only"`    // HttpOnly sets the HttpOnly flag on the cookie
+	HTTPOnly    *bool      `yaml:"http_only"`    // HttpOnly sets the HttpOnly flag on the cookie
 	Secret      string     `yaml:"secret"`       // Secret used for signed/encrypted cookies defaults to the secret key of the remediation
 	Name        string     `yaml:"-"`            // Name of the cookie, usually set by the remediation. EG "crowdsec_captcha"
 	logger      *log.Entry `yaml:"-"`            // logger passed from the remediation
@@ -41,8 +41,8 @@ func (c *CookieGenerator) SetDefaults() {
 		c.Secure = "auto"
 	}
 	// Default httpOnly to true
-	if c.HttpOnly == nil {
-		c.HttpOnly = ptr.Of(true)
+	if c.HTTPOnly == nil {
+		c.HTTPOnly = ptr.Of(true)
 	}
 }
 
@@ -51,12 +51,12 @@ func (c *CookieGenerator) IsValid() error {
 	return nil
 }
 
-func (c CookieGenerator) GenerateUnsetCookie() *http.Cookie {
+func (c *CookieGenerator) GenerateUnsetCookie() *http.Cookie {
 	return &http.Cookie{
 		Name:     c.Name,
 		Value:    "",
 		MaxAge:   -1,
-		HttpOnly: *c.HttpOnly,
+		HttpOnly: *c.HTTPOnly,
 		Secure:   false,
 		SameSite: http.SameSiteStrictMode,
 	}
@@ -66,20 +66,21 @@ func (c CookieGenerator) GenerateUnsetCookie() *http.Cookie {
 func (c *CookieGenerator) GenerateCookie(session *session.Session, ssl *bool) (*http.Cookie, error) {
 	cookie := &http.Cookie{
 		Name:     c.Name,
-		Value:    session.Uuid,
+		Value:    session.UUID,
 		MaxAge:   0,
-		HttpOnly: *c.HttpOnly,
+		HttpOnly: *c.HTTPOnly,
 		Secure:   false,
 		SameSite: http.SameSiteStrictMode,
 	}
 
-	if c.Secure == "auto" {
+	switch c.Secure {
+	case "auto":
 		if ssl != nil {
 			cookie.Secure = *ssl
 		} else {
 			c.logger.Warn("ssl flag not set, defaulting to false")
 		}
-	} else if c.Secure == "always" {
+	case "always":
 		cookie.Secure = true
 	}
 
@@ -87,7 +88,7 @@ func (c *CookieGenerator) GenerateCookie(session *session.Session, ssl *bool) (*
 		c.signCookie(cookie)
 	}
 
-	return cookie, c.urlEncodeValue(cookie)
+	return cookie, urlEncodeValue(cookie)
 }
 
 func (c *CookieGenerator) ValidateCookie(b64Value string) (string, error) {
@@ -106,7 +107,7 @@ func (c *CookieGenerator) ValidateCookie(b64Value string) (string, error) {
 	return string(value), nil
 }
 
-func (c CookieGenerator) urlEncodeValue(cookie *http.Cookie) error {
+func urlEncodeValue(cookie *http.Cookie) error {
 	cookie.Value = base64.URLEncoding.EncodeToString([]byte(cookie.Value))
 	if len(cookie.String()) > 4096 {
 		return fmt.Errorf("cookie value too long")
@@ -114,7 +115,7 @@ func (c CookieGenerator) urlEncodeValue(cookie *http.Cookie) error {
 	return nil
 }
 
-func (c CookieGenerator) signCookie(cookie *http.Cookie) {
+func (c *CookieGenerator) signCookie(cookie *http.Cookie) {
 	mac := hmac.New(sha256.New, []byte(c.Secret))
 	mac.Write([]byte(cookie.Name))
 	mac.Write([]byte(cookie.Value))
@@ -122,7 +123,7 @@ func (c CookieGenerator) signCookie(cookie *http.Cookie) {
 	cookie.Value = string(signature) + cookie.Value
 }
 
-func (c CookieGenerator) validateSignedCookieValue(signedValue string) (string, error) {
+func (c *CookieGenerator) validateSignedCookieValue(signedValue string) (string, error) {
 	if signedValue == "" {
 		return "", fmt.Errorf("invalid signature")
 	}

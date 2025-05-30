@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	message_names = []string{"crowdsec-http", "crowdsec-ip"}
+	messageNames = []string{"crowdsec-http", "crowdsec-ip"}
 )
 
 type Spoa struct {
@@ -56,7 +56,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 
 	client, err := worker.NewWorkerClient(socket)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create worker client: %v", err)
+		return nil, fmt.Errorf("failed to create worker client: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -72,7 +72,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 	if tcpAddr != "" {
 		addr, err := net.Listen("tcp", tcpAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", tcpAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %w", tcpAddr, err)
 		}
 		s.ListenAddr = addr
 	}
@@ -86,7 +86,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		fileInfo, err := os.Stat(unixAddr)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to stat socket %s: %v", unixAddr, err)
+				return nil, fmt.Errorf("failed to stat socket %s: %w", unixAddr, err)
 			}
 		} else {
 			stat, ok := fileInfo.Sys().(*syscall.Stat_t)
@@ -100,7 +100,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		// Remove existing socket
 		if err := os.Remove(unixAddr); err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to remove socket %s: %v", unixAddr, err)
+				return nil, fmt.Errorf("failed to remove socket %s: %w", unixAddr, err)
 			}
 		}
 
@@ -110,15 +110,19 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		// Create new socket
 		addr, err := net.Listen("unix", unixAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", unixAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %w", unixAddr, err)
 		}
 
 		// Reset umask
 		syscall.Umask(origUmask)
 
 		// Change socket owner and permissions
-		os.Chown(unixAddr, uid, gid)
-		os.Chmod(unixAddr, 0o660)
+		if err := os.Chown(unixAddr, uid, gid); err != nil {
+			return nil, fmt.Errorf("failed to change owner of socket %s: %w", unixAddr, err)
+		}
+		if err := os.Chmod(unixAddr, 0o660); err != nil {
+			return nil, fmt.Errorf("failed to change permissions of socket %s: %w", unixAddr, err)
+		}
 
 		s.ListenSocket = addr
 	}
@@ -294,16 +298,19 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 
 		// if captcha is not valid then update the url in the session
-		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val != captcha.Valid {
+		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus); val != captcha.Valid {
 			// Update the incoming url if it is different from the stored url for the session ignore favicon requests
-			storedUrl, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
+			storedURL, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
 			if err != nil {
 				log.Error(err)
 			}
 
-			if err == nil && (storedUrl == "" || url != nil && *url != storedUrl) && !strings.HasSuffix(*url, ".ico") {
+			if err == nil && (storedURL == "" || url != nil && *url != storedURL) && !strings.HasSuffix(*url, ".ico") {
 				log.WithField("session", uuid).Debugf("updating stored url %s", *url)
-				s.workerClient.SetHostSessionKey(*hoststring, uuid, session.URI, *url)
+				_, err2 := s.workerClient.SetHostSessionKey(*hoststring, uuid, session.URI, *url)
+				if err2 != nil {
+					log.Errorf("failed to set host session key: %v", err2)
+				}
 			}
 		}
 
@@ -327,7 +334,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 
 		// Check if the request is a captcha validation request
-		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
+		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus); val == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
 			body, err = readKeyFromMessage[[]byte](mes, "body")
 
 			if err != nil {
@@ -335,20 +342,29 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				return
 			}
 			if val, _ := s.workerClient.ValHostCaptcha(*hoststring, uuid, string(*body)); val {
-				s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS, captcha.Valid)
+				_, err := s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CaptchaStatus, captcha.Valid)
+				if err != nil {
+					log.Errorf("failed to set host session key: %v", err)
+				}
 			}
 		}
 
 		// if the session has a valid captcha status we allow the request
-		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val == captcha.Valid {
+		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus); val == captcha.Valid {
 			r = remediation.Allow
-			storedUrl, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
+			storedURL, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
+			if err != nil {
+				log.Errorf("failed to get host session key: %v", err)
+			}
 			// On first valid captcha we redirect to the stored url
-			if storedUrl != "" {
-				log.Debug("redirecting to: ", storedUrl)
-				req.Actions.SetVar(action.ScopeTransaction, "redirect", storedUrl)
+			if storedURL != "" {
+				log.Debug("redirecting to: ", storedURL)
+				req.Actions.SetVar(action.ScopeTransaction, "redirect", storedURL)
 				// Delete the URI from the session so we dont redirect loop
-				s.workerClient.DeleteHostSessionKey(*hoststring, uuid, session.URI)
+				_, err := s.workerClient.DeleteHostSessionKey(*hoststring, uuid, session.URI)
+				if err != nil {
+					log.Errorf("failed to delete host session key: %v", err)
+				}
 			}
 		}
 	}
@@ -374,6 +390,8 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 // Handles checking the IP address against the dataset
 func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
+	var r remediation.Remediation
+
 	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
 
 	if err != nil {
@@ -381,7 +399,6 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 		return
 	}
 
-	r := remediation.Allow
 	ipStr := ipType.String()
 
 	r, _ = s.workerClient.GetIP(ipStr)
@@ -407,7 +424,7 @@ func handlerWrapper(s *Spoa) func(req *request.Request) {
 			return
 		}
 
-		for _, messageName := range message_names {
+		for _, messageName := range messageNames {
 			mes, err := req.Messages.GetByName(messageName)
 			if err != nil {
 				continue

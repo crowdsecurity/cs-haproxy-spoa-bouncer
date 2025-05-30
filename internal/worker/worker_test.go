@@ -79,8 +79,8 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 	if len(mgr.Workers) != 1 {
 		t.Fatalf("expected 1 worker, got %d", len(mgr.Workers))
 	}
-	if w.Uid != uid || w.Gid != gid {
-		t.Errorf("expected worker Uid and Gid to be %d and %d, got %d and %d", uid, gid, w.Uid, w.Gid)
+	if w.UID != uid || w.GID != gid {
+		t.Errorf("expected worker Uid and Gid to be %d and %d, got %d and %d", uid, gid, w.UID, w.GID)
 	}
 
 	// Verify that the command was created and its environment includes expected variables.
@@ -107,7 +107,7 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 
 	assert.NotNil(t, w.Command, "expected worker command to be set")
 	expectedCommandPrefix := "/tmp/go-build"
-	expectedCommandSuffix := fmt.Sprintf(`worker.test -worker -config {"Name":"test-worker-1","Config":"","LogLevel":null,"Uid":%d,"Gid":%d,"Command":null,"SocketPath":""}`, uid, gid)
+	expectedCommandSuffix := fmt.Sprintf(`worker.test -worker -config {"Name":"test-worker-1","Config":"","LogLevel":null,"UID":%d,"GID":%d,"Command":null,"SocketPath":""}`, uid, gid)
 	commandString := w.Command.String()
 	assert.True(t, strings.HasPrefix(commandString, expectedCommandPrefix), "expected worker command to start with %s", expectedCommandPrefix)
 	assert.True(t, strings.HasSuffix(commandString, expectedCommandSuffix), "expected worker command to end with %s", expectedCommandSuffix)
@@ -185,7 +185,7 @@ func TestManagerAddWorkersNewWorkerListenerError(t *testing.T) {
 	assert.Nil(t, w2.Command, "expected worker command to be nil")
 	assert.Nil(t, mgr.Workers[1].Command, "expected worker command to be nil")
 	expectedCommandPrefix := "/tmp/go-build"
-	expectedCommandSuffix := fmt.Sprintf(`worker.test -worker -config {"Name":"test-worker-3","Config":"","LogLevel":null,"Uid":%d,"Gid":%d,"Command":null,"SocketPath":""}`, uid, gid)
+	expectedCommandSuffix := fmt.Sprintf(`worker.test -worker -config {"Name":"test-worker-3","Config":"","LogLevel":null,"UID":%d,"GID":%d,"Command":null,"SocketPath":""}`, uid, gid)
 	commandString := w3.Command.String()
 	assert.True(t, strings.HasPrefix(commandString, expectedCommandPrefix), "expected worker command to start with %s", expectedCommandPrefix)
 	assert.True(t, strings.HasSuffix(commandString, expectedCommandSuffix), "expected worker command to end with %s", expectedCommandSuffix)
