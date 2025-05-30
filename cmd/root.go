@@ -244,14 +244,14 @@ func Execute() error {
 		return workerManager.Run(ctx)
 	})
 
-	apiServer := api.NewAPI(ctx, workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
+	apiServer := api.NewAPI(workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
 
 	for _, worker := range config.Workers {
 		workerManager.CreateChan <- worker
 	}
 
 	g.Go(func() error {
-		return apiServer.Run()
+		return apiServer.Run(ctx)
 	})
 
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())

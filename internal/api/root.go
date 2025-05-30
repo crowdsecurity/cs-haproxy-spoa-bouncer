@@ -84,7 +84,6 @@ type API struct {
 	Dataset       *dataset.DataSet
 	GeoDatabase   *geo.GeoDatabase
 	ConnChan      chan server.SocketConn
-	ctx           context.Context
 }
 
 func (a *API) HandleCommand(command string, args []string, permission apiPermission.APIPermission) (interface{}, error) {
@@ -94,14 +93,13 @@ func (a *API) HandleCommand(command string, args []string, permission apiPermiss
 	return nil, fmt.Errorf("command not found")
 }
 
-func NewAPI(ctx context.Context, WorkerManager *worker.Manager, HostManager *host.Manager, dataset *dataset.DataSet, geoDatabase *geo.GeoDatabase, socketChan chan server.SocketConn) *API {
+func NewAPI(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *dataset.DataSet, geoDatabase *geo.GeoDatabase, socketChan chan server.SocketConn) *API {
 	a := &API{
 		WorkerManager: WorkerManager,
 		HostManager:   HostManager,
 		Dataset:       dataset,
 		GeoDatabase:   geoDatabase,
 		ConnChan:      socketChan,
-		ctx:           ctx,
 	}
 
 	a.Handlers = map[string]APIHandler{
@@ -384,7 +382,7 @@ func NewAPI(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 	return a
 }
 
-func (a *API) Run() error {
+func (a *API) Run(ctx context.Context) error {
 	for {
 		select {
 		case sc := <-a.ConnChan:
@@ -394,7 +392,7 @@ func (a *API) Run() error {
 				continue
 			}
 			go a.handleAdminConnection(sc)
-		case <-a.ctx.Done():
+		case <-ctx.Done():
 			return nil
 		}
 	}
