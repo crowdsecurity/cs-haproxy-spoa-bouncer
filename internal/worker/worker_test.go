@@ -79,8 +79,8 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 	if len(mgr.Workers) != 1 {
 		t.Fatalf("expected 1 worker, got %d", len(mgr.Workers))
 	}
-	if w.Uid != uid || w.Gid != gid {
-		t.Errorf("expected worker Uid and Gid to be %d and %d, got %d and %d", uid, gid, w.Uid, w.Gid)
+	if w.UID != uid || w.GID != gid {
+		t.Errorf("expected worker Uid and Gid to be %d and %d, got %d and %d", uid, gid, w.UID, w.GID)
 	}
 
 	// Verify that the command was created and its environment includes expected variables.
