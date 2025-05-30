@@ -196,10 +196,10 @@ func Execute() error {
 		}
 	})
 
-	HostManager := host.NewManager(ctx)
+	HostManager := host.NewManager()
 
 	g.Go(func() error {
-		HostManager.Run()
+		HostManager.Run(ctx)
 		return nil
 	})
 
