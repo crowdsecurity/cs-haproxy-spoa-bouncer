@@ -27,20 +27,20 @@ import (
 )
 
 const (
-	GET ApiVerb = "get"
-	SET ApiVerb = "set"
-	DEL ApiVerb = "del"
-	VAL ApiVerb = "val"
+	GET APIVerb = "get"
+	SET APIVerb = "set"
+	DEL APIVerb = "del"
+	VAL APIVerb = "val"
 
 	// only ApiVerb over 3 chars
-	HELP ApiVerb = "help"
+	HELP APIVerb = "help"
 )
 
-type ApiVerb string
+type APIVerb string
 
 func IsValidVerb(s string) bool {
 	for _, v := range ValidVerb {
-		if ApiVerb(s) == v {
+		if APIVerb(s) == v {
 			return true
 		}
 	}
@@ -49,7 +49,7 @@ func IsValidVerb(s string) bool {
 
 func IsValidModule(s string) bool {
 	for _, v := range ValidModule {
-		if ApiModule(s) == v {
+		if APIModule(s) == v {
 			return true
 		}
 	}
@@ -57,28 +57,28 @@ func IsValidModule(s string) bool {
 }
 
 const (
-	IP      ApiModule = "ip"
-	GEO     ApiModule = "geo"
-	CN      ApiModule = "cn"
-	HOSTS   ApiModule = "hosts"
-	WORKERS ApiModule = "workers"
-	HOST    ApiModule = "host"
-	WORKER  ApiModule = "worker"
+	IP      APIModule = "ip"
+	GEO     APIModule = "geo"
+	CN      APIModule = "cn"
+	HOSTS   APIModule = "hosts"
+	WORKERS APIModule = "workers"
+	HOST    APIModule = "host"
+	WORKER  APIModule = "worker"
 )
 
-type ApiModule string
+type APIModule string
 
 var (
-	ValidVerb   = []ApiVerb{GET, SET, DEL, VAL, HELP}
-	ValidModule = []ApiModule{IP, CN, HOSTS, WORKERS, HOST, WORKER, GEO}
+	ValidVerb   = []APIVerb{GET, SET, DEL, VAL, HELP}
+	ValidModule = []APIModule{IP, CN, HOSTS, WORKERS, HOST, WORKER, GEO}
 )
 
-type ApiHandler struct {
-	handle func(permission apiPermission.ApiPermission, args ...string) (interface{}, error)
+type APIHandler struct {
+	handle func(permission apiPermission.APIPermission, args ...string) (interface{}, error)
 }
 
-type Api struct {
-	Handlers      map[string]ApiHandler
+type API struct {
+	Handlers      map[string]APIHandler
 	WorkerManager *worker.Manager
 	HostManager   *host.Manager
 	Dataset       *dataset.DataSet
@@ -87,15 +87,15 @@ type Api struct {
 	ctx           context.Context
 }
 
-func (a *Api) HandleCommand(command string, args []string, permission apiPermission.ApiPermission) (interface{}, error) {
+func (a *API) HandleCommand(command string, args []string, permission apiPermission.APIPermission) (interface{}, error) {
 	if handler, ok := a.Handlers[command]; ok {
 		return handler.handle(permission, args...)
 	}
 	return nil, fmt.Errorf("command not found")
 }
 
-func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *host.Manager, dataset *dataset.DataSet, geoDatabase *geo.GeoDatabase, socketChan chan server.SocketConn) *Api {
-	a := &Api{
+func NewAPI(ctx context.Context, WorkerManager *worker.Manager, HostManager *host.Manager, dataset *dataset.DataSet, geoDatabase *geo.GeoDatabase, socketChan chan server.SocketConn) *API {
+	a := &API{
 		WorkerManager: WorkerManager,
 		HostManager:   HostManager,
 		Dataset:       dataset,
@@ -104,9 +104,9 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 		ctx:           ctx,
 	}
 
-	a.Handlers = map[string]ApiHandler{
+	a.Handlers = map[string]APIHandler{
 		"val:host:cookie": {
-			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 2, 2); err != nil {
 					return "", err
 				}
@@ -131,7 +131,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 			},
 		},
 		"val:host:captcha": {
-			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 3, 3); err != nil {
 					return "", err
 				}
@@ -145,7 +145,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 			},
 		},
 		"del:host:session": {
-			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 3, 3); err != nil {
 					return "", err
 				}
@@ -167,7 +167,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 			},
 		},
 		"del:hosts": {
-			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
 				if permission == apiPermission.WorkerPermission {
 					return nil, fmt.Errorf("permission denied")
 				}
@@ -191,7 +191,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 			},
 		},
 		"set:host:session": {
-			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 4, 4); err != nil {
 					return nil, err
 				}
@@ -212,7 +212,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 			},
 		},
 		"get:host:session": {
-			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 3, 3); err != nil {
 					return "", err
 				}
@@ -238,7 +238,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 			},
 		},
 		"get:host:cookie": {
-			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 2, 2); err != nil {
 					return nil, err
 				}
@@ -255,12 +255,12 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 					return nil, err
 				}
 
-				ses.Set(session.CAPTCHA_STATUS, captcha.Pending)
+				ses.Set(session.CaptchaStatus, captcha.Pending)
 				return cookie, nil
 			},
 		},
 		"get:hosts": {
-			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
 				if len(args) == 0 && permission == apiPermission.WorkerPermission {
 					return &host.Host{}, fmt.Errorf("permission denied")
 				}
@@ -293,7 +293,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 			},
 		},
 		"get:ip": {
-			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 1, 1); err != nil {
 					return nil, err
 				}
@@ -326,7 +326,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 			},
 		},
 		"get:cn": {
-			handle: func(permission apiPermission.ApiPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 2, 2); err != nil {
 					return nil, err
 				}
@@ -350,7 +350,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 			},
 		},
 		"get:geo:iso": {
-			handle: func(_ apiPermission.ApiPermission, args ...string) (interface{}, error) {
+			handle: func(_ apiPermission.APIPermission, args ...string) (interface{}, error) {
 				if err := ArgsCheck(args, 1, 1); err != nil {
 					return nil, err
 				}
@@ -384,7 +384,7 @@ func NewApi(ctx context.Context, WorkerManager *worker.Manager, HostManager *hos
 	return a
 }
 
-func (a *Api) Run() error {
+func (a *API) Run() error {
 	for {
 		select {
 		case sc := <-a.ConnChan:
@@ -400,45 +400,51 @@ func (a *Api) Run() error {
 	}
 }
 
-func ArgsCheck(args []string, min int, max int) error {
-	if len(args) < min {
+func ArgsCheck(args []string, minValue int, maxValue int) error {
+	if len(args) < minValue {
 		return fmt.Errorf("missing argument")
 	}
-	if len(args) > max {
+	if len(args) > maxValue {
 		return fmt.Errorf("too many arguments")
 	}
 	return nil
 }
 
 func flushConn(conn net.Conn) error {
+	var ne net.Error
 	buffer := make([]byte, 1024)
 	for {
 		// Set a short read deadline to avoid blocking indefinitely
-		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		if err != nil {
+			return fmt.Errorf("error setting read deadline: %w", err)
+		}
 
 		// Try to read data into the buffer
 		n, err := conn.Read(buffer)
 		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				// If we hit a timeout, it likely means the buffer is flushed
+			switch {
+			case errors.As(err, &ne) && ne.Timeout():
 				break
-			}
-			if err == io.EOF {
-				// If we hit EOF, the buffer is flushed
+			case errors.Is(err, io.EOF):
 				break
+			default:
+				return err
 			}
-			return err
 		}
 		if n == 0 {
 			break
 		}
 	}
 	// Reset the read deadline after flushing
-	conn.SetReadDeadline(time.Time{})
+	err := conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return fmt.Errorf("error setting read deadline: %w", err)
+	}
 	return nil
 }
 
-func (a *Api) handleWorkerConnection(sc server.SocketConn) {
+func (a *API) handleWorkerConnection(sc server.SocketConn) {
 	defer func() {
 		err := sc.Conn.Close()
 		if err != nil {
@@ -458,7 +464,7 @@ func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 	for {
 		n, err := sc.Conn.Read(headerBuffer)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				// Client closed the connection gracefully
 				break
 			}
@@ -532,7 +538,7 @@ func (a *Api) handleWorkerConnection(sc server.SocketConn) {
 	}
 }
 
-func (a *Api) handleAdminConnection(sc server.SocketConn) {
+func (a *API) handleAdminConnection(sc server.SocketConn) {
 	defer func() {
 		err := sc.Conn.Close()
 		if err != nil {
@@ -544,7 +550,7 @@ func (a *Api) handleAdminConnection(sc server.SocketConn) {
 	for {
 		n, err := sc.Conn.Read(dataBuffer)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				// Client closed the connection gracefully
 				break
 			}
@@ -572,11 +578,14 @@ func (a *Api) handleAdminConnection(sc server.SocketConn) {
 		if err != nil {
 			log.Errorf("%+v, %+v", apiCommand, args)
 			log.Error("Error handling command:", err)
-			sc.Conn.Write([]byte(fmt.Sprintf("%v\n", err))) // We return the error message back to admin sockets
+			_, err2 := fmt.Fprintf(sc.Conn, "%v\n", err) // We return the error message back to admin sockets
+
+			log.Errorf("error returning the error back to admin socket: %v", err2)
 			continue
 		}
 
-		sc.Conn.Write([]byte(fmt.Sprintf("%v\n", value)))
+		_, err = fmt.Fprintf(sc.Conn, "%v\n", value)
+		log.Errorf("error writing server: %v", err)
 
 	}
 }

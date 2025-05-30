@@ -11,18 +11,18 @@ import (
 )
 
 type RemediationDetails struct {
-	Id     int64
+	ID     int64
 	Origin string
 }
 
 type RemediationIdsMap map[remediation.Remediation][]RemediationDetails
 
-func (rM *RemediationIdsMap) RemoveId(clog *log.Entry, r remediation.Remediation, id int64) error {
+func (rM *RemediationIdsMap) RemoveID(clog *log.Entry, r remediation.Remediation, id int64) error {
 	ids, ok := (*rM)[r]
 	if !ok {
 		return fmt.Errorf("remediation %s not found", r.String())
 	}
-	index, ok := rM.ContainsId(r, id)
+	index, ok := rM.ContainsID(r, id)
 	if !ok {
 		return fmt.Errorf("id %d not found", id)
 	}
@@ -41,10 +41,10 @@ func (rM *RemediationIdsMap) RemoveId(clog *log.Entry, r remediation.Remediation
 	return nil
 }
 
-func (rM *RemediationIdsMap) ContainsId(r remediation.Remediation, id int64) (int, bool) {
+func (rM *RemediationIdsMap) ContainsID(r remediation.Remediation, id int64) (int, bool) {
 	if details, ok := (*rM)[r]; ok {
 		for i, v := range details {
-			if v.Id == id {
+			if v.ID == id {
 				return i, true
 			}
 		}
@@ -52,7 +52,7 @@ func (rM *RemediationIdsMap) ContainsId(r remediation.Remediation, id int64) (in
 	return -1, false
 }
 
-func (rM *RemediationIdsMap) AddId(clog *log.Entry, r remediation.Remediation, id int64, origin string) {
+func (rM *RemediationIdsMap) AddID(clog *log.Entry, r remediation.Remediation, id int64, origin string) {
 	ids, ok := (*rM)[r]
 	if !ok {
 		clog.Debugf("remediation %s not found, creating", r.String())
@@ -106,7 +106,7 @@ func (s *Set[T]) Add(item T, origin string, r remediation.Remediation, id int64)
 	valueLog.Debug("adding")
 	if v, ok := s.Items[item]; ok {
 		valueLog.Debug("already exists")
-		v.AddId(valueLog, r, id, origin)
+		v.AddID(valueLog, r, id, origin)
 		return
 	}
 	valueLog.Debug("not found, creating new entry")
@@ -125,7 +125,7 @@ func (s *Set[T]) Remove(item T, r remediation.Remediation, id int64) bool {
 	}
 	valueLog.Debug("found")
 
-	if err := v.RemoveId(valueLog, r, id); err != nil {
+	if err := v.RemoveID(valueLog, r, id); err != nil {
 		valueLog.Error(err)
 		return false
 	}

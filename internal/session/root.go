@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	URI            = "URI"            // Last URI the user visited
-	CAPTCHA_STATUS = "CAPTCHA_STATUS" // Status of the captcha
-	CAPTCHA_TRIES  = "CAPTCHA_TRIES"  // Number of captcha tries
+	URI           = "URI"            // Last URI the user visited
+	CaptchaStatus = "CAPTCHA_STATUS" // Status of the captcha
+	CaptchaTries  = "CAPTCHA_TRIES"  // Number of captcha tries
 )
 
 func NewSession() (*Session, error) {
@@ -26,7 +26,7 @@ func NewSession() (*Session, error) {
 func NewSessionWithUUID(uuid string) *Session {
 	now := time.Now().UTC()
 	return &Session{
-		Uuid:         uuid,
+		UUID:         uuid,
 		KV:           make(map[string]interface{}),
 		UpdateTime:   now,
 		CreationTime: now,
@@ -34,7 +34,7 @@ func NewSessionWithUUID(uuid string) *Session {
 }
 
 type Session struct {
-	Uuid         string                 // UUID of the session
+	UUID         string                 // UUID of the session
 	KV           map[string]interface{} // Key-Value store for the session
 	CreationTime time.Time              // Creation time of the session used to compare against max time
 	UpdateTime   time.Time              // Last update time of the session used to compare against idle timeout
@@ -147,13 +147,13 @@ func (s *Sessions) GetSession(uuid string) *Session {
 func (s *Sessions) AddSession(session *Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sessions[session.Uuid] = session
+	s.sessions[session.UUID] = session
 }
 
 func (s *Sessions) RemoveSession(session *Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.sessions, session.Uuid)
+	delete(s.sessions, session.UUID)
 }
 
 func (s *Sessions) garbageCollect(ctx context.Context) {

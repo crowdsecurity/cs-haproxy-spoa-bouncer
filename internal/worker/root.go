@@ -16,8 +16,8 @@ type Worker struct {
 	Name       string     `yaml:"name"`
 	Config     string     `yaml:"config"`
 	LogLevel   *log.Level `yaml:"log_level"`
-	Uid        int        `yaml:"-"` // Set by the worker manager
-	Gid        int        `yaml:"-"` // Set by the worker manager
+	UID        int        `yaml:"-"` // Set by the worker manager
+	GID        int        `yaml:"-"` // Set by the worker manager
 	Command    *exec.Cmd  `yaml:"-"`
 	SocketPath string     `yaml:"-"` // Set by combining the socket dir and the worker name
 }
@@ -51,7 +51,7 @@ func (w *Worker) Run(socket string) error {
 	log.Infof("Starting worker %s with cmd %s %v", w.Name, os.Args[0], args)
 
 	command.SysProcAttr = &syscall.SysProcAttr{}
-	command.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(w.Uid), Gid: uint32(w.Gid)}
+	command.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(w.UID), Gid: uint32(w.GID)}
 	//Needed to allow to run the bouncer as non-root
 	command.SysProcAttr.Credential.NoSetGroups = true
 
@@ -75,8 +75,8 @@ type Manager struct {
 	CreateChan chan *Worker    `yaml:"-"`
 	Ctx        context.Context `yaml:"-"`
 	Server     *server.Server  `yaml:"-"`
-	WorkerUid  int             `yaml:"-"`
-	WorkerGid  int             `yaml:"-"`
+	WorkerUID  int             `yaml:"-"`
+	WorkerGID  int             `yaml:"-"`
 }
 
 func NewManager(ctx context.Context, s *server.Server, uid, gid int) *Manager {
@@ -85,8 +85,8 @@ func NewManager(ctx context.Context, s *server.Server, uid, gid int) *Manager {
 		Workers:    make([]*Worker, 0),
 		Ctx:        ctx,
 		Server:     s,
-		WorkerUid:  uid,
-		WorkerGid:  gid,
+		WorkerUID:  uid,
+		WorkerGID:  gid,
 	}
 }
 
@@ -103,9 +103,9 @@ func (m *Manager) Run() error {
 }
 
 func (m *Manager) AddWorker(w *Worker) {
-	w.Uid = m.WorkerUid
-	w.Gid = m.WorkerGid
-	socketString, err := m.Server.NewWorkerListener(w.Name, w.Gid)
+	w.UID = m.WorkerUID
+	w.GID = m.WorkerGID
+	socketString, err := m.Server.NewWorkerListener(w.Name, w.GID)
 	if err != nil {
 		log.Errorf("failed to create worker listener: %s", err)
 		return
@@ -124,7 +124,12 @@ func (m *Manager) AddWorker(w *Worker) {
 func (m *Manager) Stop() {
 	for _, w := range m.Workers {
 		if w.Command != nil {
-			w.Command.Process.Signal(os.Interrupt)
+			err := w.Command.Process.Signal(os.Interrupt)
+			if err != nil {
+				log.Errorf("failed to stop worker %s: %s", w.Name, err)
+			} else {
+				log.Infof("stopped worker %s", w.Name)
+			}
 		}
 	}
 }

@@ -231,7 +231,10 @@ func Execute() error {
 			return fmt.Errorf("failed to create admin server: %w", err)
 		}
 
-		adminServer.NewAdminListener(config.AdminSocket)
+		err = adminServer.NewAdminListener(config.AdminSocket)
+		if err != nil {
+			return fmt.Errorf("failed to create admin listener: %w", err)
+		}
 		defer adminServer.Close()
 	}
 
@@ -241,7 +244,7 @@ func Execute() error {
 		return workerManager.Run()
 	})
 
-	apiServer := api.NewApi(ctx, workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
+	apiServer := api.NewAPI(ctx, workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
 
 	for _, worker := range config.Workers {
 		workerManager.CreateChan <- worker
@@ -310,7 +313,7 @@ func WorkerExecute(tcpAddr, unixAddr string) error {
 	defer cancel()
 
 	if err := spoad.Shutdown(cancelCtx); err != nil {
-		return fmt.Errorf("failed to shutdown server: %s", err)
+		return fmt.Errorf("failed to shutdown server: %w", err)
 	}
 
 	return nil
