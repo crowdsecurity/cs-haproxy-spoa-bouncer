@@ -138,7 +138,7 @@ func TestManagerAddWorkerNewWorkerListenerError(t *testing.T) {
 
 	// Wait briefly.
 
-	assert.Equal(t, 1, len(mgr.Workers), "expected 1 worker even it failed to start")
+	assert.Len(t, mgr.Workers, 1, "expected 1 worker even it failed to start")
 	if len(mgr.Workers) == 0 {
 		t.Fatalf("expected 1 worker, got %d", len(mgr.Workers))
 	}
@@ -180,7 +180,7 @@ func TestManagerAddWorkersNewWorkerListenerError(t *testing.T) {
 	// Wait briefly.
 	mgr.Stop()
 
-	assert.Equal(t, 2, len(mgr.Workers), "expected 2 workers due to NewWorkerListener error")
+	assert.Len(t, mgr.Workers, 2, "expected 2 workers due to NewWorkerListener error")
 	assert.NotNil(t, mgr.Workers, "expected workers to be set")
 	assert.Nil(t, w2.Command, "expected worker command to be nil")
 	assert.Nil(t, mgr.Workers[1].Command, "expected worker command to be nil")
