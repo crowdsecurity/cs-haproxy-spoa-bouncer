@@ -52,13 +52,13 @@ Host: {{ .Host }}
 {{ end -}}
 `
 
-func (m *Manager) String() string {
+func (h *Manager) String() string {
 	tmpl, err := template.New("test").Parse(t)
 	if err != nil {
 		return ""
 	}
 	var b strings.Builder
-	if err := tmpl.Execute(&b, m); err != nil {
+	if err := tmpl.Execute(&b, h); err != nil {
 		return ""
 	}
 	return b.String()
@@ -171,14 +171,14 @@ func (h *Manager) sort() {
 	})
 }
 
-func (hM *Manager) removeHost(host *Host) {
-	for i, h := range hM.Hosts {
-		if h == host {
+func (h *Manager) removeHost(host *Host) {
+	for i, th := range h.Hosts {
+		if th == host {
 			host.Captcha.Cancel()
-			if i == len(hM.Hosts)-1 {
-				hM.Hosts = hM.Hosts[:i]
+			if i == len(h.Hosts)-1 {
+				h.Hosts = h.Hosts[:i]
 			} else {
-				hM.Hosts = append(hM.Hosts[:i], hM.Hosts[i+1:]...)
+				h.Hosts = append(h.Hosts[:i], h.Hosts[i+1:]...)
 			}
 			return
 		}
