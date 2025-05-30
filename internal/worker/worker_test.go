@@ -107,7 +107,7 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 
 	assert.NotNil(t, w.Command, "expected worker command to be set")
 	expectedCommandPrefix := "/tmp/go-build"
-	expectedCommandSuffix := fmt.Sprintf(`worker.test -worker -config {"Name":"test-worker-1","Config":"","LogLevel":null,"UID":%d,"GID":%d,"Command":null,"SocketPath":""}`, uid, gid)
+	expectedCommandSuffix := fmt.Sprintf(`worker.test -worker -config {"name":"test-worker-1","log_level":null}`)
 	commandString := w.Command.String()
 	assert.True(t, strings.HasPrefix(commandString, expectedCommandPrefix), "expected worker command to start with %s", expectedCommandPrefix)
 	assert.True(t, strings.HasSuffix(commandString, expectedCommandSuffix), "expected worker command to end with %s", expectedCommandSuffix)
@@ -185,7 +185,7 @@ func TestManagerAddWorkersNewWorkerListenerError(t *testing.T) {
 	assert.Nil(t, w2.Command, "expected worker command to be nil")
 	assert.Nil(t, mgr.Workers[1].Command, "expected worker command to be nil")
 	expectedCommandPrefix := "/tmp/go-build"
-	expectedCommandSuffix := fmt.Sprintf(`worker.test -worker -config {"Name":"test-worker-3","Config":"","LogLevel":null,"UID":%d,"GID":%d,"Command":null,"SocketPath":""}`, uid, gid)
+	expectedCommandSuffix := fmt.Sprintf(`worker.test -worker -config {"name":"test-worker-3","log_level":null}`)
 	commandString := w3.Command.String()
 	assert.True(t, strings.HasPrefix(commandString, expectedCommandPrefix), "expected worker command to start with %s", expectedCommandPrefix)
 	assert.True(t, strings.HasSuffix(commandString, expectedCommandSuffix), "expected worker command to end with %s", expectedCommandSuffix)

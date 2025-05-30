@@ -14,9 +14,9 @@ import (
 
 type Worker struct {
 	Name     string     `yaml:"name" json:"name"`
-	Config   string     `yaml:"config"  json:"config"`
 	LogLevel *log.Level `yaml:"log_level" json:"log_level"`
 
+	Config     string    `yaml:"-"  json:"-"`
 	UID        int       `yaml:"-" json:"-"` // Set by the worker manager
 	GID        int       `yaml:"-" json:"-"` // Set by the worker manager
 	Command    *exec.Cmd `yaml:"-" json:"-"`
