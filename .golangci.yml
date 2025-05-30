@@ -262,7 +262,6 @@ linters:
       checks:
         - all
         - -ST1003   # manu
-        - -ST1016   # manu
 #        - -ST1005
 #        - -ST1012
 #        - -QF1003
