@@ -77,8 +77,6 @@ linters:
     - revive
 
     - perfsprint
-    - wastedassign # manu
-    - predeclared # manu
     - noctx # manu
     - dupword
     - containedctx # manu
