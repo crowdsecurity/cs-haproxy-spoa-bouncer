@@ -16,7 +16,7 @@ import (
 type CookieGenerator struct {
 	SignCookies *bool      `yaml:"sign_cookies"` // SignCookies signs the cookie value
 	Secure      string     `yaml:"secure"`       // Secure sets the secure flag on the cookie, valid arguments are "auto", "always", "never". "auto" relies on the `ssl_fc` flag from HAProxy
-	HttpOnly    *bool      `yaml:"http_only"`    // HttpOnly sets the HttpOnly flag on the cookie
+	HTTPOnly    *bool      `yaml:"http_only"`    // HttpOnly sets the HttpOnly flag on the cookie
 	Secret      string     `yaml:"secret"`       // Secret used for signed/encrypted cookies defaults to the secret key of the remediation
 	Name        string     `yaml:"-"`            // Name of the cookie, usually set by the remediation. EG "crowdsec_captcha"
 	logger      *log.Entry `yaml:"-"`            // logger passed from the remediation
@@ -41,8 +41,8 @@ func (c *CookieGenerator) SetDefaults() {
 		c.Secure = "auto"
 	}
 	// Default httpOnly to true
-	if c.HttpOnly == nil {
-		c.HttpOnly = ptr.Of(true)
+	if c.HTTPOnly == nil {
+		c.HTTPOnly = ptr.Of(true)
 	}
 }
 
@@ -56,7 +56,7 @@ func (c *CookieGenerator) GenerateUnsetCookie() *http.Cookie {
 		Name:     c.Name,
 		Value:    "",
 		MaxAge:   -1,
-		HttpOnly: *c.HttpOnly,
+		HttpOnly: *c.HTTPOnly,
 		Secure:   false,
 		SameSite: http.SameSiteStrictMode,
 	}
@@ -66,9 +66,9 @@ func (c *CookieGenerator) GenerateUnsetCookie() *http.Cookie {
 func (c *CookieGenerator) GenerateCookie(session *session.Session, ssl *bool) (*http.Cookie, error) {
 	cookie := &http.Cookie{
 		Name:     c.Name,
-		Value:    session.Uuid,
+		Value:    session.UUID,
 		MaxAge:   0,
-		HttpOnly: *c.HttpOnly,
+		HttpOnly: *c.HTTPOnly,
 		Secure:   false,
 		SameSite: http.SameSiteStrictMode,
 	}

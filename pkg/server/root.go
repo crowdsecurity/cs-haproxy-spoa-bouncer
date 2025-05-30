@@ -6,18 +6,18 @@ import (
 	"net"
 	"os"
 
-	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
 	log "github.com/sirupsen/logrus"
 )
 
-var (
-	WORKER_SOCKET_PREFIX = "crowdsec-spoa-worker-"
-	ADMIN_SOCKET_PREFIX  = "crowdsec-spoa-admin-"
+const (
+	WorkerSocketPrefix = "crowdsec-spoa-worker-"
+	AdminSocketPrefix  = "crowdsec-spoa-admin-"
 )
 
 type Server struct {
 	listeners       []*net.Listener             // Listener
-	permission      apiPermission.ApiPermission // Worker or Admin
+	permission      apipermission.APIPermission // Worker or Admin
 	logger          *log.Entry                  // Logger
 	connChan        chan SocketConn             // Channel to send new connections
 	workerSocketDir string                      // Directory for worker sockets
@@ -25,13 +25,13 @@ type Server struct {
 
 type SocketConn struct {
 	Conn       net.Conn                    // underlying connection
-	Permission apiPermission.ApiPermission // Permission of the socket admin|worker
+	Permission apipermission.APIPermission // Permission of the socket admin|worker
 	Encoder    *gob.Encoder                // Unique encoder for socket connection
 }
 
 func NewAdminSocket(connChan chan SocketConn) (*Server, error) {
 	as := &Server{
-		permission: apiPermission.AdminPermission,
+		permission: apipermission.AdminPermission,
 		logger:     log.New().WithField("server", "admin"),
 		connChan:   connChan,
 	}
@@ -41,7 +41,7 @@ func NewAdminSocket(connChan chan SocketConn) (*Server, error) {
 
 func NewWorkerSocket(connChan chan SocketConn, dir string) (*Server, error) {
 	ws := &Server{
-		permission:      apiPermission.WorkerPermission,
+		permission:      apipermission.WorkerPermission,
 		logger:          log.New().WithField("server", "worker"),
 		connChan:        connChan,
 		workerSocketDir: dir,
@@ -84,7 +84,7 @@ func (s *Server) NewAdminListener(path string) error {
 }
 
 func (s *Server) NewWorkerListener(name string, gid int) (string, error) {
-	socketString := fmt.Sprintf("%s%s%s.sock", s.workerSocketDir, WORKER_SOCKET_PREFIX, name)
+	socketString := fmt.Sprintf("%s%s%s.sock", s.workerSocketDir, WorkerSocketPrefix, name)
 
 	l, err := newUnixSocket(socketString)
 

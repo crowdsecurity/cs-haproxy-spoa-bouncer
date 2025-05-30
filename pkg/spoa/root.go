@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	message_names = []string{"crowdsec-http", "crowdsec-ip"}
+	messageNames = []string{"crowdsec-http", "crowdsec-ip"}
 )
 
 type Spoa struct {
@@ -298,14 +298,14 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 
 		// if captcha is not valid then update the url in the session
-		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val != captcha.Valid {
+		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus); val != captcha.Valid {
 			// Update the incoming url if it is different from the stored url for the session ignore favicon requests
-			storedUrl, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
+			storedURL, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
 			if err != nil {
 				log.Error(err)
 			}
 
-			if err == nil && (storedUrl == "" || url != nil && *url != storedUrl) && !strings.HasSuffix(*url, ".ico") {
+			if err == nil && (storedURL == "" || url != nil && *url != storedURL) && !strings.HasSuffix(*url, ".ico") {
 				log.WithField("session", uuid).Debugf("updating stored url %s", *url)
 				_, err2 := s.workerClient.SetHostSessionKey(*hoststring, uuid, session.URI, *url)
 				if err2 != nil {
@@ -334,7 +334,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 
 		// Check if the request is a captcha validation request
-		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
+		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus); val == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
 			body, err = readKeyFromMessage[[]byte](mes, "body")
 
 			if err != nil {
@@ -342,7 +342,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				return
 			}
 			if val, _ := s.workerClient.ValHostCaptcha(*hoststring, uuid, string(*body)); val {
-				_, err := s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS, captcha.Valid)
+				_, err := s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CaptchaStatus, captcha.Valid)
 				if err != nil {
 					log.Errorf("failed to set host session key: %v", err)
 				}
@@ -350,16 +350,16 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 
 		// if the session has a valid captcha status we allow the request
-		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val == captcha.Valid {
+		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus); val == captcha.Valid {
 			r = remediation.Allow
-			storedUrl, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
+			storedURL, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
 			if err != nil {
 				log.Errorf("failed to get host session key: %v", err)
 			}
 			// On first valid captcha we redirect to the stored url
-			if storedUrl != "" {
-				log.Debug("redirecting to: ", storedUrl)
-				req.Actions.SetVar(action.ScopeTransaction, "redirect", storedUrl)
+			if storedURL != "" {
+				log.Debug("redirecting to: ", storedURL)
+				req.Actions.SetVar(action.ScopeTransaction, "redirect", storedURL)
 				// Delete the URI from the session so we dont redirect loop
 				_, err := s.workerClient.DeleteHostSessionKey(*hoststring, uuid, session.URI)
 				if err != nil {
@@ -424,7 +424,7 @@ func handlerWrapper(s *Spoa) func(req *request.Request) {
 			return
 		}
 
-		for _, messageName := range message_names {
+		for _, messageName := range messageNames {
 			mes, err := req.Messages.GetByName(messageName)
 			if err != nil {
 				continue
