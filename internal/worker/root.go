@@ -16,8 +16,8 @@ type Worker struct {
 	Name       string     `yaml:"name"`
 	Config     string     `yaml:"config"`
 	LogLevel   *log.Level `yaml:"log_level"`
-	Uid        int        `yaml:"-"` // Set by the worker manager
-	Gid        int        `yaml:"-"` // Set by the worker manager
+	UID        int        `yaml:"-"` // Set by the worker manager
+	GID        int        `yaml:"-"` // Set by the worker manager
 	Command    *exec.Cmd  `yaml:"-"`
 	SocketPath string     `yaml:"-"` // Set by combining the socket dir and the worker name
 }
