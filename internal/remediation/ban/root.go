@@ -6,7 +6,7 @@ import (
 )
 
 type Ban struct {
-	ContactUsUrl string     `yaml:"contact_us_url"`
+	ContactUsURL string     `yaml:"contact_us_url"`
 	logger       *log.Entry `yaml:"-"`
 }
 
@@ -20,5 +20,5 @@ func (b *Ban) InitLogger(logger *log.Entry) {
 }
 
 func (b *Ban) InjectKeyValues(actions *action.Actions) {
-	actions.SetVar(action.ScopeTransaction, "contact_us_url", b.ContactUsUrl)
+	actions.SetVar(action.ScopeTransaction, "contact_us_url", b.ContactUsURL)
 }

@@ -244,7 +244,7 @@ func Execute() error {
 		return workerManager.Run()
 	})
 
-	apiServer := api.NewApi(ctx, workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
+	apiServer := api.NewAPI(ctx, workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
 
 	for _, worker := range config.Workers {
 		workerManager.CreateChan <- worker
