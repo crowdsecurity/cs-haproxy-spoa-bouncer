@@ -72,31 +72,29 @@ func (w *Worker) Run(socket string) error {
 }
 
 type Manager struct {
-	Workers    []*Worker       `yaml:"-"`
-	CreateChan chan *Worker    `yaml:"-"`
-	Ctx        context.Context `yaml:"-"`
-	Server     *server.Server  `yaml:"-"`
-	WorkerUID  int             `yaml:"-"`
-	WorkerGID  int             `yaml:"-"`
+	Workers    []*Worker      `yaml:"-"`
+	CreateChan chan *Worker   `yaml:"-"`
+	Server     *server.Server `yaml:"-"`
+	WorkerUID  int            `yaml:"-"`
+	WorkerGID  int            `yaml:"-"`
 }
 
-func NewManager(ctx context.Context, s *server.Server, uid, gid int) *Manager {
+func NewManager(s *server.Server, uid, gid int) *Manager {
 	return &Manager{
 		CreateChan: make(chan *Worker),
 		Workers:    make([]*Worker, 0),
-		Ctx:        ctx,
 		Server:     s,
 		WorkerUID:  uid,
 		WorkerGID:  gid,
 	}
 }
 
-func (m *Manager) Run() error {
+func (m *Manager) Run(ctx context.Context) error {
 	for {
 		select {
 		case w := <-m.CreateChan:
 			m.AddWorker(w)
-		case <-m.Ctx.Done():
+		case <-ctx.Done():
 			m.Stop()
 			return nil
 		}
