@@ -60,9 +60,7 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 	gid := os.Getgid()
 
 	// Create a Manager with a cancellable context.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	mgr := NewManager(ctx, s, uid, gid)
+	mgr := NewManager(s, uid, gid)
 
 	// Create a worker.
 	w := &Worker{
@@ -124,9 +122,7 @@ func TestManagerAddWorkerNewWorkerListenerError(t *testing.T) {
 	uid := os.Getuid()
 	gid := os.Getgid()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	mgr := NewManager(ctx, s, uid, gid)
+	mgr := NewManager(s, uid, gid)
 
 	w := &Worker{
 		Name: "test-worker-2",
@@ -161,9 +157,7 @@ func TestManagerAddWorkersNewWorkerListenerError(t *testing.T) {
 
 	s := &server.Server{}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	mgr := NewManager(ctx, s, uid, gid)
+	mgr := NewManager(s, uid, gid)
 
 	w3 := &Worker{
 		Name: "test-worker-3",
