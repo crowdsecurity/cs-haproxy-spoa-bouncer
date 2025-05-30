@@ -2,7 +2,6 @@
 package worker
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
