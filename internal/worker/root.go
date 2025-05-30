@@ -13,13 +13,14 @@ import (
 )
 
 type Worker struct {
-	Name       string     `yaml:"name"`
-	Config     string     `yaml:"config"`
-	LogLevel   *log.Level `yaml:"log_level"`
-	UID        int        `yaml:"-"` // Set by the worker manager
-	GID        int        `yaml:"-"` // Set by the worker manager
-	Command    *exec.Cmd  `yaml:"-"`
-	SocketPath string     `yaml:"-"` // Set by combining the socket dir and the worker name
+	Name     string     `yaml:"name" json:"name"`
+	LogLevel *log.Level `yaml:"log_level" json:"log_level"`
+
+	Config     string    `yaml:"-"  json:"-"`
+	UID        int       `yaml:"-" json:"-"` // Set by the worker manager
+	GID        int       `yaml:"-" json:"-"` // Set by the worker manager
+	Command    *exec.Cmd `yaml:"-" json:"-"`
+	SocketPath string    `yaml:"-" json:"-"` // Set by combining the socket dir and the worker name
 }
 
 type WorkerConfig struct {
