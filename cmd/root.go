@@ -238,10 +238,10 @@ func Execute() error {
 		defer adminServer.Close()
 	}
 
-	workerManager := worker.NewManager(ctx, workerServer, config.WorkerUid, config.WorkerGid)
+	workerManager := worker.NewManager(workerServer, config.WorkerUid, config.WorkerGid)
 
 	g.Go(func() error {
-		return workerManager.Run()
+		return workerManager.Run(ctx)
 	})
 
 	apiServer := api.NewAPI(ctx, workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
