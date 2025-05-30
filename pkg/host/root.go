@@ -40,7 +40,6 @@ type Host struct {
 
 type Manager struct {
 	Hosts []*Host
-	ctx   context.Context
 	Chan  chan HostOp
 	cache map[string]*Host
 	sync.RWMutex
@@ -64,9 +63,8 @@ func (h *Manager) String() string {
 	return b.String()
 }
 
-func NewManager(ctx context.Context) *Manager {
+func NewManager() *Manager {
 	return &Manager{
-		ctx:   ctx,
 		Hosts: make([]*Host, 0),
 		Chan:  make(chan HostOp),
 		cache: make(map[string]*Host),
@@ -93,7 +91,7 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 	return nil
 }
 
-func (h *Manager) Run() {
+func (h *Manager) Run(ctx context.Context) {
 	for {
 		select {
 		case instruction := <-h.Chan:
@@ -104,13 +102,13 @@ func (h *Manager) Run() {
 				h.removeHost(instruction.Host)
 			case OpAdd:
 				h.cache = make(map[string]*Host)
-				h.addHost(instruction.Host)
+				h.addHost(ctx, instruction.Host)
 				h.sort()
 			case OpPatch:
 				h.patchHost(instruction.Host)
 			}
 			h.Unlock()
-		case <-h.ctx.Done():
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -189,7 +187,7 @@ func (h *Manager) patchHost(host *Host) {
 	//TODO
 }
 
-func (h *Manager) addHost(host *Host) {
+func (h *Manager) addHost(ctx context.Context, host *Host) {
 	clog := log.New()
 
 	if host.LogLevel != nil {
@@ -198,13 +196,13 @@ func (h *Manager) addHost(host *Host) {
 
 	host.logger = clog.WithField("host", host.Host)
 
-	if err := host.Captcha.Init(host.logger, h.ctx); err != nil {
+	if err := host.Captcha.Init(host.logger, ctx); err != nil {
 		host.logger.Error(err)
 	}
 	if err := host.Ban.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
-	if err := host.AppSec.Init(host.logger, h.ctx); err != nil {
+	if err := host.AppSec.Init(host.logger, ctx); err != nil {
 		host.logger.Error(err)
 	}
 	h.Hosts = append(h.Hosts, host)
