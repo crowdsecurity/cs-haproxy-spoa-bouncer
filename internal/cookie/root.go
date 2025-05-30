@@ -73,13 +73,14 @@ func (c *CookieGenerator) GenerateCookie(session *session.Session, ssl *bool) (*
 		SameSite: http.SameSiteStrictMode,
 	}
 
-	if c.Secure == "auto" {
+	switch c.Secure {
+	case "auto":
 		if ssl != nil {
 			cookie.Secure = *ssl
 		} else {
 			c.logger.Warn("ssl flag not set, defaulting to false")
 		}
-	} else if c.Secure == "always" {
+	case "always":
 		cookie.Secure = true
 	}
 
