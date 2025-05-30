@@ -400,11 +400,11 @@ func (a *API) Run() error {
 	}
 }
 
-func ArgsCheck(args []string, min int, max int) error {
-	if len(args) < min {
+func ArgsCheck(args []string, minValue int, maxValue int) error {
+	if len(args) < minValue {
 		return fmt.Errorf("missing argument")
 	}
-	if len(args) > max {
+	if len(args) > maxValue {
 		return fmt.Errorf("too many arguments")
 	}
 	return nil
