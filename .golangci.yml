@@ -79,7 +79,6 @@ linters:
     - perfsprint
     - noctx # manu
     - dupword
-    - containedctx # manu
 
 
   settings:
