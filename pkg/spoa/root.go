@@ -31,7 +31,6 @@ type Spoa struct {
 	ListenSocket net.Listener
 	Server       *agent.Agent
 	HAWaitGroup  *sync.WaitGroup
-	ctx          context.Context
 	cancel       context.CancelFunc
 	logger       *log.Entry
 	workerClient *worker.WorkerClient
@@ -59,12 +58,8 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		return nil, fmt.Errorf("failed to create worker client: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
 	s := &Spoa{
 		HAWaitGroup:  &sync.WaitGroup{},
-		ctx:          ctx,
-		cancel:       cancel,
 		logger:       clog.WithField("worker", name),
 		workerClient: client,
 	}
@@ -418,11 +413,6 @@ func handlerWrapper(s *Spoa) func(req *request.Request) {
 	return func(req *request.Request) {
 		s.HAWaitGroup.Add(1)
 		defer s.HAWaitGroup.Done()
-
-		if s.ctx.Err() != nil {
-			log.Warn("context is done, skipping request")
-			return
-		}
 
 		for _, messageName := range messageNames {
 			mes, err := req.Messages.GetByName(messageName)
