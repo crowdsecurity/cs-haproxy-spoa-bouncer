@@ -26,8 +26,8 @@ func TestGetCityAndASN(t *testing.T) {
 		t.Fatalf("GetCity returned error: %v", err)
 	}
 
-	assert.Equal(t, city.City.Names["en"], "Boxford", "Expected city name 'Boxford', got '%s'", city.City.Names["en"])
-	assert.Equal(t, city.Continent.Names["en"], "Europe", "Expected continent name 'Europe', got '%s'", city.City.Names["en"])
+	assert.Equal(t, "Boxford", city.City.Names["en"], "Expected city name 'Boxford', got '%s'", city.City.Names["en"])
+	assert.Equal(t, "Europe", city.Continent.Names["en"], "Expected continent name 'Europe', got '%s'", city.City.Names["en"])
 
 	ip = net.ParseIP("1.0.0.1")
 	asn, err := g.GetASN(&ip)
@@ -42,7 +42,7 @@ func TestGetCityAndASN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCity returned error: %v", err)
 	}
-	assert.Equal(t, city.City.Names["en"], "", "Expected city name '', got '%s'", city.City.Names["en"])
-	assert.Equal(t, city.Continent.Names["en"], "", "Expected continent name '', got '%s'", city.City.Names["en"])
+	assert.Equal(t, "", city.City.Names["en"], "Expected city name '', got '%s'", city.City.Names["en"])
+	assert.Equal(t, "", city.Continent.Names["en"], "Expected continent name '', got '%s'", city.City.Names["en"])
 
 }

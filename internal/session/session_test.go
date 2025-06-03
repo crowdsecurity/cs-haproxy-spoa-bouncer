@@ -24,8 +24,7 @@ func TestNewSession(t *testing.T) {
 		t.Errorf("NewSession generated invalid UUID %q: %v", s.UUID, err)
 	}
 	// KV should be initialized empty
-	assert.Len(t, s.KV, 0, "NewSession: expected empty KV, got %v", s.KV)
-
+	assert.Empty(t, s.KV, "NewSession: expected empty KV map, got %v", s.KV)
 	// CreationTime and UpdateTime should be close to now (within 1 second)
 	now := time.Now().UTC()
 	if s.CreationTime.After(now) {
@@ -39,8 +38,8 @@ func TestNewSession(t *testing.T) {
 func TestNewSessionWithUUID(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	s := NewSessionWithUUID(testUUID)
-	assert.Equal(t, s.UUID, testUUID, "NewSessionWithUUID: expected UUID %q, got %q", testUUID, s.UUID)
-	assert.Len(t, s.KV, 0, "NewSessionWithUUID: expected empty KV, got %v", s.KV)
+	assert.Equal(t, testUUID, s.UUID, "NewSessionWithUUID: expected UUID %q, got %q", testUUID, s.UUID)
+	assert.Empty(t, s.KV, "NewSessionWithUUID: expected empty KV map, got %v", s.KV)
 }
 
 // TestGetSetDelete ensures that Set stores a key/value, Get retrieves it, Delete removes it,
