@@ -42,7 +42,6 @@ func TestGetCityAndASN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCity returned error: %v", err)
 	}
-	assert.Equal(t, "", city.City.Names["en"], "Expected city name '', got '%s'", city.City.Names["en"])
-	assert.Equal(t, "", city.Continent.Names["en"], "Expected continent name '', got '%s'", city.City.Names["en"])
-
+	assert.Empty(t, city.City.Names, "Expected empty city names map, got %v", city.City.Names)
+	assert.Empty(t, city.Continent.Names, "Expected empty continent names map, got %v", city.Continent.Names)
 }
