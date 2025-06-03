@@ -224,6 +224,8 @@ func Execute() error {
 		return fmt.Errorf("failed to create worker server: %w", err)
 	}
 
+	defer workerServer.Close()
+
 	if config.AdminSocket != "" {
 		adminServer, err := server.NewAdminSocket(socketConnChan)
 
@@ -266,8 +268,6 @@ func Execute() error {
 			return err
 		}
 	}
-
-	workerServer.Close()
 
 	return nil
 }
