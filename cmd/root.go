@@ -219,6 +219,7 @@ func Execute() error {
 	socketConnChan := make(chan server.SocketConn)
 
 	workerServer, err := server.NewWorkerSocket(socketConnChan, config.WorkerSocketDir)
+	defer workerServer.Close()
 
 	if err != nil {
 		return fmt.Errorf("failed to create worker server: %w", err)
@@ -266,8 +267,6 @@ func Execute() error {
 			return err
 		}
 	}
-
-	workerServer.Close()
 
 	return nil
 }
