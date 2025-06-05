@@ -55,12 +55,12 @@ func HandleSignals(ctx context.Context) error {
 
 func Execute() error {
 	// Parent pflags
-	configPath := pflag.String("c", "", "path to crowdsec-spoa-bouncer.yaml")
-	verbose := pflag.Bool("v", false, "set verbose mode")
+	configPath := pflag.StringP("config", "c", "/etc/crowdsec/bouncer/crowdsec-spoa-bouncer.yaml", "path to crowdsec-spoa-bouncer.yaml")
+	verbose := pflag.BoolP("verbose", "v", false, "set verbose mode")
 	bouncerVersion := pflag.Bool("V", false, "display version and exit (deprecated)")
 	pflag.BoolVar(bouncerVersion, "version", *bouncerVersion, "display version and exit")
-	testConfig := pflag.Bool("t", false, "test config and exit")
-	showConfig := pflag.Bool("T", false, "show full config (.yaml + .yaml.local) and exit")
+	testConfig := pflag.BoolP("test", "t", false, "test config and exit")
+	showConfig := pflag.BoolP("show-config", "T", false, "show full config (.yaml + .yaml.local) and exit")
 
 	// Worker pflags
 	tcpAddr := pflag.String("tcp", "", "tcp listener address")
