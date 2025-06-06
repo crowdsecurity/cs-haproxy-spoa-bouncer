@@ -63,8 +63,8 @@ func (w *Worker) Run(socket string) error {
 	w.Command = command
 
 	if err := command.Run(); err != nil {
-		log.Errorf("worker %s exited with error: %s", w.Name, err)
 		w.Command = nil
+		return fmt.Errorf("worker %s exited with error: %w", w.Name, err)
 	}
 
 	log.Infof("Worker %s exited", w.Name)
@@ -73,6 +73,7 @@ func (w *Worker) Run(socket string) error {
 
 type Manager struct {
 	Workers    []*Worker      `yaml:"-"`
+	RetChan    chan error     `yaml:"-"`
 	CreateChan chan *Worker   `yaml:"-"`
 	Server     *server.Server `yaml:"-"`
 	WorkerUID  int            `yaml:"-"`
@@ -82,6 +83,7 @@ type Manager struct {
 func NewManager(s *server.Server, uid, gid int) *Manager {
 	return &Manager{
 		CreateChan: make(chan *Worker),
+		RetChan:    make(chan error),
 		Workers:    make([]*Worker, 0),
 		Server:     s,
 		WorkerUID:  uid,
@@ -96,7 +98,13 @@ func (m *Manager) Run(ctx context.Context) error {
 			m.AddWorker(w)
 		case <-ctx.Done():
 			m.Stop()
+			log.Info("Worker manager returned due to context cancellation")
 			return nil
+		case err := <-m.RetChan:
+			if err != nil {
+				log.Errorf("Worker manager received error: %s", err)
+				return err
+			}
 		}
 	}
 }
@@ -114,6 +122,7 @@ func (m *Manager) AddWorker(w *Worker) {
 		err := w.Run(socketString)
 		if err != nil {
 			m.Stop()
+			m.RetChan <- fmt.Errorf("worker %s failed: %w", w.Name, err)
 		}
 	}()
 

@@ -65,7 +65,7 @@ func Execute() error {
 	// Worker pflags
 	tcpAddr := pflag.String("tcp", "", "tcp listener address")
 	unixAddr := pflag.String("unix", "", "unix listener address")
-	workerMode := pflag.Bool("worker", false, "run as worker")
+	workerMode := pflag.BoolP("worker", "w", false, "run as worker")
 
 	pflag.Parse()
 
