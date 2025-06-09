@@ -183,7 +183,11 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 	if s.ListenAddr != nil {
 		s.ListenAddr.Close()
 	}
-	// We don't close the unix socket as we want to persist permissions
+
+	// Initially  we didn't close the unix socket as we wanted to persist permissions
+	if s.ListenSocket != nil {
+		s.ListenSocket.Close()
+	}
 
 	go func() {
 		s.cancel()
