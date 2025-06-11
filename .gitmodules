@@ -1,0 +1,6 @@
+[submodule "test/lib/bats-core"]
+	path = test/lib/bats-core
+	url = git@github.com:crowdsecurity/bats-core.git
+[submodule "test/lib/bats-assert"]
+	path = test/lib/bats-assert
+	url = git@github.com:crowdsecurity/bats-assert.git

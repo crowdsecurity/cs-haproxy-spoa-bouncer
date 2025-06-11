@@ -79,9 +79,7 @@ test:
 	@$(GOTEST) $(LD_OPTS) ./...
 
 .PHONY: func-tests
-func-tests: build
-	pipenv install --dev
-	pipenv run pytest -v
+func-tests: build test
 
 #
 # Build release tarballs
@@ -131,3 +129,10 @@ release: clean tarball
 .PHONY: platform-all
 platform-all: clean
 	python3 .github/release.py run-build $(BINARY_NAME)
+
+
+ifeq (,$(wildcard test/bats.mk))
+bats-clean:
+else
+include test/bats.mk
+endif
