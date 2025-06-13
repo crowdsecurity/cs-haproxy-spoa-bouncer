@@ -1,0 +1,14 @@
+[Unit]
+Description=The custom bouncer for CrowdSec
+After=syslog.target network.target remote-fs.target nss-lookup.target crowdsec.service
+
+[Service]
+Type=notify
+ExecStart=${BIN} -c ${CFG}/crowdsec-haproxy-spoa-bouncer.yaml
+ExecStartPre=${BIN} -c ${CFG}/crowdsec-haproxy-spoa-bouncer.yaml -t
+ExecStartPost=/bin/sleep 0.1
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
