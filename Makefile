@@ -2,7 +2,7 @@ GOCMD=go
 GOBUILD=$(GOCMD) build
 GOTEST=$(GOCMD) test
 
-BINARY_NAME=crowdsec-haprox-spoa-bouncer
+BINARY_NAME=crowdsec-haproxy-spoa-bouncer
 TARBALL_NAME=$(BINARY_NAME).tgz
 
 # Versioning information can be overridden in the environment
