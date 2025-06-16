@@ -22,6 +22,7 @@ Requires: gettext
 %global local_version v%{version_number}-%{releasever}-rpm
 %global name crowdsec-haproxy-spoa-bouncer
 %global __mangle_shebangs_exclude_from /usr/bin/env
+%define binary_name crowdsec-spoa-bouncer
 
 %prep
 %setup -n %{name}-%{version}
@@ -32,25 +33,25 @@ BUILD_VERSION=%{local_version} make
 %install
 rm -rf %{buildroot}
 mkdir -p %{buildroot}%{_bindir}
-install -m 755 -D %{name} %{buildroot}%{_bindir}/%{name}
-install -m 600 -D config/%{name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{name}.yaml
-install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{name}/_bouncer.sh
-BIN=%{_bindir}/%{name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{name}.service
+install -m 755 -D %{binary_name} %{buildroot}%{_bindir}/%{binary_name}
+install -m 600 -D config/%{name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
+install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{binary_name}/_bouncer.sh
+BIN=%{_bindir}/%{name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{binary_name}.service
 
 %clean
 rm -rf %{buildroot}
 
 %files
 %defattr(-,root,root,-)
-%{_bindir}/%{name}
-/usr/lib/%{name}/_bouncer.sh
-%{_unitdir}/%{name}.service
-%config(noreplace) /etc/crowdsec/bouncers/%{name}.yaml
+%{_bindir}/%{binary_name}
+/usr/lib/%{binary_name}/_bouncer.sh
+%{_unitdir}/%{binary_name}.service
+%config(noreplace) /etc/crowdsec/bouncers/%{binary_name}.yaml
 
 %post
 systemctl daemon-reload
 
-. /usr/lib/%{name}/_bouncer.sh
+. /usr/lib/%{binary_name}/_bouncer.sh
 START=1
 
 if [ "$1" = "1" ]; then
