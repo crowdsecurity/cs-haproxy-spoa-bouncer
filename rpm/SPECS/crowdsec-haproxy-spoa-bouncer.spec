@@ -36,6 +36,8 @@ mkdir -p %{buildroot}%{_bindir}
 install -m 755 -D %{binary_name} %{buildroot}%{_bindir}/%{binary_name}
 install -m 600 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
 install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{binary_name}/_bouncer.sh
+install -m 644 -D %{buildroot}%{_docdir}/crowdsec.cfg config/examples/crowdsec.cfg
+install -m 644 -D %{buildroot}%{_docdir}/crowdsec.cfg config/examples/haproxy.cfg
 BIN=%{_bindir}/%{name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{binary_name}.service
 
 %clean
@@ -47,6 +49,8 @@ rm -rf %{buildroot}
 /usr/lib/%{binary_name}/_bouncer.sh
 %{_unitdir}/%{binary_name}.service
 %config(noreplace) /etc/crowdsec/bouncers/%{binary_name}.yaml
+%{_docdir}/examples/crowdsec.cfg
+%{_docdir}/examples/haproxy.cfg
 
 %post
 systemctl daemon-reload
@@ -74,7 +78,8 @@ else
     systemctl start "$SERVICE"
 fi
 
-echo "please enter the binary path in '$CONFIG' and start the bouncer via 'sudo systemctl start $SERVICE'"
+echo "To configure your haproxy, please refer to the documentation at https://docs.crowdsec.net/docs/haproxy-bouncer/"
+echo "Some configuration examples can be found in /usr/share/doc/%{name}/examples/"
 
 %changelog
 * Fri Jun 13 2025 Manuel Sabban <manuel@crowdsec.net>
