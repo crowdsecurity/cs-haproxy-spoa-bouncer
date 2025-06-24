@@ -22,6 +22,10 @@ if [ "$START" -eq 0 ]; then
     echo "no api key was generated, you can generate one on your LAPI server by running 'cscli bouncers add <bouncer_name>' and add it to '$CONFIG'" >&2
 fi
 
+if ! getent passwd crowdsec-spoa >/dev/null; then
+    adduser --system --group --comment "crowdsec haproxy spoa bouncer"
+fi
+
 echo "please enter the binary path in '$CONFIG' and start the bouncer via 'sudo systemctl start $SERVICE'"
 echo "To configure your haproxy, please refer to the documentation at https://docs.crowdsec.net/docs/haproxy-bouncer/"
 echo "Some configuration examples can be found in /usr/share/doc/%{name}/examples/"
