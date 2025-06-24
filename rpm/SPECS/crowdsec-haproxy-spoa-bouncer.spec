@@ -67,6 +67,11 @@ if [ "$1" = "1" ]; then
     fi
 fi
 
+if ! getent passwd crowdsec-spoa >/dev/null; then
+    adduser --system --group --comment "crowdsec haproxy spoa bouncer"
+fi
+
+
 %systemd_post %{name}.service
 
 if [ "$START" -eq 0 ]; then
