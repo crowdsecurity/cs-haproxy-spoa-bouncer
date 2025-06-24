@@ -15,7 +15,7 @@ override_dh_auto_install:
 	@make build
 
 	@BOUNCER=crowdsec-spoa-bouncer; \
-	PKG="$$BOUNCER"; \
+	PKG="crowdsec-haproxy-spoa-bouncer"; \
 	install -D "$$BOUNCER" -t "debian/$$PKG/usr/bin/"; \
 	install -D "scripts/_bouncer.sh" -t "debian/$$PKG/usr/lib/$$PKG/"; \
 	install -D "config/$$BOUNCER.yaml" "debian/$$PKG/etc/crowdsec/bouncers/$$BOUNCER.yaml"; \
