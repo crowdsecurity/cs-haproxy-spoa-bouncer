@@ -104,7 +104,7 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 
 	assert.NotNil(t, w.Command, "expected worker command to be set")
 	expectedCommandPrefix := "/tmp/go-build"
-	expectedCommandSuffix := `worker.test -worker -config {"name":"test-worker-1","log_level":null}`
+	expectedCommandSuffix := `worker.test --worker --config {"name":"test-worker-1","log_level":null}`
 	commandString := w.Command.String()
 	assert.True(t, strings.HasPrefix(commandString, expectedCommandPrefix), "expected worker command to start with %s", expectedCommandPrefix)
 	assert.True(t, strings.HasSuffix(commandString, expectedCommandSuffix), "expected worker command to end with %s", expectedCommandSuffix)
