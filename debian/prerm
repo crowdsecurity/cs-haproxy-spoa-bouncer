@@ -2,7 +2,7 @@
 
 set -eu
 
-BOUNCER="crowdsec-haproxy-spoa--bouncer"
+BOUNCER="crowdsec-haproxy-spoa-bouncer"
 
 systemctl stop "$BOUNCER" || echo "cannot stop service"
 systemctl disable "$BOUNCER" || echo "cannot disable service"
