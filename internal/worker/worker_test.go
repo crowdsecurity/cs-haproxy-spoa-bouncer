@@ -3,7 +3,6 @@ package worker
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -13,15 +12,16 @@ import (
 	"time"
 
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 )
 
 // func TestMain implements the helper process trick. When Worker.Run spawns a new process,
 // the test binary is re-invoked. In that case we check for the "-worker" flag and exit immediately.
 func TestMain(m *testing.M) {
-	configFlag := flag.String("config", "", "Configuration JSON")
-	workerFlag := flag.Bool("worker", false, "Worker flag")
-	flag.Parse()
+	configFlag := pflag.String("config", "", "Configuration JSON")
+	workerFlag := pflag.Bool("worker", false, "Worker flag")
+	pflag.Parse()
 
 	if *workerFlag {
 		var config Worker
@@ -178,7 +178,7 @@ func TestManagerAddWorkersNewWorkerListenerError(t *testing.T) {
 	assert.Nil(t, w2.Command, "expected worker command to be nil")
 	assert.Nil(t, mgr.Workers[1].Command, "expected worker command to be nil")
 	expectedCommandPrefix := "/tmp/go-build"
-	expectedCommandSuffix := `worker.test -worker -config {"name":"test-worker-3","log_level":null}`
+	expectedCommandSuffix := `worker.test --worker --config {"name":"test-worker-3","log_level":null}`
 	commandString := w3.Command.String()
 	assert.True(t, strings.HasPrefix(commandString, expectedCommandPrefix), "expected worker command to start with %s", expectedCommandPrefix)
 	assert.True(t, strings.HasSuffix(commandString, expectedCommandSuffix), "expected worker command to end with %s", expectedCommandSuffix)
