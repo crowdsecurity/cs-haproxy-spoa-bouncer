@@ -23,7 +23,7 @@ if [ "$START" -eq 0 ]; then
 fi
 
 if ! getent passwd crowdsec-spoa >/dev/null; then
-    adduser --system --group --comment "crowdsec haproxy spoa bouncer"
+    adduser crowdsec-spoa --system --group --comment "crowdsec haproxy spoa bouncer"
 fi
 
 echo "please enter the binary path in '$CONFIG' and start the bouncer via 'sudo systemctl start $SERVICE'"
