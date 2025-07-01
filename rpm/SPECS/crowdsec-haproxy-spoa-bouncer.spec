@@ -57,11 +57,25 @@ rm -rf %{buildroot}
 %{_docdir}/examples/haproxy.cfg
 
 %post
-systemctl daemon-reload
+# Reload systemd units
+systemctl daemon-reexec >/dev/null 2>&1 || :
+systemctl daemon-reload >/dev/null 2>&1 || :
 
-. /usr/lib/%{binary_name}/_bouncer.sh
+# Set binary and service variables
+BINARY_NAME="crowdsec-spoa-bouncer"
+SERVICE="${BINARY_NAME}.service"
+CONFIG="/etc/crowdsec/bouncers/${BINARY_NAME}.yaml"
 START=1
 
+# Source helper script
+if [ -f "/usr/lib/${BINARY_NAME}/_bouncer.sh" ]; then
+    . "/usr/lib/${BINARY_NAME}/_bouncer.sh"
+else
+    echo "Missing _bouncer.sh, cannot auto-generate API key." >&2
+    START=0
+fi
+
+# On fresh install (not upgrade), try to generate API key
 if [ "$1" = "1" ]; then
     if need_api_key; then
         if ! set_api_key; then
@@ -70,25 +84,23 @@ if [ "$1" = "1" ]; then
     fi
 fi
 
+# Ensure system user exists
 if ! getent passwd crowdsec-spoa >/dev/null; then
-    adduser --system --group --comment "crowdsec haproxy spoa bouncer"
+    adduser --system --group --no-create-home --shell /sbin/nologin crowdsec-spoa
 fi
 
-
-%systemd_post %{name}.service
-
+# Handle systemd unit
 if [ "$START" -eq 0 ]; then
-    echo "no api key was generated, you can generate one on your LAPI Server by running 'cscli bouncers add <bouncer_name>' and add it to '$CONFIG'" >&2
+    echo "No API key was generated. You can generate one on your LAPI server with:"
+    echo "    cscli bouncers add <bouncer_name>"
+    echo "Then add it to: $CONFIG"
 else
-    echo "Not starting the bouncer, please adapt your haproxy accordingly start the service manually."
-    %if 0%{?fc35}
-    systemctl enable "$SERVICE"
-    %endif
-    systemctl start "$SERVICE"
+    echo "Not starting the bouncer automatically. Please update your haproxy and start the service manually."
+%if 0%{?fc35}
+    systemctl enable "$SERVICE" >/dev/null 2>&1 || :
+%endif
+    systemctl start "$SERVICE" >/dev/null 2>&1 || :
 fi
-
-echo "To configure your haproxy, please refer to the documentation at https://docs.crowdsec.net/docs/haproxy-bouncer/"
-echo "Some configuration examples can be found in /usr/share/doc/%{name}/examples/"
 
 %changelog
 * Fri Jun 13 2025 Manuel Sabban <manuel@crowdsec.net>
