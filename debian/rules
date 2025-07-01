@@ -32,4 +32,4 @@ execute_after_dh_fixperms:
 	chmod 0755 "debian/$$PKG/usr/bin/$$BOUNCER"; \
 	chmod 0600 "debian/$$PKG/usr/lib/$$PKG/_bouncer.sh"; \
 	chmod 0600 "debian/$$PKG/etc/crowdsec/bouncers/$$BOUNCER.yaml"; \
-	chmod 0644 "debian/$$PKG/etc/systemd/system/$$BOUNCER.service"
+	chmod 0644 "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"
