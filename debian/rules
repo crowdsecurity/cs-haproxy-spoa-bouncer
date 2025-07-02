@@ -22,6 +22,7 @@ override_dh_auto_install:
 	BIN="/usr/bin/$$BOUNCER" CFG="/etc/crowdsec/bouncers" envsubst '$$BIN $$CFG' < "config/$$BOUNCER.service" | install -D /dev/stdin "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"
 	install -D config/crowdsec.cfg debian/usr/share/doc/$$PKG/crowdsec.cfg
 	install -D config/haproxy.cfg debian/usr/share/doc/$$PKG/haproxy.cfg
+	mkdir -p debian/usr/lib/$$PKG
 	install -D lua/crowdsec.lua debian/usr/lib/$$PKG/crowdsec.lua
 	install -D lua/utils.lua debian/usr/lib/$$PKG/utils.lua
 	install -D lua/template.lua debian/usr/lib/$$PKG/template.lua
