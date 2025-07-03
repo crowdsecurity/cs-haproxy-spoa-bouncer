@@ -1,4 +1,16 @@
-package.path = package.path .. ";./?.lua"
+-- Dynamically set package.path based on the script location
+local function get_script_dir()
+    local info = debug.getinfo(1, "S") -- "S" = source
+    local source = info.source
+    if source:sub(1, 1) == "@" then
+        local path = source:sub(2) -- remove the "@"
+        return path:match("(.*/)")
+    end
+    return "./"
+end
+
+local script_dir = get_script_dir()
+package.path = package.path .. ";" .. script_dir .. "?.lua"
 
 local utils = require "utils"
 local template = require "template"
@@ -15,6 +27,8 @@ local function NewTemplate(path)
     return self
 end
 
+-- @param prefix the prefix to add to the log
+-- @return object with log, info, error, warning and debug functions
 local function NewLogger(prefix)
     local self = {}
     self.prefix = prefix
@@ -22,19 +36,20 @@ local function NewLogger(prefix)
         core.log(level, self.prefix .. message)
     end
     self.info = function(message)
-        self.log(core.info, "[INFO] " .. message)
+        core.Info("[INFO] " .. message)
     end
     self.error = function(message)
-        self.log(core.error, "[ERROR] " .. message)
+        core.log(core.err, "[ERROR] " .. message)
     end
     self.warning = function(message)
-        self.log(core.warning, "[WARN] " .. message)
+        core.Warning("[WARN] " .. message)
     end
     self.debug = function(message)
-        self.log(core.debug, "[DEBUG] " .. message)
+        core.Debug("[DEBUG] " .. message)
     end
     return self
 end
+
 
 local runtime = {}
 
