@@ -19,13 +19,12 @@ override_dh_auto_install:
 	install -D "$$BOUNCER" -t "debian/$$PKG/usr/bin/"; \
 	install -D "scripts/_bouncer.sh" -t "debian/$$PKG/usr/lib/$$PKG/"; \
 	install -D "config/$$BOUNCER.yaml" "debian/$$PKG/etc/crowdsec/bouncers/$$BOUNCER.yaml"; \
-	BIN="/usr/bin/$$BOUNCER" CFG="/etc/crowdsec/bouncers" envsubst '$$BIN $$CFG' < "config/$$BOUNCER.service" | install -D /dev/stdin "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"
-	install -D "config/crowdsec.cfg" "debian/$$PKGusr/share/doc/$$PKG/crowdsec.cfg"
-	install -D "config/haproxy.cfg" "debian/$$PKGusr/share/doc/$$PKG/haproxy.cfg"
-	mkdir -p debian/usr/lib/$$PKG/lua
-	install -D "lua/crowdsec.lua" "debian/$$PKG/usr/lib/$$PKG/lua/crowdsec.lua"
-	install -D "lua/utils.lua" "debian/usr/$$PKG/lib/$$PKG/lua/utils.lua"
-	install -D "lua/template.lua" "debian/$$PKG/usr/lib/$$PKG/lua/template.lua"
+	BIN="/usr/bin/$$BOUNCER" CFG="/etc/crowdsec/bouncers" envsubst '$$BIN $$CFG' < "config/$$BOUNCER.service" | install -D /dev/stdin "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"; \
+	install -D "config/crowdsec.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/"; \
+	install -D "config/haproxy.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/"; \
+	install -D "lua/crowdsec.lua" "debian/$$PKG/usr/lib/$$PKG/lua/"; \
+	install -D "lua/utils.lua" "debian/$$PKG/usr/lib/$$PKG/lua/"; \
+	install -D "lua/template.lua" "debian/$$PKG/usr/lib/$$PKG/lua/";
 
 execute_after_dh_fixperms:
 	@BOUNCER=crowdsec-spoa-bouncer; \
