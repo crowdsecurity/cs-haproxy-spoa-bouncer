@@ -30,7 +30,7 @@ type WorkerConfig struct {
 
 func (w *Worker) Run(socket string) error {
 	args := []string{
-		"-worker",
+		"--worker",
 	}
 
 	config, err := json.Marshal(*w)
@@ -38,7 +38,7 @@ func (w *Worker) Run(socket string) error {
 		return fmt.Errorf("failed to marshal appsec config: %w", err)
 	}
 
-	args = append(args, "-config", string(config))
+	args = append(args, "--config", string(config))
 	command := exec.Command(os.Args[0], args...)
 
 	command.Env = []string{

@@ -14,17 +14,17 @@ api_key: ${API_KEY}
 insecure_skip_verify: false
 
 ## SPOA configuration
-# workers:
-#   - name: spoa1
-#     listen_addr: 0.0.0.0:9000
-#     listen_socket: /run/crowdsec-spoa/spoa-1.sock
-# worker_user: crowdsec-spoa
-# worker_group: crowdsec-spoa
-# asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
-# city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
+workers:
+  - name: spoa1
+    listen_addr: 0.0.0.0:9000
+    listen_socket: /run/crowdsec-spoa/spoa-1.sock
+worker_user: crowdsec-spoa
+worker_group: crowdsec-spoa
+#asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
+#city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
 
 #admin socket
-#admin_socket: /run/crowdsec-spoa-admin.sock
+admin_socket: /run/crowdsec-spoa-admin.sock
 
 
 prometheus:
