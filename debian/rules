@@ -26,7 +26,8 @@ override_dh_auto_install:
 	install -D "config/haproxy.cfg" -t "debian/$$PKG/usr/share/doc/$$PKG/examples/"; \
 	install -D "lua/crowdsec.lua" -t "debian/$$PKG/usr/lib/$$PKG/lua/"; \
 	install -D "lua/utils.lua" -t "debian/$$PKG/usr/lib/$$PKG/lua/"; \
-	install -D "lua/template.lua" -t "debian/$$PKG/usr/lib/$$PKG/lua/";
+	install -D "lua/template.lua" -t "debian/$$PKG/usr/lib/$$PKG/lua/"; \
+	sed -i 's|/usr/local/lib/crowdsec/lua//\?.lua"|/usr/lib/crowdsec-haproxy-spoa-bouncer/lua//?.lua"|g' "debian/$$PKG/usr/lib/$$PKG/lua/crowdsec.lua";
 
 execute_after_dh_fixperms:
 	@BOUNCER=crowdsec-spoa-bouncer; \
