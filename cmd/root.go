@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -63,21 +64,29 @@ func Execute() error {
 	showConfig := pflag.BoolP("show-config", "T", false, "show full config (.yaml + .yaml.local) and exit")
 
 	// Worker pflags
-	tcpAddr := pflag.String("tcp", "", "tcp listener address")
-	unixAddr := pflag.String("unix", "", "unix listener address")
 	workerMode := pflag.BoolP("worker", "w", false, "run as worker")
+	workerConfigJSON := pflag.String("worker-config", "", "worker configuration as JSON string")
 
 	pflag.Parse()
+	if *workerMode {
+		if *workerConfigJSON != "" {
+			var w worker.Worker
+			if err := json.Unmarshal([]byte(*workerConfigJSON), &w); err != nil {
+				return fmt.Errorf("failed to parse worker config JSON: %w", err)
+			}
 
-	if !*workerMode && (*tcpAddr != "" || *unixAddr != "") {
-		return fmt.Errorf("parent process cannot have listener address")
+			if w.TcpAddr == "" && w.UnixAddr == "" {
+				return fmt.Errorf("worker must have one listener address")
+			}
+			return WorkerExecute(w)
+
+		} else {
+			return fmt.Errorf("worker mode requires --worker-config to be set and be a valid configuration json string")
+		}
 	}
 
-	if *workerMode {
-		if *tcpAddr == "" && *unixAddr == "" {
-			return fmt.Errorf("worker process must have one listener address")
-		}
-		return WorkerExecute(*tcpAddr, *unixAddr)
+	if !*workerMode && *workerConfigJSON != "" {
+		return fmt.Errorf("parent process cannot have --worker-config set without --worker flag")
 	}
 
 	if *bouncerVersion {
@@ -124,7 +133,8 @@ func Execute() error {
 		return fmt.Errorf("unable to configure bouncer: %w", err)
 	}
 
-	g, ctx := errgroup.WithContext(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	g, ctx := errgroup.WithContext(ctx)
 
 	config.Geo.Init(ctx)
 
@@ -138,7 +148,11 @@ func Execute() error {
 	}
 
 	g.Go(func() error {
-		return HandleSignals(ctx)
+		err := HandleSignals(ctx)
+		if err != nil {
+			cancel()
+		}
+		return err
 	})
 
 	g.Go(func() error {
@@ -153,7 +167,10 @@ func Execute() error {
 	}
 
 	g.Go(func() error {
-		return metricsProvider.Run(ctx)
+		if err := metricsProvider.Run(ctx); err != nil {
+			cancel()
+		}
+		return err
 	})
 
 	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests)
@@ -224,10 +241,10 @@ func Execute() error {
 		return fmt.Errorf("failed to create worker server: %w", err)
 	}
 
-	defer workerServer.Close()
-
+	var adminServer *server.Server
 	if config.AdminSocket != "" {
-		adminServer, err := server.NewAdminSocket(socketConnChan)
+		var err error
+		adminServer, err = server.NewAdminSocket(socketConnChan)
 
 		if err != nil {
 			return fmt.Errorf("failed to create admin server: %w", err)
@@ -237,13 +254,16 @@ func Execute() error {
 		if err != nil {
 			return fmt.Errorf("failed to create admin listener: %w", err)
 		}
-		defer adminServer.Close()
 	}
 
 	workerManager := worker.NewManager(workerServer, config.WorkerUid, config.WorkerGid)
 
 	g.Go(func() error {
-		return workerManager.Run(ctx)
+		err := workerManager.Run(ctx)
+		if err != nil {
+			cancel()
+		}
+		return err
 	})
 
 	apiServer := api.NewAPI(workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
@@ -253,7 +273,11 @@ func Execute() error {
 	}
 
 	g.Go(func() error {
-		return apiServer.Run(ctx)
+		err := apiServer.Run(ctx)
+		if err != nil {
+			cancel()
+		}
+		return err
 	})
 
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
@@ -272,7 +296,7 @@ func Execute() error {
 	return nil
 }
 
-func WorkerExecute(tcpAddr, unixAddr string) error {
+func WorkerExecute(w worker.Worker) error {
 
 	g, ctx := errgroup.WithContext(context.Background())
 
@@ -280,7 +304,7 @@ func WorkerExecute(tcpAddr, unixAddr string) error {
 		return HandleSignals(ctx)
 	})
 
-	spoad, err := spoa.New(tcpAddr, unixAddr)
+	spoad, err := spoa.New(w.TcpAddr, w.UnixAddr)
 
 	if err != nil {
 		return fmt.Errorf("failed to create SPOA: %w", err)
