@@ -33,6 +33,8 @@ BUILD_VERSION=%{local_version} make
 %install
 rm -rf %{buildroot}
 mkdir -p %{buildroot}%{_bindir}
+mkdir -p %{buildroot}%{_libdir}/%{name}
+mkdir -p %{buildroot}%{_localstatedir}/lib/%{name}
 mkdir -p %{buildroot}%{_docdir}/examples
 install -m 755 -D %{binary_name} %{buildroot}%{_bindir}/%{binary_name}
 install -m 600 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
@@ -40,9 +42,11 @@ install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{binary_name}/_bounc
 install -m 644 -D config/crowdsec.cfg %{buildroot}%{_docdir}/examples/crowdsec.cfg
 install -m 644 -D config/haproxy.cfg %{buildroot}%{_docdir}/examples/haproxy.cfg
 BIN=%{_bindir}/%{name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{binary_name}.service
-install -D lua/crowdsec.lua /usr/lib/%{buildroot}/%{_libdir}/crowdsec.lua
-install -D lua/utils.lua /usr/lib/%{buildroot}/%{_libdir}/utils.lua
-install -D lua/template.lua /usr/lib/%{buildroot}/%{_libdir}/template.lua
+install -D lua/crowdsec.lua %{buildroot}/%{_libdir}/%{name}/crowdsec.lua
+install -D lua/utils.lua %{buildroot}/%{_libdir}/%{name}/utils.lua
+install -D lua/template.lua %{buildroot}/%{_libdir}/%{name}/template.lua
+install -D templates/ban.html %{buildroot}%{_localstatedir}/lib/%{name}/ban.html
+install -D templates/captcha.html %{buildroot}%{_localstatedir}/lib/%{name}/captcha.html
 
 %clean
 rm -rf %{buildroot}
