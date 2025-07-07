@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
@@ -13,32 +14,26 @@ import (
 )
 
 type Worker struct {
-	Name     string     `yaml:"name" json:"name"`
-	LogLevel *log.Level `yaml:"log_level" json:"log_level"`
-
-	Config     string    `yaml:"-"  json:"-"`
-	UID        int       `yaml:"-" json:"-"` // Set by the worker manager
-	GID        int       `yaml:"-" json:"-"` // Set by the worker manager
-	Command    *exec.Cmd `yaml:"-" json:"-"`
-	SocketPath string    `yaml:"-" json:"-"` // Set by combining the socket dir and the worker name
-}
-
-type WorkerConfig struct {
-	ListenAddr   string `yaml:"listen_addr"`
-	ListenSocket string `yaml:"listen_socket"`
+	Name       string     `yaml:"name" json:"name"`
+	LogLevel   *log.Level `yaml:"log_level" json:"log_level"`
+	TcpAddr    string     `yaml:"listen_addr" json:"listen_addr"`
+	UnixAddr   string     `yaml:"listen_socket" json:"listen_socket"`
+	Config     string     `yaml:"-"  json:"-"`
+	UID        int        `yaml:"-" json:"-"` // Set by the worker manager
+	GID        int        `yaml:"-" json:"-"` // Set by the worker manager
+	Command    *exec.Cmd  `yaml:"-" json:"-"`
+	SocketPath string     `yaml:"-" json:"-"` // Set by combining the socket dir and the worker name
 }
 
 func (w *Worker) Run(socket string) error {
-	args := []string{
-		"--worker",
-	}
+	args := []string{}
 
 	config, err := json.Marshal(*w)
 	if err != nil {
 		return fmt.Errorf("failed to marshal appsec config: %w", err)
 	}
 
-	args = append(args, "--config", string(config))
+	args = append(args, "--worker-config", string(config))
 	command := exec.Command(os.Args[0], args...)
 
 	command.Env = []string{
@@ -49,7 +44,7 @@ func (w *Worker) Run(socket string) error {
 	if w.LogLevel != nil {
 		command.Env = append(command.Env, "LOG_LEVEL="+w.LogLevel.String())
 	}
-	log.Infof("Starting worker %s with cmd %s %v", w.Name, os.Args[0], args)
+	log.Infof("Starting worker %s with cmd %s %v", w.Name, os.Args[0], strings.Join(args, " "))
 
 	command.SysProcAttr = &syscall.SysProcAttr{}
 	command.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(w.UID), Gid: uint32(w.GID)}
@@ -63,6 +58,7 @@ func (w *Worker) Run(socket string) error {
 	w.Command = command
 
 	if err := command.Run(); err != nil {
+		log.Infof("Worker %s exited with error: %s", w.Name, err)
 		w.Command = nil
 		return fmt.Errorf("worker %s exited with error: %w", w.Name, err)
 	}
