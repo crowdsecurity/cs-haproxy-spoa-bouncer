@@ -64,34 +64,20 @@ func Execute() error {
 	showConfig := pflag.BoolP("show-config", "T", false, "show full config (.yaml + .yaml.local) and exit")
 
 	// Worker pflags
-	workerMode := pflag.BoolP("worker", "w", false, "run as worker")
 	workerConfigJSON := pflag.String("worker-config", "", "worker configuration as JSON string")
 
 	pflag.Parse()
-	if *workerMode {
-		if *workerConfigJSON != "" {
-			var w worker.Worker
-			if err := json.Unmarshal([]byte(*workerConfigJSON), &w); err != nil {
-				return fmt.Errorf("failed to parse worker config JSON: %w", err)
-			}
-
-			if w.TcpAddr == "" && w.UnixAddr == "" {
-				return fmt.Errorf("worker must have one listener address")
-			}
-			return WorkerExecute(w)
-
-		} else {
-			return fmt.Errorf("worker mode requires --worker-config to be set and be a valid configuration json string")
+	if *workerConfigJSON != "" {
+		var w worker.Worker
+		if err := json.Unmarshal([]byte(*workerConfigJSON), &w); err != nil {
+			return fmt.Errorf("failed to parse worker config JSON: %w", err)
 		}
-	}
 
-	if !*workerMode && *workerConfigJSON != "" {
-		return fmt.Errorf("parent process cannot have --worker-config set without --worker flag")
-	}
+		if w.TcpAddr == "" && w.UnixAddr == "" {
+			return fmt.Errorf("worker must have one listener address")
+		}
+		return WorkerExecute(w)
 
-	if *bouncerVersion {
-		fmt.Print(version.FullString())
-		return nil
 	}
 
 	if configPath == nil || *configPath == "" {
@@ -283,6 +269,8 @@ func Execute() error {
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
 
 	if err := g.Wait(); err != nil {
+		workerServer.Close()
+		adminServer.Close()
 		switch err.Error() {
 		case "received SIGTERM":
 			log.Info("Received SIGTERM, shutting down")

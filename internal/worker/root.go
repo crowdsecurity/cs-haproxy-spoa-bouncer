@@ -26,16 +26,14 @@ type Worker struct {
 }
 
 func (w *Worker) Run(socket string) error {
-	args := []string{
-		"--worker",
-	}
+	args := []string{}
 
 	config, err := json.Marshal(*w)
 	if err != nil {
 		return fmt.Errorf("failed to marshal appsec config: %w", err)
 	}
 
-	args = append(args, "--config-worker", string(config))
+	args = append(args, "--worker-config", string(config))
 	command := exec.Command(os.Args[0], args...)
 
 	command.Env = []string{
