@@ -59,6 +59,11 @@ rm -rf %{buildroot}
 %config(noreplace) /etc/crowdsec/bouncers/%{binary_name}.yaml
 %{_docdir}/examples/crowdsec.cfg
 %{_docdir}/examples/haproxy.cfg
+%{_libdir}/%{name}/crowdsec.lua
+%{_libdir}/%{name}/utils.lua
+%{_libdir}/%{name}/template.lua
+%{_localstatedir}/lib/%{name}/ban.html
+%{_localstatedir}/lib/%{name}/captcha.html
 
 %post
 # Reload systemd units
