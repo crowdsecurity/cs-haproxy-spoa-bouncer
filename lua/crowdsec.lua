@@ -55,25 +55,33 @@ local runtime = {}
 
 -- Loads the configuration
 local function init()
-    ban_template_path = os.getenv("CROWDSEC_BAN_TEMPLATE_PATH")
-    captcha_template_path = os.getenv("CROWDSEC_CAPTCHA_TEMPLATE_PATH")
-    crowdsec_log_level = os.getenv("CROWDSEC_LOG_LEVEL")
+    BAN_TEMPLATE_PATH = os.getenv("CROWDSEC_BAN_TEMPLATE_PATH")
+    CAPTCHA_TEMPLATE_PATH = os.getenv("CROWDSEC_CAPTCHA_TEMPLATE_PATH")
+    CROWDSEC_LOG_LEVEL = os.getenv("CROWDSEC_LOG_LEVEL")
     runtime.logger = NewLogger("[crowdsec] ")
     runtime.logger.info("initialising lua modules")
 
-    if ban_template_path == nil then
-        runtime.logger.error("CROWDSEC_BAN_TEMPLATE_PATH env is not set")
-        return
-    end
-    
-    runtime.ban = NewTemplate(ban_template_path)
-    
-    if captcha_template_path == nil then
-        runtime.logger.error("CROWDSEC_CAPTCHA_TEMPLATE_PATH env is not set")
-        return
+    if BAN_TEMPLATE_PATH == nil then
+        runtime.logger.warning("CROWDSEC_BAN_TEMPLATE_PATH env is not set trying default")
+        BAN_TEMPLATE_PATH =  "/var/lib/crowdsec-haproxy-spoa-bouncer/html/ban.html"
+        if not utils.file_exist(BAN_TEMPLATE_PATH) then
+            runtime.logger.error("Default ban template not found at " .. BAN_TEMPLATE_PATH)
+            return
+        end
     end
 
-    runtime.captcha = NewTemplate(captcha_template_path)
+    runtime.ban = NewTemplate(BAN_TEMPLATE_PATH)
+
+    if CAPTCHA_TEMPLATE_PATH == nil then
+        runtime.logger.warning("CROWDSEC_CAPTCHA_TEMPLATE_PATH env is not set using default")
+        CAPTCHA_TEMPLATE_PATH = "/var/lib/crowdsec-haproxy-spoa-bouncer/html/captcha.html"
+        if not utils.file_exist(CAPTCHA_TEMPLATE_PATH) then
+            runtime.logger.error("Default captcha template not found at " .. CAPTCHA_TEMPLATE_PATH)
+            return
+        end
+    end
+
+    runtime.captcha = NewTemplate(CAPTCHA_TEMPLATE_PATH)
     runtime.logger.info("lua modules initialised")
 end
 
@@ -100,11 +108,11 @@ function runtime.Handle(txn)
         runtime.logger.error("No remediation found")
         return
     end
-    
+
     -- Always disable cache
     reply:add_header("cache-control", "no-cache")
     reply:add_header("cache-control", "no-store")
-    
+
     if remediation == "allow" then
         local redirect_uri = get_txn_var(txn, "crowdsec.redirect")
         if redirect_uri ~= "" then
@@ -134,7 +142,7 @@ function runtime.Handle(txn)
         }))
     end
 
-    
+
     local hdr = txn.http:req_get_headers()
     if hdr ~= nil and utils.accept_html(hdr) == false then
         reply:set_body("Forbidden")
