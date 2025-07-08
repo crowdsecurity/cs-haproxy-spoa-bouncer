@@ -95,7 +95,7 @@ fi
 
 # Ensure system user exists
 if ! getent passwd crowdsec-spoa >/dev/null; then
-    adduser --system --group --no-create-home --shell /sbin/nologin crowdsec-spoa
+    adduser --system --no-create-home --shell /sbin/nologin crowdsec-spoa
 fi
 
 # Handle systemd unit
