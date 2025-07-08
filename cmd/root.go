@@ -119,8 +119,7 @@ func Execute() error {
 		return fmt.Errorf("unable to configure bouncer: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	g, ctx := errgroup.WithContext(ctx)
+	g, ctx := errgroup.WithContext(context.Background())
 
 	config.Geo.Init(ctx)
 
@@ -134,11 +133,7 @@ func Execute() error {
 	}
 
 	g.Go(func() error {
-		err := HandleSignals(ctx)
-		if err != nil {
-			cancel()
-		}
-		return err
+		return HandleSignals(ctx)
 	})
 
 	g.Go(func() error {
@@ -153,10 +148,7 @@ func Execute() error {
 	}
 
 	g.Go(func() error {
-		if err := metricsProvider.Run(ctx); err != nil {
-			cancel()
-		}
-		return err
+		return metricsProvider.Run(ctx)
 	})
 
 	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests)
@@ -245,11 +237,7 @@ func Execute() error {
 	workerManager := worker.NewManager(workerServer, config.WorkerUid, config.WorkerGid)
 
 	g.Go(func() error {
-		err := workerManager.Run(ctx)
-		if err != nil {
-			cancel()
-		}
-		return err
+		return workerManager.Run(ctx)
 	})
 
 	apiServer := api.NewAPI(workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
@@ -259,11 +247,7 @@ func Execute() error {
 	}
 
 	g.Go(func() error {
-		err := apiServer.Run(ctx)
-		if err != nil {
-			cancel()
-		}
-		return err
+		return apiServer.Run(ctx)
 	})
 
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
