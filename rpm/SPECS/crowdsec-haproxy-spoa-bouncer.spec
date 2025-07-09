@@ -53,8 +53,8 @@ rm -rf %{buildroot}
 
 %files
 %defattr(-,root,root,-)
-%{_bindir}/%{binary_name}
-/usr/lib/%{binary_name}/_bouncer.sh
+%{_bindir}/%{name}
+%{_libdir}/%{name}/_bouncer.sh
 %{_unitdir}/%{binary_name}.service
 %config(noreplace) /etc/crowdsec/bouncers/%{binary_name}.yaml
 %{_docdir}/examples/crowdsec.cfg
@@ -72,13 +72,14 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 
 # Set binary and service variables
 BINARY_NAME="crowdsec-spoa-bouncer"
+NAME="crowdsec-haproxy-spoa-bouncer"
 SERVICE="${BINARY_NAME}.service"
 CONFIG="/etc/crowdsec/bouncers/${BINARY_NAME}.yaml"
 START=1
 
 # Source helper script
-if [ -f "/usr/lib/${BINARY_NAME}/_bouncer.sh" ]; then
-    . "/usr/lib/${BINARY_NAME}/_bouncer.sh"
+if [ -f "/usr/lib/${NAME}/_bouncer.sh" ]; then
+    . "/usr/lib/${NAME}/_bouncer.sh"
 else
     echo "Missing _bouncer.sh, cannot auto-generate API key." >&2
     START=0
