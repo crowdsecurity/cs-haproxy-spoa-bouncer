@@ -41,7 +41,7 @@ install -m 600 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/
 install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{binary_name}/_bouncer.sh
 install -m 644 -D config/crowdsec.cfg %{buildroot}%{_docdir}/examples/crowdsec.cfg
 install -m 644 -D config/haproxy.cfg %{buildroot}%{_docdir}/examples/haproxy.cfg
-BIN=%{_bindir}/%{name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{binary_name}.service
+BIN=%{_bindir}/%{binary_name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{binary_name}.service
 install -D lua/crowdsec.lua %{buildroot}/%{_libdir}/%{name}/crowdsec.lua
 install -D lua/utils.lua %{buildroot}/%{_libdir}/%{name}/utils.lua
 install -D lua/template.lua %{buildroot}/%{_libdir}/%{name}/template.lua
