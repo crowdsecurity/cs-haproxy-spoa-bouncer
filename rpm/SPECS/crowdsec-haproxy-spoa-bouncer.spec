@@ -129,3 +129,4 @@ fi
 
 if [ "$1" == "1" ] ; then
     systemctl restart %{name} || echo "cannot restart service"
+fi
