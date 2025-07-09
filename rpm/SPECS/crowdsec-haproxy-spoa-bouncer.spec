@@ -38,7 +38,7 @@ mkdir -p %{buildroot}%{_localstatedir}/lib/%{name}
 mkdir -p %{buildroot}%{_docdir}/examples
 install -m 755 -D %{binary_name} %{buildroot}%{_bindir}/%{binary_name}
 install -m 600 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
-install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{binary_name}/_bouncer.sh
+install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{name}/_bouncer.sh
 install -m 644 -D config/crowdsec.cfg %{buildroot}%{_docdir}/examples/crowdsec.cfg
 install -m 644 -D config/haproxy.cfg %{buildroot}%{_docdir}/examples/haproxy.cfg
 BIN=%{_bindir}/%{binary_name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{binary_name}.service
@@ -53,7 +53,7 @@ rm -rf %{buildroot}
 
 %files
 %defattr(-,root,root,-)
-%{_bindir}/%{name}
+%{_bindir}/%{binary_name}
 %{_libdir}/%{name}/_bouncer.sh
 %{_unitdir}/%{binary_name}.service
 %config(noreplace) /etc/crowdsec/bouncers/%{binary_name}.yaml
