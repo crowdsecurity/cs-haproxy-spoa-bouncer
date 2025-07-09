@@ -42,9 +42,9 @@ install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{name}/_bouncer.sh
 install -m 644 -D config/crowdsec.cfg %{buildroot}%{_docdir}/examples/crowdsec.cfg
 install -m 644 -D config/haproxy.cfg %{buildroot}%{_docdir}/examples/haproxy.cfg
 BIN=%{_bindir}/%{binary_name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{binary_name}.service
-install -D lua/crowdsec.lua %{buildroot}/%{_libdir}/%{name}/crowdsec.lua
-install -D lua/utils.lua %{buildroot}/%{_libdir}/%{name}/utils.lua
-install -D lua/template.lua %{buildroot}/%{_libdir}/%{name}/template.lua
+install -D lua/crowdsec.lua %{buildroot}/usr/lib/%{name}/lua/crowdsec.lua
+install -D lua/utils.lua %{buildroot}/usr/lib/%{name}/lua/utils.lua
+install -D lua/template.lua %{buildroot}/usr/lib/%{name}/lua/template.lua
 install -D templates/ban.html %{buildroot}%{_localstatedir}/lib/%{name}/ban.html
 install -D templates/captcha.html %{buildroot}%{_localstatedir}/lib/%{name}/captcha.html
 
@@ -54,14 +54,14 @@ rm -rf %{buildroot}
 %files
 %defattr(-,root,root,-)
 %{_bindir}/%{binary_name}
-%{_libdir}/%{name}/_bouncer.sh
+/usr/lib/%{name}/_bouncer.sh
 %{_unitdir}/%{binary_name}.service
 %config(noreplace) /etc/crowdsec/bouncers/%{binary_name}.yaml
 %{_docdir}/examples/crowdsec.cfg
 %{_docdir}/examples/haproxy.cfg
-%{_libdir}/%{name}/crowdsec.lua
-%{_libdir}/%{name}/utils.lua
-%{_libdir}/%{name}/template.lua
+/usr/lib/%{name}/lua/crowdsec.lua
+/usr/lib/%{name}/lua/utils.lua
+/usr/lib/%{name}/lua/template.lua
 %{_localstatedir}/lib/%{name}/ban.html
 %{_localstatedir}/lib/%{name}/captcha.html
 
