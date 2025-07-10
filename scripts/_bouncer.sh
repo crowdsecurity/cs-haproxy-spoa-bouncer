@@ -40,29 +40,32 @@ fi
 
 msg() {
     case "$1" in
-        info) echo "${FG_CYAN}$2${RESET}" >&2 ;;
-        warn) echo "${FG_YELLOW}WARN:${RESET} $2" >&2 ;;
-        err) echo "${FG_RED}ERR:${RESET} $2" >&2 ;;
-        succ) echo "${FG_GREEN}$2${RESET}" >&2 ;;
-        *) echo "$1" >&2 ;;
+    info) echo "${FG_CYAN}$2${RESET}" >&2 ;;
+    warn) echo "${FG_YELLOW}WARN:${RESET} $2" >&2 ;;
+    err) echo "${FG_RED}ERR:${RESET} $2" >&2 ;;
+    succ) echo "${FG_GREEN}$2${RESET}" >&2 ;;
+    *) echo "$1" >&2 ;;
     esac
 }
 
 require() {
-    set | grep -q "^$1=" || { msg err "missing required variable \$$1"; exit 1; }
+    set | grep -q "^$1=" || {
+        msg err "missing required variable \$$1"
+        exit 1
+    }
     shift
     [ "$#" -eq 0 ] || require "$@"
 }
 
 # shellcheck disable=SC2034
 {
-SERVICE="$BOUNCER.service"
-BIN_PATH_INSTALLED="/usr/local/bin/$BOUNCER"
-BIN_PATH="./$BOUNCER"
-CONFIG_DIR="/etc/crowdsec/bouncers"
-CONFIG_FILE="$BOUNCER.yaml"
-CONFIG="$CONFIG_DIR/$CONFIG_FILE"
-SYSTEMD_PATH_FILE="/etc/systemd/system/$SERVICE"
+    SERVICE="$BOUNCER.service"
+    BIN_PATH_INSTALLED="/usr/bin/$BOUNCER"
+    BIN_PATH="./$BOUNCER"
+    CONFIG_DIR="/etc/crowdsec/bouncers"
+    CONFIG_FILE="$BOUNCER.yaml"
+    CONFIG="$CONFIG_DIR/$CONFIG_FILE"
+    SYSTEMD_PATH_FILE="/etc/systemd/system/$SERVICE"
 }
 
 assert_root() {
@@ -121,8 +124,8 @@ set_config_var_value() {
     fi
 
     before=$(cat "$CONFIG")
-    echo "$before" | \
-        env "$varname=$value" envsubst "\$$varname" | \
+    echo "$before" |
+        env "$varname=$value" envsubst "\$$varname" |
         install -m 0600 /dev/stdin "$CONFIG"
 }
 
@@ -142,7 +145,7 @@ set_api_key() {
             ret=1
         else
             echo "API Key successfully created" >&2
-            echo "$bouncer_id" > "$CONFIG.id"
+            echo "$bouncer_id" >"$CONFIG.id"
         fi
     else
         echo "cscli/crowdsec is not present, please set the API key manually" >&2

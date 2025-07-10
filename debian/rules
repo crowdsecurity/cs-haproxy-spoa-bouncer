@@ -1,0 +1,40 @@
+#!/usr/bin/make -f
+
+export DEB_VERSION=$(shell dpkg-parsechangelog | grep -E '^Version:' | cut -f 2 -d ' ')
+export BUILD_VERSION=v${DEB_VERSION}-debian-pragmatic
+
+%:
+	dh $@
+
+override_dh_systemd_start:
+	echo "Not running dh_systemd_start"
+override_dh_auto_clean:
+override_dh_auto_test:
+override_dh_auto_build:
+override_dh_auto_install:
+	@make build
+
+	@BOUNCER=crowdsec-spoa-bouncer; \
+	PKG="crowdsec-haproxy-spoa-bouncer"; \
+	install -D "$$BOUNCER" -t "debian/$$PKG/usr/bin/"; \
+	install -D "scripts/_bouncer.sh" -t "debian/$$PKG/usr/lib/$$PKG/"; \
+	install -D "config/$$BOUNCER.yaml" "debian/$$PKG/etc/crowdsec/bouncers/$$BOUNCER.yaml"; \
+	BIN="/usr/bin/$$BOUNCER" CFG="/etc/crowdsec/bouncers" envsubst '$$BIN $$CFG' < "config/$$BOUNCER.service" | install -D /dev/stdin "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"; \
+	mkdir -p "debian/$$PKG/usr/lib/$$PKG/lua"; \
+	mkdir -p "debian/$$PKG/usr/share/doc/$$PKG/examples"; \
+	install -D "config/crowdsec.cfg" -t "debian/$$PKG/usr/share/doc/$$PKG/examples/"; \
+	install -D "config/haproxy.cfg" -t "debian/$$PKG/usr/share/doc/$$PKG/examples/"; \
+	install -D "lua/crowdsec.lua" -t "debian/$$PKG/usr/lib/$$PKG/lua/"; \
+	install -D "lua/utils.lua" -t "debian/$$PKG/usr/lib/$$PKG/lua/"; \
+	install -D "lua/template.lua" -t "debian/$$PKG/usr/lib/$$PKG/lua/"; \
+	mkdir -p "debian/$$PKG/var/lib/$$PKG/html"; \
+	install -D "templates/ban.html" -t "debian/$$PKG/var/lib/$$PKG/html/"; \
+	install -D "templates/captcha.html" -t "debian/$$PKG/var/lib/$$PKG/html/"; \
+
+execute_after_dh_fixperms:
+	@BOUNCER=crowdsec-spoa-bouncer; \
+	PKG="crowdsec-haproxy-spoa-bouncer"; \
+	chmod 0755 "debian/$$PKG/usr/bin/$$BOUNCER"; \
+	chmod 0600 "debian/$$PKG/usr/lib/$$PKG/_bouncer.sh"; \
+	chmod 0600 "debian/$$PKG/etc/crowdsec/bouncers/$$BOUNCER.yaml"; \
+	chmod 0644 "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"
