@@ -57,8 +57,8 @@ rm -rf %{buildroot}
 /usr/lib/%{name}/_bouncer.sh
 %{_unitdir}/%{binary_name}.service
 %config(noreplace) /etc/crowdsec/bouncers/%{binary_name}.yaml
-{%name}/%{_docdir}/examples/crowdsec.cfg
-{%name}/%{_docdir}/examples/haproxy.cfg
+%{_docdir}/%{name}/examples/crowdsec.cfg
+%{_docdir}/%{name}/examples/haproxy.cfg
 /usr/lib/%{name}/lua/crowdsec.lua
 /usr/lib/%{name}/lua/utils.lua
 /usr/lib/%{name}/lua/template.lua
