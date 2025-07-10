@@ -34,19 +34,19 @@ BUILD_VERSION=%{local_version} make
 rm -rf %{buildroot}
 mkdir -p %{buildroot}%{_bindir}
 mkdir -p %{buildroot}%{_libdir}/%{name}
-mkdir -p %{buildroot}%{_localstatedir}/lib/%{name}
+mkdir -p %{buildroot}%{_localstatedir}/lib/%{name}/html
 mkdir -p %{buildroot}%{_docdir}/examples
 install -m 755 -D %{binary_name} %{buildroot}%{_bindir}/%{binary_name}
 install -m 600 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
 install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{name}/_bouncer.sh
-install -m 644 -D config/crowdsec.cfg %{buildroot}%{_docdir}/examples/crowdsec.cfg
-install -m 644 -D config/haproxy.cfg %{buildroot}%{_docdir}/examples/haproxy.cfg
+install -m 644 -D config/crowdsec.cfg %{buildroot}{%name}/%{_docdir}/examples/crowdsec.cfg
+install -m 644 -D config/haproxy.cfg %{buildroot}{%name}/%{_docdir}/examples/haproxy.cfg
 BIN=%{_bindir}/%{binary_name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{binary_name}.service
 install -D lua/crowdsec.lua %{buildroot}/usr/lib/%{name}/lua/crowdsec.lua
 install -D lua/utils.lua %{buildroot}/usr/lib/%{name}/lua/utils.lua
 install -D lua/template.lua %{buildroot}/usr/lib/%{name}/lua/template.lua
-install -D templates/ban.html %{buildroot}%{_localstatedir}/lib/%{name}/ban.html
-install -D templates/captcha.html %{buildroot}%{_localstatedir}/lib/%{name}/captcha.html
+install -D templates/ban.html %{buildroot}%{_localstatedir}/lib/%{name}/html/ban.html
+install -D templates/captcha.html %{buildroot}%{_localstatedir}/lib/%{name}/html/captcha.html
 
 %clean
 rm -rf %{buildroot}
@@ -57,8 +57,8 @@ rm -rf %{buildroot}
 /usr/lib/%{name}/_bouncer.sh
 %{_unitdir}/%{binary_name}.service
 %config(noreplace) /etc/crowdsec/bouncers/%{binary_name}.yaml
-%{_docdir}/examples/crowdsec.cfg
-%{_docdir}/examples/haproxy.cfg
+{%name}/%{_docdir}/examples/crowdsec.cfg
+{%name}/%{_docdir}/examples/haproxy.cfg
 /usr/lib/%{name}/lua/crowdsec.lua
 /usr/lib/%{name}/lua/utils.lua
 /usr/lib/%{name}/lua/template.lua
