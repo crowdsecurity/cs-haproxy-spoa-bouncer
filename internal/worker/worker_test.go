@@ -19,11 +19,10 @@ import (
 // func TestMain implements the helper process trick. When Worker.Run spawns a new process,
 // the test binary is re-invoked. In that case we check for the "-worker" flag and exit immediately.
 func TestMain(m *testing.M) {
-	configFlag := pflag.String("config", "", "Configuration JSON")
-	workerFlag := pflag.Bool("worker", false, "Worker flag")
+	configFlag := pflag.String("worker-config", "", "Configuration JSON")
 	pflag.Parse()
 
-	if *workerFlag {
+	if *configFlag != "" { // If the worker config flag is set, we are in a worker process.
 		var config Worker
 		err := json.Unmarshal([]byte(*configFlag), &config)
 		if err != nil {
@@ -104,7 +103,7 @@ func TestManagerAddWorkerWithSuccess(t *testing.T) {
 
 	assert.NotNil(t, w.Command, "expected worker command to be set")
 	expectedCommandPrefix := "/tmp/go-build"
-	expectedCommandSuffix := `worker.test --worker --config {"name":"test-worker-1","log_level":null}`
+	expectedCommandSuffix := `worker.test --worker-config {"name":"test-worker-1","log_level":null,"listen_addr":"","listen_socket":""}`
 	commandString := w.Command.String()
 	assert.True(t, strings.HasPrefix(commandString, expectedCommandPrefix), "expected worker command to start with %s", expectedCommandPrefix)
 	assert.True(t, strings.HasSuffix(commandString, expectedCommandSuffix), "expected worker command to end with %s", expectedCommandSuffix)
@@ -178,7 +177,7 @@ func TestManagerAddWorkersNewWorkerListenerError(t *testing.T) {
 	assert.Nil(t, w2.Command, "expected worker command to be nil")
 	assert.Nil(t, mgr.Workers[1].Command, "expected worker command to be nil")
 	expectedCommandPrefix := "/tmp/go-build"
-	expectedCommandSuffix := `worker.test --worker --config {"name":"test-worker-3","log_level":null}`
+	expectedCommandSuffix := `worker.test --worker-config {"name":"test-worker-3","log_level":null,"listen_addr":"","listen_socket":""}`
 	commandString := w3.Command.String()
 	assert.True(t, strings.HasPrefix(commandString, expectedCommandPrefix), "expected worker command to start with %s", expectedCommandPrefix)
 	assert.True(t, strings.HasSuffix(commandString, expectedCommandSuffix), "expected worker command to end with %s", expectedCommandSuffix)
