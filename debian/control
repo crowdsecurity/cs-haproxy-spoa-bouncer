@@ -1,0 +1,11 @@
+Source: crowdsec-haproxy-spoa-bouncer
+Maintainer: Crowdsec Team <debian@crowdsec.net>
+Build-Depends: debhelper
+Section: admin
+Priority: optional
+
+Package: crowdsec-haproxy-spoa-bouncer
+Provides: crowdsec-haproxy-spoa-bouncer
+Depends: gettext-base
+Description: Haproxy bouncer
+Architecture: any

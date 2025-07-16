@@ -1,0 +1,5 @@
+crowdsec-haproxy-spoa-bouncer (1.0.0) UNRELEASED; urgency=medium
+
+  * Initial debian packaging
+
+ -- Manuel Sabban <manuel@crowdsec.net>  Wed, 11 Jun 2025 13:22:32 +0530
