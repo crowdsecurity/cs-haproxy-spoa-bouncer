@@ -68,7 +68,7 @@ func Execute() error {
 
 	pflag.Parse()
 	if *workerConfigJSON != "" {
-		var w worker.Worker
+		var w *worker.Worker
 		if err := json.Unmarshal([]byte(*workerConfigJSON), &w); err != nil {
 			return fmt.Errorf("failed to parse worker config JSON: %w", err)
 		}
@@ -137,8 +137,8 @@ func Execute() error {
 	})
 
 	g.Go(func() error {
-		bouncer.Run(ctx)
-		return errors.New("bouncer stream halted")
+		err := bouncer.Run(ctx)
+		return fmt.Errorf("bouncer run halted: %w", err)
 	})
 
 	metricsProvider, err := csbouncer.NewMetricsProvider(bouncer.APIClient, name, metricsUpdater, log.StandardLogger())
@@ -268,7 +268,7 @@ func Execute() error {
 	return nil
 }
 
-func WorkerExecute(w worker.Worker) error {
+func WorkerExecute(w *worker.Worker) error {
 
 	g, ctx := errgroup.WithContext(context.Background())
 

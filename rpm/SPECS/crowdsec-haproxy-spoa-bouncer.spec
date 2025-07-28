@@ -99,6 +99,7 @@ if ! getent passwd crowdsec-spoa >/dev/null; then
     adduser --system --no-create-home --shell /sbin/nologin crowdsec-spoa
 fi
 
+
 if [ -d "/etc/haproxy" ]; then
     cp /usr/share/doc/%{name}/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
 fi
