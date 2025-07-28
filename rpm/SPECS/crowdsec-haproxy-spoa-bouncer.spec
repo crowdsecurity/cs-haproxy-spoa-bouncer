@@ -99,6 +99,11 @@ if ! getent passwd crowdsec-spoa >/dev/null; then
     adduser --system --no-create-home --shell /sbin/nologin crowdsec-spoa
 fi
 
+
+if [ -d "/etc/haproxy" ]; then
+    cp /usr/share/doc/%{name}/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
+fi
+
 # Handle systemd unit
 if [ "$START" -eq 0 ]; then
     echo "No API key was generated. You can generate one on your LAPI server with:"
@@ -129,4 +134,8 @@ fi
 
 if [ "$1" == "1" ] ; then
     systemctl restart %{name} || echo "cannot restart service"
+fi
+
+if [ -d "/etc/haproxy" ]; then
+    cmp /etc/haproxy/crowdsec.cfg /usr/share/doc/%{name}/examples/crowdsec.cfg && rm -f /etc/haproxy/crowdsec.cfg || echo "not removing /etc/haproxy/crowdsec.cfg, it has been modified"
 fi
