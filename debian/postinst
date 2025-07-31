@@ -26,6 +26,10 @@ if ! getent passwd crowdsec-spoa >/dev/null; then
     adduser crowdsec-spoa --system --group --comment "crowdsec haproxy spoa bouncer"
 fi
 
+if [ -d "/etc/haproxy" ]; then
+    cp /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
+fi
+
 echo "please enter the binary path in '$CONFIG' and start the bouncer via 'sudo systemctl start $SERVICE'"
 echo "To configure your haproxy, please refer to the documentation at https://docs.crowdsec.net/docs/haproxy_spoa/"
 echo "Some configuration examples can be found in /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/"
