@@ -39,8 +39,8 @@ mkdir -p %{buildroot}%{_docdir}/examples
 install -m 755 -D %{binary_name} %{buildroot}%{_bindir}/%{binary_name}
 install -m 600 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
 install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{name}/_bouncer.sh
-install -m 644 -D config/crowdsec.cfg %{buildroot}%{_docdir}/%{name}/examples/crowdsec.cfg
-install -m 644 -D config/haproxy.cfg %{buildroot}%{_docdir}/%{name}/examples/haproxy.cfg
+install -m 644 -D config/crowdsec.cfg %{buildroot}/%{_docdir}/%{name}/examples/crowdsec.cfg
+install -m 644 -D config/haproxy.cfg %{buildroot}/%{_docdir}/%{name}/examples/haproxy.cfg
 BIN=%{_bindir}/%{binary_name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{binary_name}.service
 install -D lua/crowdsec.lua %{buildroot}/usr/lib/%{name}/lua/crowdsec.lua
 install -D lua/utils.lua %{buildroot}/usr/lib/%{name}/lua/utils.lua
@@ -57,8 +57,8 @@ rm -rf %{buildroot}
 /usr/lib/%{name}/_bouncer.sh
 %{_unitdir}/%{binary_name}.service
 %config(noreplace) /etc/crowdsec/bouncers/%{binary_name}.yaml
-%{_docdir}/%{name}/examples/crowdsec.cfg
-%{_docdir}/%{name}/examples/haproxy.cfg
+%doc %{_docdir}/%{name}/examples/crowdsec.cfg
+%doc %{_docdir}/%{name}/examples/haproxy.cfg
 /usr/lib/%{name}/lua/crowdsec.lua
 /usr/lib/%{name}/lua/utils.lua
 /usr/lib/%{name}/lua/template.lua
@@ -130,12 +130,13 @@ if [ "$1" = "0" ]; then
     delete_bouncer
 fi
 
+if [ -d "/etc/haproxy" ]; then
+    cmp /etc/haproxy/crowdsec.cfg /usr/share/doc/%{name}/examples/crowdsec.cfg && rm -f /etc/haproxy/crowdsec.cfg || echo "not removing /etc/haproxy/crowdsec.cfg, it has been modified"
+fi
+
 %postun
 
 if [ "$1" == "1" ] ; then
     systemctl restart %{name} || echo "cannot restart service"
 fi
 
-if [ -d "/etc/haproxy" ]; then
-    cmp /etc/haproxy/crowdsec.cfg /usr/share/doc/%{name}/examples/crowdsec.cfg && rm -f /etc/haproxy/crowdsec.cfg || echo "not removing /etc/haproxy/crowdsec.cfg, it has been modified"
-fi
