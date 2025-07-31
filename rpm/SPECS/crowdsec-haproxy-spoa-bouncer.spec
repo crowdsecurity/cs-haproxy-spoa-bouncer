@@ -130,12 +130,13 @@ if [ "$1" = "0" ]; then
     delete_bouncer
 fi
 
+if [ -d "/etc/haproxy" ]; then
+    cmp /etc/haproxy/crowdsec.cfg /usr/share/doc/%{name}/examples/crowdsec.cfg && rm -f /etc/haproxy/crowdsec.cfg || echo "not removing /etc/haproxy/crowdsec.cfg, it has been modified"
+fi
+
 %postun
 
 if [ "$1" == "1" ] ; then
     systemctl restart %{name} || echo "cannot restart service"
 fi
 
-if [ -d "/etc/haproxy" ]; then
-    cmp /etc/haproxy/crowdsec.cfg /usr/share/doc/%{name}/examples/crowdsec.cfg && rm -f /etc/haproxy/crowdsec.cfg || echo "not removing /etc/haproxy/crowdsec.cfg, it has been modified"
-fi
