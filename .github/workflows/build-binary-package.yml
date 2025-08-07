@@ -1,0 +1,43 @@
+name: build-binary-package
+
+on:
+  release:
+    types:
+    - prereleased
+
+permissions:
+  # Use write for: hub release edit
+  contents: write
+
+env:
+  PROGRAM_NAME: crowdsec-spoa-bouncer
+
+jobs:
+  build:
+    name: Build and upload all platforms
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - name: Check out repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+
+    - name: Build all platforms
+      run: |
+        # build platform-all first so the .xz vendor file is not removed
+        make platform-all vendor
+
+    - name: Upload to release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        tag_name="${GITHUB_REF##*/}"
+        # this will upload the $PROGRAM_NAME-vendor.tar.xz file as well
+        gh release upload "$tag_name" $PROGRAM_NAME* vendor.tgz
