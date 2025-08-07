@@ -77,6 +77,7 @@ func (rM *RemediationIdsMap) GetRemediationAndOrigin() (remediation.Remediation,
 
 type Set[T string | netip.Prefix | netip.Addr] struct {
 	sync.RWMutex
+
 	Items  map[T]RemediationIdsMap
 	logger *log.Entry
 }

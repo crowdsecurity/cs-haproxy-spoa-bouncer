@@ -1,6 +1,6 @@
-GOCMD=go
-GOBUILD=$(GOCMD) build
-GOTEST=$(GOCMD) test
+GO = go
+GOBUILD = $(GO) build
+GOTEST = $(GO) test
 
 BINARY_NAME=crowdsec-spoa-bouncer
 TARBALL_NAME=$(BINARY_NAME).tgz
@@ -20,7 +20,7 @@ LD_OPTS_VARS += -X 'github.com/crowdsecurity/go-cs-lib/version.System=docker'
 endif
 
 export CGO_ENABLED=0
-export LD_OPTS=-ldflags "-a -s -w -extldflags '-static' $(LD_OPTS_VARS)" \
+export LD_OPTS=-ldflags "-s -extldflags '-static' $(LD_OPTS_VARS)" \
 	-trimpath -tags netgo
 
 .PHONY: all
@@ -70,10 +70,6 @@ build: clean binary
 lint:
 	golangci-lint run
 
-API_KEY:=test
-
-export API_KEY
-
 .PHONY: test
 test:
 	@$(GOTEST) $(LD_OPTS) ./...
@@ -91,7 +87,7 @@ RELDIR = $(BINARY_NAME)-$(BUILD_VERSION)
 
 .PHONY: vendor
 vendor: vendor-remove
-	$(GOCMD) mod vendor
+	$(GO) mod vendor
 	tar czf vendor.tgz vendor
 	tar --create --auto-compress --file=$(RELDIR)-vendor.tar.xz vendor
 
