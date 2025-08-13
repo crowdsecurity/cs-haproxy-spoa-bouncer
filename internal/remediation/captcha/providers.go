@@ -25,7 +25,7 @@ var (
 		},
 		TurnstileProvider: {
 			js:       "https://challenges.cloudflare.com/turnstile/v0/api.js",
-			key:      "cf-captcha",
+			key:      "cf-turnstile",
 			validate: "https://challenges.cloudflare.com/turnstile/v0/siteverify",
 		},
 	}
