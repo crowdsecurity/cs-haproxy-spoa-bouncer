@@ -150,7 +150,7 @@ func (c *Captcha) Validate(uuid, toParse string) bool {
 	reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(c.getTimeout())*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, "POST", providers[c.Provider].validate, strings.NewReader(body.Encode()))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, providers[c.Provider].validate, strings.NewReader(body.Encode()))
 	if err != nil {
 		clog.WithError(err).Error("failed to create captcha validation request")
 		return false
@@ -165,7 +165,7 @@ func (c *Captcha) Validate(uuid, toParse string) bool {
 		case errors.Is(err, context.DeadlineExceeded):
 			clog.WithError(err).WithField("timeout_seconds", c.getTimeout()).Error("captcha validation context deadline exceeded")
 		case errors.Is(err, context.Canceled):
-			clog.WithError(err).Warn("captcha validation request was cancelled")
+			clog.WithError(err).Warn("captcha validation request was canceled")
 		default:
 			// Check if it's a network timeout
 			var netErr net.Error
