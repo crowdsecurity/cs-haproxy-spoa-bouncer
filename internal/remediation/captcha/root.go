@@ -3,7 +3,9 @@ package captcha
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,6 +21,11 @@ import (
 const (
 	Pending = "pending"
 	Valid   = "valid"
+
+	// DefaultTimeout is the default HTTP timeout in seconds
+	DefaultTimeout = 5
+	// MaxTimeout is the maximum allowed timeout in seconds
+	MaxTimeout = 300
 )
 
 type Captcha struct {
@@ -26,6 +33,7 @@ type Captcha struct {
 	SecretKey           string                 `yaml:"secret_key"`           // Captcha Provider Secret Key
 	SiteKey             string                 `yaml:"site_key"`             // Captcha Provider Site Key
 	FallbackRemediation string                 `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
+	Timeout             int                    `yaml:"timeout"`              // HTTP client timeout in seconds (default: 5)
 	CookieGenerator     cookie.CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies from sessions
 	Sessions            session.Sessions       `yaml:",inline"`              // sessions that are being traced for captcha
 	logger              *log.Entry             `yaml:"-"`
@@ -40,8 +48,20 @@ func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
 	cancelCtx, c.Cancel = context.WithCancel(ctx)
 
 	c.client = &http.Client{
-		Transport: &http.Transport{MaxIdleConns: 10, IdleConnTimeout: 30 * time.Second},
-		Timeout:   5 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 2,
+			IdleConnTimeout:     30 * time.Second,
+			DisableKeepAlives:   false,
+			TLSHandshakeTimeout: 10 * time.Second,
+			// Set reasonable connection timeout
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+		},
+		// HTTP client timeout as safety net - should match or exceed context timeout
+		Timeout: time.Duration(c.getTimeout()) * time.Second,
 	}
 
 	if c.FallbackRemediation == "" {
@@ -61,6 +81,19 @@ func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
 
 func (c *Captcha) InitLogger(logger *log.Entry) {
 	c.logger = logger.WithField("module", "captcha")
+}
+
+// getTimeout returns the configured timeout with validation and bounds checking
+func (c *Captcha) getTimeout() int {
+	if c.Timeout <= 0 {
+		return DefaultTimeout
+	}
+	if c.Timeout > MaxTimeout {
+		c.logger.WithField("configured_timeout", c.Timeout).WithField("max_timeout", MaxTimeout).
+			Warn("configured timeout exceeds maximum, using maximum")
+		return MaxTimeout
+	}
+	return c.Timeout
 }
 
 // Inject key values injects the captcha provider key values into the HAProxy transaction
@@ -113,21 +146,53 @@ func (c *Captcha) Validate(uuid, toParse string) bool {
 	body.Add("secret", c.SecretKey)
 	body.Add("response", response)
 
-	res, err := c.client.PostForm(providers[c.Provider].validate, body)
+	// Create a context with timeout for the request
+	reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(c.getTimeout())*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "POST", providers[c.Provider].validate, strings.NewReader(body.Encode()))
+	if err != nil {
+		clog.WithError(err).Error("failed to create captcha validation request")
+		return false
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	res, err := c.client.Do(req)
 
 	if err != nil {
-		clog.WithError(err).Error("failed to validate captcha")
+		// Check for specific error types and log appropriately
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			clog.WithError(err).WithField("timeout_seconds", c.getTimeout()).Error("captcha validation context deadline exceeded")
+		case errors.Is(err, context.Canceled):
+			clog.WithError(err).Warn("captcha validation request was cancelled")
+		default:
+			// Check if it's a network timeout
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				clog.WithError(err).WithField("timeout_seconds", c.getTimeout()).Error("captcha validation network timeout")
+			} else {
+				clog.WithError(err).Error("failed to validate captcha")
+			}
+		}
 		return false
 	}
 
 	defer func() {
-		if err = res.Body.Close(); err != nil {
-			clog.WithError(err).Error("failed to close response body")
+		if closeErr := res.Body.Close(); closeErr != nil {
+			clog.WithError(closeErr).Error("failed to close response body")
 		}
 	}()
 
-	if !strings.Contains(res.Header.Get("Content-Type"), "application/json") {
-		clog.Debug("invalid response content type")
+	// Check HTTP status code
+	if res.StatusCode != http.StatusOK {
+		clog.WithField("status_code", res.StatusCode).Error("captcha provider returned non-200 status")
+		return false
+	}
+
+	contentType := res.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "application/json") {
+		clog.WithField("content_type", contentType).Debug("invalid response content type, expected application/json")
 		return false
 	}
 
@@ -137,7 +202,7 @@ func (c *Captcha) Validate(uuid, toParse string) bool {
 		return false
 	}
 
-	clog.WithField("response", captchaRes.Success).Debug("captcha response")
+	clog.WithField("success", captchaRes.Success).Debug("captcha validation response received")
 
 	return captchaRes.Success
 }
