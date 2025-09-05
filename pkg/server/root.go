@@ -4,11 +4,30 @@ import (
 	"encoding/gob"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
+	"sync"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
+	apipermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/api/types"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	log "github.com/sirupsen/logrus"
 )
+
+var (
+	// serverGobTypesRegistered ensures gob types are registered only once on server side
+	serverGobTypesRegistered sync.Once
+)
+
+// registerServerGobTypes registers types for server-side gob encoding
+func registerServerGobTypes() {
+	serverGobTypesRegistered.Do(func() {
+		// Register types that will be sent as interface{} through gob
+		gob.Register(&types.HostResponse{})
+		gob.Register(http.Cookie{})
+		gob.Register(remediation.Remediation(0))
+	})
+}
 
 const (
 	WorkerSocketPrefix = "crowdsec-spoa-worker-"
@@ -51,11 +70,15 @@ func NewWorkerSocket(connChan chan SocketConn, dir string) (*Server, error) {
 }
 
 func (s *Server) Run(l *net.Listener) error {
+	// Register gob types before creating encoder
+	registerServerGobTypes()
+
 	for {
 		conn, err := (*l).Accept()
 		if err != nil {
 			return err
 		}
+
 		s.connChan <- SocketConn{
 			Conn:       conn,
 			Permission: s.permission,

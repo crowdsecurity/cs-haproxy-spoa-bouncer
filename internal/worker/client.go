@@ -27,6 +27,7 @@ func registerGobTypes() {
 		// Register types that will be sent as interface{} through gob
 		gob.Register(&types.HostResponse{})
 		gob.Register(http.Cookie{})
+		gob.Register(remediation.Remediation(0)) // Register remediation.Remediation type
 	})
 }
 
@@ -141,12 +142,12 @@ func (w *WorkerClient) GetIP(ip string) (remediation.Remediation, error) {
 		return remediation.Allow, response.Error
 	}
 
-	remStr, err := types.GetData[string](response)
+	rem, err := types.GetData[remediation.Remediation](response)
 	if err != nil {
 		return remediation.Allow, err
 	}
 
-	return remediation.FromString(remStr), nil
+	return rem, nil
 }
 
 func (w *WorkerClient) GetCN(cn string, ip string) (remediation.Remediation, error) {
@@ -166,12 +167,12 @@ func (w *WorkerClient) GetCN(cn string, ip string) (remediation.Remediation, err
 		return remediation.Allow, response.Error
 	}
 
-	remStr, err := types.GetData[string](response)
+	rem, err := types.GetData[remediation.Remediation](response)
 	if err != nil {
 		return remediation.Allow, err
 	}
 
-	return remediation.FromString(remStr), nil
+	return rem, nil
 }
 
 func (w *WorkerClient) GetGeoIso(ip string) (string, error) {

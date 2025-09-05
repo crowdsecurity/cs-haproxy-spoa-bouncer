@@ -312,7 +312,7 @@ func NewAPI(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *d
 						metrics.TotalBlockedRequests.With(prometheus.Labels{"ip_type": ipType, "origin": origin, "remediation": r.String()}).Inc()
 					}
 
-					return types.NewAPIResponse(r.String())
+					return types.NewAPIResponse(r)
 				}
 
 				return types.NewAPIResponse(r.String())
@@ -336,7 +336,7 @@ func NewAPI(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *d
 						}
 						metrics.TotalBlockedRequests.With(prometheus.Labels{"ip_type": ipType, "origin": origin, "remediation": r.String()}).Inc()
 					}
-					return types.NewAPIResponse(r.String())
+					return types.NewAPIResponse(r)
 				}
 
 				return types.NewAPIResponse(r.String())
