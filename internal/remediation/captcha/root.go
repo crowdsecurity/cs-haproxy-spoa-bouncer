@@ -47,21 +47,22 @@ func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
 	var cancelCtx context.Context
 	cancelCtx, c.Cancel = context.WithCancel(ctx)
 
+	// Clone the default transport to preserve proxy settings and other defaults
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+
+	// Override only the specific settings we need
+	transport.MaxIdleConns = 10
+	transport.MaxIdleConnsPerHost = 2
+	transport.IdleConnTimeout = 30 * time.Second
+	transport.DisableKeepAlives = false
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.DialContext = (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+
 	c.client = &http.Client{
-		Transport: &http.Transport{
-			MaxIdleConns:        10,
-			MaxIdleConnsPerHost: 2,
-			IdleConnTimeout:     30 * time.Second,
-			DisableKeepAlives:   false,
-			TLSHandshakeTimeout: 10 * time.Second,
-			// Set reasonable connection timeout
-			DialContext: (&net.Dialer{
-				Timeout:   10 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			// Respect HTTP_PROXY and HTTPS_PROXY environment variables
-			Proxy: http.ProxyFromEnvironment,
-		},
+		Transport: transport,
 		// HTTP client timeout as safety net - should match or exceed context timeout
 		Timeout: time.Duration(c.getTimeout()) * time.Second,
 	}
