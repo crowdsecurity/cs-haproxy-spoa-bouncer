@@ -12,6 +12,7 @@ import (
 	"time"
 
 	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/api/types"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
@@ -74,7 +75,7 @@ var (
 )
 
 type APIHandler struct {
-	handle func(permission apiPermission.APIPermission, args ...string) (interface{}, error)
+	handle func(permission apiPermission.APIPermission, args ...string) *types.APIResponse
 }
 
 type API struct {
@@ -86,11 +87,11 @@ type API struct {
 	ConnChan      chan server.SocketConn
 }
 
-func (a *API) HandleCommand(command string, args []string, permission apiPermission.APIPermission) (interface{}, error) {
+func (a *API) HandleCommand(command string, args []string, permission apiPermission.APIPermission) *types.APIResponse {
 	if handler, ok := a.Handlers[command]; ok {
 		return handler.handle(permission, args...)
 	}
-	return nil, fmt.Errorf("command not found")
+	return types.NewAPIError(types.ErrCodeNotFound, "Command not found", fmt.Sprintf("command: %s", command))
 }
 
 func NewAPI(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *dataset.DataSet, geoDatabase *geo.GeoDatabase, socketChan chan server.SocketConn) *API {
@@ -104,80 +105,77 @@ func NewAPI(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *d
 
 	a.Handlers = map[string]APIHandler{
 		"val:host:cookie": {
-			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 2, 2); err != nil {
-					return "", err
+			handle: func(permission apiPermission.APIPermission, args ...string) *types.APIResponse {
+				if resp := ArgsCheckResponse(args, 2, 2); resp != nil {
+					return resp
 				}
 
 				h := a.HostManager.MatchFirstHost(args[0])
 				if h == nil {
-					return "", nil
+					return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", args[0])
 				}
 
 				uuid, err := h.Captcha.CookieGenerator.ValidateCookie(args[1])
 				if err != nil {
-					return "", err
+					return types.NewAPIError(types.ErrCodeInvalidCookie, "Cookie validation failed", err.Error())
 				}
 
 				sess := h.Captcha.Sessions.GetSession(uuid)
-
 				if sess == nil {
-					return "", nil
+					return types.NewAPIError(types.ErrCodeSessionNotFound, "Session not found", uuid)
 				}
 
-				return uuid, nil
+				return types.NewAPIResponse(uuid)
 			},
 		},
 		"val:host:captcha": {
-			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 3, 3); err != nil {
-					return "", err
+			handle: func(permission apiPermission.APIPermission, args ...string) *types.APIResponse {
+				if resp := ArgsCheckResponse(args, 3, 3); resp != nil {
+					return resp
 				}
 
 				h := a.HostManager.MatchFirstHost(args[0])
 				if h == nil {
-					return "", nil
+					return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", args[0])
 				}
 
-				return h.Captcha.Validate(args[1], args[2]), nil
+				isValid := h.Captcha.Validate(args[1], args[2])
+				return types.NewAPIResponse(isValid)
 			},
 		},
 		"del:host:session": {
-			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 3, 3); err != nil {
-					return "", err
+			handle: func(permission apiPermission.APIPermission, args ...string) *types.APIResponse {
+				if resp := ArgsCheckResponse(args, 3, 3); resp != nil {
+					return resp
 				}
 
 				h := a.HostManager.MatchFirstHost(args[0])
 				if h == nil {
-					return false, nil
+					return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", args[0])
 				}
 
 				ses := h.Captcha.Sessions.GetSession(args[1])
-
 				if ses == nil {
-					return false, nil
+					return types.NewAPIError(types.ErrCodeSessionNotFound, "Session not found", args[1])
 				}
 
 				ses.Delete(args[2])
-
-				return true, nil
+				return types.NewAPIResponse(true)
 			},
 		},
 		"del:hosts": {
-			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) *types.APIResponse {
 				if permission == apiPermission.WorkerPermission {
-					return nil, fmt.Errorf("permission denied")
+					return types.NewAPIError(types.ErrCodePermissionDenied, "Permission denied", "workers cannot delete hosts")
 				}
 
-				if err := ArgsCheck(args, 1, 1); err != nil {
-					return nil, err
+				if resp := ArgsCheckResponse(args, 1, 1); resp != nil {
+					return resp
 				}
 
 				h := a.HostManager.MatchFirstHost(args[0])
-
 				if h == nil {
-					return false, nil
+					return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", args[0])
 				}
 
 				a.HostManager.Chan <- host.HostOp{
@@ -185,123 +183,120 @@ func NewAPI(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *d
 					Op:   host.OpRemove,
 				}
 
-				return true, nil
+				return types.NewAPIResponse(true)
 			},
 		},
 		"set:host:session": {
-			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 4, 4); err != nil {
-					return nil, err
+			handle: func(permission apiPermission.APIPermission, args ...string) *types.APIResponse {
+				if resp := ArgsCheckResponse(args, 4, 4); resp != nil {
+					return resp
 				}
 
 				h := a.HostManager.MatchFirstHost(args[0])
 				if h == nil {
-					return false, nil
+					return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", args[0])
 				}
 
 				ses := h.Captcha.Sessions.GetSession(args[1])
-
 				if ses == nil {
-					return false, nil
+					return types.NewAPIError(types.ErrCodeSessionNotFound, "Session not found", args[1])
 				}
 
 				ses.Set(args[2], args[3])
-				return true, nil
+				return types.NewAPIResponse(true)
 			},
 		},
 		"get:host:session": {
-			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 3, 3); err != nil {
-					return "", err
+			handle: func(permission apiPermission.APIPermission, args ...string) *types.APIResponse {
+				if resp := ArgsCheckResponse(args, 3, 3); resp != nil {
+					return resp
 				}
 
 				h := a.HostManager.MatchFirstHost(args[0])
 				if h == nil {
-					return "", nil
+					return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", args[0])
 				}
 
 				ses := h.Captcha.Sessions.GetSession(args[1])
-
 				if ses == nil {
-					return "", nil
+					return types.NewAPIError(types.ErrCodeSessionNotFound, "Session not found", args[1])
 				}
 
 				val := ses.Get(args[2])
-
 				if val == nil {
 					val = ""
 				}
 
-				return val, nil
+				return types.NewAPIResponse(val)
 			},
 		},
 		"get:host:cookie": {
-			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 2, 2); err != nil {
-					return nil, err
+			handle: func(permission apiPermission.APIPermission, args ...string) *types.APIResponse {
+				if resp := ArgsCheckResponse(args, 2, 2); resp != nil {
+					return resp
 				}
 
 				h := a.HostManager.MatchFirstHost(args[0])
-				ses, err := h.Captcha.Sessions.NewRandomSession()
+				if h == nil {
+					return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", args[0])
+				}
 
+				ses, err := h.Captcha.Sessions.NewRandomSession()
 				if err != nil {
-					return nil, err
+					return types.NewAPIError(types.ErrCodeServerError, "Failed to create session", err.Error())
 				}
 
 				cookie, err := h.Captcha.CookieGenerator.GenerateCookie(ses, ptr.Of(args[1] == "true"))
 				if err != nil {
-					return nil, err
+					return types.NewAPIError(types.ErrCodeServerError, "Failed to generate cookie", err.Error())
 				}
 
 				ses.Set(session.CaptchaStatus, captcha.Pending)
-				return cookie, nil
+				return types.NewAPIResponse(cookie)
 			},
 		},
 		"get:hosts": {
-			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
+			handle: func(permission apiPermission.APIPermission, args ...string) *types.APIResponse {
 				if len(args) == 0 && permission == apiPermission.WorkerPermission {
-					return &host.Host{}, fmt.Errorf("permission denied")
+					return types.NewAPIError(types.ErrCodePermissionDenied, "Permission denied", "workers cannot list all hosts")
 				}
 
 				if len(args) == 0 && permission == apiPermission.AdminPermission {
-					return a.HostManager.String(), nil
+					return types.NewAPIResponse(a.HostManager.String())
 				}
 
-				if err := ArgsCheck(args, 1, 1); err != nil {
-					return &host.Host{}, err
+				if resp := ArgsCheckResponse(args, 1, 1); resp != nil {
+					return resp
 				}
 
 				h := a.HostManager.MatchFirstHost(args[0])
-
-				// We cant return nil, so we return an empty host
 				if h == nil {
-					return &host.Host{}, nil
+					return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", args[0])
 				}
 
-				// return a new host derived from the host object to redact sensitive information
-				return &host.Host{
-					Host: h.Host,
-					Captcha: captcha.Captcha{
-						SiteKey:             h.Captcha.SiteKey,
-						Provider:            h.Captcha.Provider,
-						FallbackRemediation: h.Captcha.FallbackRemediation,
-					},
-					Ban: h.Ban,
-				}, nil
+				// return a serializable host response to avoid gob encoding issues
+				hostResponse := &types.HostResponse{
+					Host:                       h.Host,
+					CaptchaSiteKey:             h.Captcha.SiteKey,
+					CaptchaProvider:            h.Captcha.Provider,
+					CaptchaFallbackRemediation: h.Captcha.FallbackRemediation,
+					BanContactUsURL:            h.Ban.ContactUsURL,
+					AppSecAlwaysSend:           h.AppSec.AlwaysSend,
+				}
+				return types.NewAPIResponse(hostResponse)
 			},
 		},
 		"get:ip": {
-			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 1, 1); err != nil {
-					return nil, err
+			handle: func(permission apiPermission.APIPermission, args ...string) *types.APIResponse {
+				if resp := ArgsCheckResponse(args, 1, 1); resp != nil {
+					return resp
 				}
 
 				log.Infof("Checking IP %s", args[0])
 
 				r, origin, err := a.Dataset.CheckIP(args[0])
-
 				if err != nil {
-					return nil, err
+					return types.NewAPIError(types.ErrCodeInvalidIP, "IP check failed", err.Error())
 				}
 
 				if permission == apiPermission.WorkerPermission {
@@ -317,19 +312,19 @@ func NewAPI(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *d
 						metrics.TotalBlockedRequests.With(prometheus.Labels{"ip_type": ipType, "origin": origin, "remediation": r.String()}).Inc()
 					}
 
-					return r, nil
+					return types.NewAPIResponse(r.String())
 				}
 
-				return r.String(), nil
+				return types.NewAPIResponse(r.String())
 			},
 		},
 		"get:cn": {
-			handle: func(permission apiPermission.APIPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 2, 2); err != nil {
-					return nil, err
+			handle: func(permission apiPermission.APIPermission, args ...string) *types.APIResponse {
+				if resp := ArgsCheckResponse(args, 2, 2); resp != nil {
+					return resp
 				}
 				if args[0] == "" {
-					return nil, fmt.Errorf("invalid argument")
+					return types.NewAPIError(types.ErrCodeInvalidArgument, "Country code cannot be empty", "")
 				}
 				r, origin := a.Dataset.CheckCN(args[0])
 
@@ -341,40 +336,38 @@ func NewAPI(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *d
 						}
 						metrics.TotalBlockedRequests.With(prometheus.Labels{"ip_type": ipType, "origin": origin, "remediation": r.String()}).Inc()
 					}
-					return r, nil
+					return types.NewAPIResponse(r.String())
 				}
 
-				return r.String(), nil
+				return types.NewAPIResponse(r.String())
 			},
 		},
 		"get:geo:iso": {
-			handle: func(_ apiPermission.APIPermission, args ...string) (interface{}, error) {
-				if err := ArgsCheck(args, 1, 1); err != nil {
-					return nil, err
+			handle: func(_ apiPermission.APIPermission, args ...string) *types.APIResponse {
+				if resp := ArgsCheckResponse(args, 1, 1); resp != nil {
+					return resp
 				}
 
 				if !a.GeoDatabase.IsValid() {
-					return "", nil
+					return types.NewAPIError(types.ErrCodeGeoDBUnavailable, "GeoIP database not available", "")
 				}
 
 				log.Tracef("Checking geo:iso IP %s", args[0])
 				val := net.ParseIP(args[0])
-
 				if val == nil {
-					return nil, fmt.Errorf("invalid IP")
+					return types.NewAPIError(types.ErrCodeInvalidIP, "Invalid IP address", args[0])
 				}
 
 				record, err := a.GeoDatabase.GetCity(&val)
-
 				if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
-					return nil, err
+					return types.NewAPIError(types.ErrCodeDatabaseError, "GeoIP lookup failed", err.Error())
 				}
 
 				if record == nil {
-					return nil, nil
+					return types.NewAPIResponse("")
 				}
 
-				return geo.GetIsoCodeFromRecord(record), nil
+				return types.NewAPIResponse(geo.GetIsoCodeFromRecord(record))
 			},
 		},
 	}
@@ -404,6 +397,19 @@ func ArgsCheck(args []string, minValue int, maxValue int) error {
 	}
 	if len(args) > maxValue {
 		return fmt.Errorf("too many arguments")
+	}
+	return nil
+}
+
+// ArgsCheckResponse returns a proper API response for argument validation
+func ArgsCheckResponse(args []string, minValue int, maxValue int) *types.APIResponse {
+	if len(args) < minValue {
+		return types.NewAPIError(types.ErrCodeMissingArgument, "Missing required arguments",
+			fmt.Sprintf("expected at least %d arguments, got %d", minValue, len(args)))
+	}
+	if len(args) > maxValue {
+		return types.NewAPIError(types.ErrCodeTooManyArguments, "Too many arguments",
+			fmt.Sprintf("expected at most %d arguments, got %d", maxValue, len(args)))
 	}
 	return nil
 }
@@ -516,21 +522,12 @@ func (a *API) handleWorkerConnection(sc server.SocketConn) {
 		log.Debugf("data: %+v", dataParts)
 		log.Debugf("calling command %s with data: %+v and permissions %d", command, dataParts, sc.Permission)
 
-		value, err := a.HandleCommand(command, dataParts, sc.Permission)
+		response := a.HandleCommand(command, dataParts, sc.Permission)
 
-		log.Debugf("command %s returned %+v", command, value)
-		if err != nil {
-			//TODO handle error
-			log.Error("Error handling command:", err)
-			continue
-		}
+		log.Tracef("command %s returned %+v", command, response)
 
-		if value == nil {
-			// nil cannot be encoded, so we send an empty string
-			value = ""
-		}
-
-		if err := sc.Encoder.Encode(value); err != nil {
+		// Send the full APIResponse to the worker client
+		if err := sc.Encoder.Encode(response); err != nil {
 			log.Error("Error encoding response:", err)
 		}
 	}
@@ -571,19 +568,27 @@ func (a *API) handleAdminConnection(sc server.SocketConn) {
 			continue
 		}
 
-		value, err := a.HandleCommand(strings.Join(apiCommand, ":"), args, sc.Permission)
+		response := a.HandleCommand(strings.Join(apiCommand, ":"), args, sc.Permission)
 
-		if err != nil {
-			log.Errorf("%+v, %+v", apiCommand, args)
-			log.Error("Error handling command:", err)
-			_, err2 := fmt.Fprintf(sc.Conn, "%v\n", err) // We return the error message back to admin sockets
+		if !response.Success {
+			log.WithFields(log.Fields{
+				"command":       apiCommand,
+				"args":          args,
+				"error_code":    response.Error.Code,
+				"error_message": response.Error.Message,
+			}).Error("Admin command failed")
 
-			log.Errorf("error returning the error back to admin socket: %v", err2)
+			_, err2 := fmt.Fprintf(sc.Conn, "ERROR [%s]: %s\n", response.Error.Code, response.Error.Message)
+			if err2 != nil {
+				log.Errorf("error returning the error back to admin socket: %v", err2)
+			}
 			continue
 		}
 
-		_, err = fmt.Fprintf(sc.Conn, "%v\n", value)
-		log.Errorf("error writing server: %v", err)
+		_, err = fmt.Fprintf(sc.Conn, "%v\n", response.Data)
+		if err != nil {
+			log.Errorf("error writing to admin socket: %v", err)
+		}
 
 	}
 }

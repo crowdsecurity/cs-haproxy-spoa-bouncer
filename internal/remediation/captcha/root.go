@@ -115,7 +115,8 @@ func (c *Captcha) InjectKeyValues(actions *action.Actions) error {
 }
 
 type CaptchaResponse struct {
-	Success bool `json:"success"`
+	Success    bool     `json:"success"`
+	ErrorCodes []string `json:"error-codes"`
 }
 
 // Validate tries to validate the captcha response and sets the session status to valid if the captcha is valid
@@ -187,11 +188,8 @@ func (c *Captcha) Validate(uuid, toParse string) bool {
 		}
 	}()
 
-	// Check HTTP status code
-	if res.StatusCode != http.StatusOK {
-		clog.WithField("status_code", res.StatusCode).Error("captcha provider returned non-200 status")
-		return false
-	}
+	// Log HTTP status code for debugging but don't fail on non-200 since most providers return 200 regardless
+	clog.WithField("status_code", res.StatusCode).Debug("captcha provider response status")
 
 	contentType := res.Header.Get("Content-Type")
 	if !strings.Contains(contentType, "application/json") {
@@ -205,7 +203,26 @@ func (c *Captcha) Validate(uuid, toParse string) bool {
 		return false
 	}
 
-	clog.WithField("success", captchaRes.Success).Debug("captcha validation response received")
+	// Log response details for debugging
+	logFields := log.Fields{
+		"success": captchaRes.Success,
+	}
+
+	// Add error codes if present
+	if len(captchaRes.ErrorCodes) > 0 {
+		logFields["error_codes"] = captchaRes.ErrorCodes
+	}
+
+	if captchaRes.Success {
+		clog.WithFields(logFields).Info("captcha validation successful")
+	} else {
+		// Log failure with error codes for troubleshooting
+		if len(captchaRes.ErrorCodes) > 0 {
+			clog.WithFields(logFields).Warn("captcha validation failed with provider error codes")
+		} else {
+			clog.WithFields(logFields).Warn("captcha validation failed without error codes")
+		}
+	}
 
 	return captchaRes.Success
 }

@@ -2,16 +2,33 @@ package worker
 
 import (
 	"encoding/gob"
-	"errors"
 	"net"
 	"net/http"
 	"strconv"
 	"sync"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/api/types"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/ban"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
-	log "github.com/sirupsen/logrus"
 )
+
+var (
+	// gobTypesRegistered ensures gob types are registered only once
+	gobTypesRegistered sync.Once
+)
+
+// registerGobTypes registers custom types for gob encoding
+// This function is safe to call multiple times as it uses sync.Once
+func registerGobTypes() {
+	gobTypesRegistered.Do(func() {
+		// Register types that will be sent as interface{} through gob
+		gob.Register(&types.HostResponse{})
+		gob.Register(http.Cookie{})
+	})
+}
 
 const (
 	headerLength = 52
@@ -32,11 +49,10 @@ type WorkerClient struct {
 }
 
 func (w *WorkerClient) write(_b []byte) error {
-	n, err := w.conn.Write(_b)
+	_, err := w.conn.Write(_b)
 	if err != nil {
 		return err
 	}
-	log.Debugf("wrote %d bytes", n)
 	return nil
 }
 
@@ -94,10 +110,18 @@ func (w *WorkerClient) del(command, submodule string, args ...string) error {
 
 func (w *WorkerClient) decode(i interface{}) error {
 	if err := w.decoder.Decode(i); err != nil {
-		log.Errorf("error decoding: %s", err)
 		return err
 	}
 	return nil
+}
+
+// decodeResponse decodes an APIResponse and extracts the data or returns the error
+func (w *WorkerClient) decodeResponse() (*types.APIResponse, error) {
+	var response types.APIResponse
+	if err := w.decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 func (w *WorkerClient) GetIP(ip string) (remediation.Remediation, error) {
@@ -108,12 +132,21 @@ func (w *WorkerClient) GetIP(ip string) (remediation.Remediation, error) {
 		return remediation.Allow, err
 	}
 
-	var rem remediation.Remediation
-	if err := w.decode(&rem); err != nil {
+	response, err := w.decodeResponse()
+	if err != nil {
 		return remediation.Allow, err
 	}
 
-	return rem, nil
+	if !response.Success {
+		return remediation.Allow, response.Error
+	}
+
+	remStr, err := types.GetData[string](response)
+	if err != nil {
+		return remediation.Allow, err
+	}
+
+	return remediation.FromString(remStr), nil
 }
 
 func (w *WorkerClient) GetCN(cn string, ip string) (remediation.Remediation, error) {
@@ -124,12 +157,21 @@ func (w *WorkerClient) GetCN(cn string, ip string) (remediation.Remediation, err
 		return remediation.Allow, err
 	}
 
-	var rem remediation.Remediation
-	if err := w.decode(&rem); err != nil {
+	response, err := w.decodeResponse()
+	if err != nil {
 		return remediation.Allow, err
 	}
 
-	return rem, nil
+	if !response.Success {
+		return remediation.Allow, response.Error
+	}
+
+	remStr, err := types.GetData[string](response)
+	if err != nil {
+		return remediation.Allow, err
+	}
+
+	return remediation.FromString(remStr), nil
 }
 
 func (w *WorkerClient) GetGeoIso(ip string) (string, error) {
@@ -140,8 +182,17 @@ func (w *WorkerClient) GetGeoIso(ip string) (string, error) {
 		return "", err
 	}
 
-	var iso string
-	if err := w.decode(&iso); err != nil {
+	response, err := w.decodeResponse()
+	if err != nil {
+		return "", err
+	}
+
+	if !response.Success {
+		return "", response.Error
+	}
+
+	iso, err := types.GetData[string](response)
+	if err != nil {
 		return "", err
 	}
 
@@ -156,16 +207,37 @@ func (w *WorkerClient) GetHost(h string) (*host.Host, error) {
 		return nil, err
 	}
 
-	var hStruct *host.Host
-	if err := w.decode(&hStruct); err != nil {
+	response, err := w.decodeResponse()
+	if err != nil {
 		return nil, err
 	}
 
-	if hStruct != nil && hStruct.Host == "" {
-		return nil, errors.New("host not found")
+	if !response.Success {
+		return nil, response.Error
 	}
 
-	return hStruct, nil
+	hostResp, err := types.GetData[*types.HostResponse](response)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert HostResponse to host.Host
+	result := &host.Host{
+		Host: hostResp.Host,
+		Captcha: captcha.Captcha{
+			SiteKey:             hostResp.CaptchaSiteKey,
+			Provider:            hostResp.CaptchaProvider,
+			FallbackRemediation: hostResp.CaptchaFallbackRemediation,
+		},
+		Ban: ban.Ban{
+			ContactUsURL: hostResp.BanContactUsURL,
+		},
+		AppSec: appsec.AppSec{
+			AlwaysSend: hostResp.AppSecAlwaysSend,
+		},
+	}
+
+	return result, nil
 }
 
 func (w *WorkerClient) GetHostCookie(h string, ssl string) (http.Cookie, error) {
@@ -176,8 +248,17 @@ func (w *WorkerClient) GetHostCookie(h string, ssl string) (http.Cookie, error) 
 		return http.Cookie{}, err
 	}
 
-	var cookie http.Cookie
-	if err := w.decode(&cookie); err != nil {
+	response, err := w.decodeResponse()
+	if err != nil {
+		return http.Cookie{}, err
+	}
+
+	if !response.Success {
+		return http.Cookie{}, response.Error
+	}
+
+	cookie, err := types.GetData[http.Cookie](response)
+	if err != nil {
 		return http.Cookie{}, err
 	}
 
@@ -192,8 +273,17 @@ func (w *WorkerClient) GetHostSessionKey(h, s, k string) (string, error) {
 		return "", err
 	}
 
-	var key string
-	if err := w.decode(&key); err != nil {
+	response, err := w.decodeResponse()
+	if err != nil {
+		return "", err
+	}
+
+	if !response.Success {
+		return "", response.Error
+	}
+
+	key, err := types.GetData[string](response)
+	if err != nil {
 		return "", err
 	}
 
@@ -208,8 +298,17 @@ func (w *WorkerClient) ValHostCookie(h, cookie string) (string, error) {
 		return "", err
 	}
 
-	var uuid string
-	if err := w.decode(&uuid); err != nil {
+	response, err := w.decodeResponse()
+	if err != nil {
+		return "", err
+	}
+
+	if !response.Success {
+		return "", response.Error
+	}
+
+	uuid, err := types.GetData[string](response)
+	if err != nil {
 		return "", err
 	}
 
@@ -224,8 +323,17 @@ func (w *WorkerClient) ValHostCaptcha(host, uuid, captcha string) (bool, error) 
 		return false, err
 	}
 
-	var valid bool
-	if err := w.decode(&valid); err != nil {
+	response, err := w.decodeResponse()
+	if err != nil {
+		return false, err
+	}
+
+	if !response.Success {
+		return false, response.Error
+	}
+
+	valid, err := types.GetData[bool](response)
+	if err != nil {
 		return false, err
 	}
 
@@ -240,8 +348,17 @@ func (w *WorkerClient) SetHostSessionKey(h, s, k, v string) (bool, error) {
 		return false, err
 	}
 
-	var set bool
-	if err := w.decode(&set); err != nil {
+	response, err := w.decodeResponse()
+	if err != nil {
+		return false, err
+	}
+
+	if !response.Success {
+		return false, response.Error
+	}
+
+	set, err := types.GetData[bool](response)
+	if err != nil {
 		return false, err
 	}
 
@@ -256,8 +373,17 @@ func (w *WorkerClient) DeleteHostSessionKey(h, s, k string) (bool, error) {
 		return false, err
 	}
 
-	var deleted bool
-	if err := w.decode(&deleted); err != nil {
+	response, err := w.decodeResponse()
+	if err != nil {
+		return false, err
+	}
+
+	if !response.Success {
+		return false, response.Error
+	}
+
+	deleted, err := types.GetData[bool](response)
+	if err != nil {
 		return false, err
 	}
 
@@ -265,6 +391,9 @@ func (w *WorkerClient) DeleteHostSessionKey(h, s, k string) (bool, error) {
 }
 
 func NewWorkerClient(path string) (*WorkerClient, error) {
+	// Register gob types before creating the client
+	registerGobTypes()
+
 	c, err := net.Dial("unix", path)
 	if err != nil {
 		return nil, err
