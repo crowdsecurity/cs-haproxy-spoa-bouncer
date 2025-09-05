@@ -11,6 +11,7 @@ hosts:
       site_key: "123"
       secret_key: "456"
       provider: "hcaptcha"
+      timeout: 10  # HTTP client timeout in seconds (default: 5)
   - host: "*"
     captcha:
       fallback_remediation: allow
@@ -21,6 +22,7 @@ hosts:
 - `site_key` - The site key for the captcha provider
 - `secret_key` - The secret key for the captcha provider
 - `provider` - The provider to use, currently only `hcaptcha` | `recaptcha` | `turnstile` are supported
+- `timeout` - HTTP client timeout in seconds for captcha validation requests (default: 5)
 - `fallback_remediation` - The remediation to use if the captcha configuration is invalid, defaults to `ban`. Supported values are `ban` | `allow`, `allow` will allow the request to pass through without any remediation.
 
 ### Notes
