@@ -59,6 +59,8 @@ func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
 				Timeout:   10 * time.Second,
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
+			// Respect HTTP_PROXY and HTTPS_PROXY environment variables
+			Proxy: http.ProxyFromEnvironment,
 		},
 		// HTTP client timeout as safety net - should match or exceed context timeout
 		Timeout: time.Duration(c.getTimeout()) * time.Second,
