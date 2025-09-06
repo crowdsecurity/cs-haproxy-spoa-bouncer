@@ -139,7 +139,10 @@ func NewAPI(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *d
 					return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", args[0])
 				}
 
-				isValid := h.Captcha.Validate(args[1], args[2])
+				isValid, err := h.Captcha.Validate(args[1], args[2])
+				if err != nil {
+					return types.NewAPIError(types.ErrCodeCaptchaValidationFailed, "Captcha validation failed", err.Error())
+				}
 				return types.NewAPIResponse(isValid)
 			},
 		},

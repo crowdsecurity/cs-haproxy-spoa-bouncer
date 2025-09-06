@@ -37,11 +37,12 @@ const (
 	ErrCodeWorkerNotFound  ErrorCode = "WORKER_NOT_FOUND"
 
 	// Validation errors
-	ErrCodeInvalidCookie  ErrorCode = "INVALID_COOKIE"
-	ErrCodeInvalidCaptcha ErrorCode = "INVALID_CAPTCHA"
-	ErrCodeCaptchaExpired ErrorCode = "CAPTCHA_EXPIRED"
-	ErrCodeInvalidIP      ErrorCode = "INVALID_IP"
-	ErrCodeInvalidHost    ErrorCode = "INVALID_HOST"
+	ErrCodeInvalidCookie           ErrorCode = "INVALID_COOKIE"
+	ErrCodeInvalidCaptcha          ErrorCode = "INVALID_CAPTCHA"
+	ErrCodeCaptchaValidationFailed ErrorCode = "CAPTCHA_VALIDATION_FAILED"
+	ErrCodeCaptchaExpired          ErrorCode = "CAPTCHA_EXPIRED"
+	ErrCodeInvalidIP               ErrorCode = "INVALID_IP"
+	ErrCodeInvalidHost             ErrorCode = "INVALID_HOST"
 
 	// Server errors
 	ErrCodeServerError        ErrorCode = "SERVER_ERROR"
