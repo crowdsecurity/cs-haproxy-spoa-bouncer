@@ -4,13 +4,11 @@ import (
 	"encoding/gob"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"sync"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/api/messages"
 	apipermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/api/types"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -22,10 +20,8 @@ var (
 // registerServerGobTypes registers types for server-side gob encoding
 func registerServerGobTypes() {
 	serverGobTypesRegistered.Do(func() {
-		// Register types that will be sent as interface{} through gob
-		gob.Register(&types.HostResponse{})
-		gob.Register(http.Cookie{})
-		gob.Register(remediation.Remediation(0))
+		// Register all message and response types
+		messages.RegisterGobTypes()
 	})
 }
 
@@ -46,6 +42,7 @@ type SocketConn struct {
 	Conn       net.Conn                    // underlying connection
 	Permission apipermission.APIPermission // Permission of the socket admin|worker
 	Encoder    *gob.Encoder                // Unique encoder for socket connection
+	Decoder    *gob.Decoder                // Unique decoder for socket connection
 }
 
 func NewAdminSocket(connChan chan SocketConn) (*Server, error) {
@@ -83,6 +80,7 @@ func (s *Server) Run(l *net.Listener) error {
 			Conn:       conn,
 			Permission: s.permission,
 			Encoder:    gob.NewEncoder(conn),
+			Decoder:    gob.NewDecoder(conn),
 		}
 	}
 }
