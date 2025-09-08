@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -20,7 +21,7 @@ import (
 )
 
 // handleWorkerConnectionEncoded handles worker connections using encoded messages
-func (a *API) handleWorkerConnectionEncoded(sc server.SocketConn) {
+func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.SocketConn) {
 	defer func() {
 		err := sc.Conn.Close()
 		if err != nil {
@@ -41,7 +42,7 @@ func (a *API) handleWorkerConnectionEncoded(sc server.SocketConn) {
 
 		log.Debugf("Received encoded command: %s", req.Command)
 
-		response := a.handleTypedRequest(req)
+		response := a.handleTypedRequest(ctx, req)
 
 		log.Tracef("Command %s returned %+v", req.Command, response)
 
@@ -53,7 +54,7 @@ func (a *API) handleWorkerConnectionEncoded(sc server.SocketConn) {
 }
 
 // handleTypedRequest processes typed requests based on the command
-func (a *API) handleTypedRequest(req messages.WorkerRequest) *types.APIResponse {
+func (a *API) handleTypedRequest(ctx context.Context, req messages.WorkerRequest) *types.APIResponse {
 	switch req.Command {
 	case messages.GetIP:
 		data, ok := req.Data.(messages.IPRequest)
@@ -109,7 +110,7 @@ func (a *API) handleTypedRequest(req messages.WorkerRequest) *types.APIResponse 
 		if !ok {
 			return types.NewAPIError(types.ErrCodeInvalidRequest, "Invalid request data for ValHostCaptcha", "")
 		}
-		return a.handleValHostCaptcha(data)
+		return a.handleValHostCaptcha(ctx, data)
 
 	case messages.SetHostSession:
 		data, ok := req.Data.(messages.HostSessionRequest)
@@ -130,7 +131,7 @@ func (a *API) handleTypedRequest(req messages.WorkerRequest) *types.APIResponse 
 		if !ok {
 			return types.NewAPIError(types.ErrCodeInvalidRequest, "Invalid request data for ValHostAppSec", "")
 		}
-		return a.handleValHostAppSec(data)
+		return a.handleValHostAppSec(&data)
 
 	default:
 		return types.NewAPIError(types.ErrCodeNotFound, "Unknown command", string(req.Command))
@@ -284,13 +285,13 @@ func (a *API) handleValHostCookie(req messages.HostCookieValidationRequest) *typ
 	return types.NewAPIResponse(uuid)
 }
 
-func (a *API) handleValHostCaptcha(req messages.HostCaptchaValidationRequest) *types.APIResponse {
+func (a *API) handleValHostCaptcha(ctx context.Context, req messages.HostCaptchaValidationRequest) *types.APIResponse {
 	h := a.HostManager.MatchFirstHost(req.Host)
 	if h == nil {
 		return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", req.Host)
 	}
 
-	isValid, err := h.Captcha.Validate(req.UUID, req.Response)
+	isValid, err := h.Captcha.Validate(ctx, req.UUID, req.Response)
 	if err != nil {
 		return types.NewAPIError(types.ErrCodeCaptchaValidationFailed, "Captcha validation failed", err.Error())
 	}
@@ -327,7 +328,7 @@ func (a *API) handleDelHostSession(req messages.HostSessionRequest) *types.APIRe
 	return types.NewAPIResponse(true)
 }
 
-func (a *API) handleValHostAppSec(req messages.AppSecRequest) *types.APIResponse {
+func (a *API) handleValHostAppSec(req *messages.AppSecRequest) *types.APIResponse {
 	// Future AppSec implementation
 	// This is where we'll integrate with the AppSec engine
 	// For now, return allow

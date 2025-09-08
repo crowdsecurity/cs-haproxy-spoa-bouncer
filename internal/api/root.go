@@ -40,10 +40,10 @@ func (a *API) Run(ctx context.Context) error {
 		case sc := <-a.ConnChan:
 			log.Info("New connection")
 			if sc.Permission == apiPermission.WorkerPermission {
-				go a.handleWorkerConnectionEncoded(sc)
+				go a.handleWorkerConnectionEncoded(ctx, sc)
 				continue
 			}
-			go a.handleAdminConnection(sc)
+			go a.handleAdminConnection(ctx, sc)
 		case <-ctx.Done():
 			return nil
 		}

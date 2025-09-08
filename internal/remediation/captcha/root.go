@@ -120,7 +120,7 @@ type CaptchaResponse struct {
 }
 
 // Validate tries to validate the captcha response and sets the session status to valid if the captcha is valid
-func (c *Captcha) Validate(uuid, toParse string) (bool, error) {
+func (c *Captcha) Validate(ctx context.Context, uuid, toParse string) (bool, error) {
 	clog := c.logger.WithField("session", uuid)
 
 	if len(toParse) == 0 {
@@ -152,7 +152,7 @@ func (c *Captcha) Validate(uuid, toParse string) (bool, error) {
 	body.Add("response", response)
 
 	// Create a context with timeout for the request
-	reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(c.getTimeout())*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(c.getTimeout())*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, providers[c.Provider].validate, strings.NewReader(body.Encode()))

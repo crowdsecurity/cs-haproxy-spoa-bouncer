@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -43,7 +44,7 @@ func (a *API) handleAdminValHostCookie(args []string) *types.APIResponse {
 	return types.NewAPIResponse(uuid)
 }
 
-func (a *API) handleAdminValHostCaptcha(args []string) *types.APIResponse {
+func (a *API) handleAdminValHostCaptcha(ctx context.Context, args []string) *types.APIResponse {
 	if resp := ArgsCheckResponse(args, 3, 3); resp != nil {
 		return resp
 	}
@@ -53,7 +54,7 @@ func (a *API) handleAdminValHostCaptcha(args []string) *types.APIResponse {
 		return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", args[0])
 	}
 
-	isValid, err := h.Captcha.Validate(args[1], args[2])
+	isValid, err := h.Captcha.Validate(ctx, args[1], args[2])
 	if err != nil {
 		return types.NewAPIError(types.ErrCodeCaptchaValidationFailed, "Captcha validation failed", err.Error())
 	}
@@ -248,7 +249,7 @@ func (a *API) handleAdminGetGeoIso(args []string) *types.APIResponse {
 }
 
 // handleAdminConnection handles admin connections using optimized string-based protocol
-func (a *API) handleAdminConnection(sc server.SocketConn) {
+func (a *API) handleAdminConnection(ctx context.Context, sc server.SocketConn) {
 	defer func() {
 		err := sc.Conn.Close()
 		if err != nil {
@@ -295,7 +296,7 @@ func (a *API) handleAdminConnection(sc server.SocketConn) {
 		}
 
 		// Handle command directly without permission checks (admin-only connection)
-		response := a.handleAdminCommand(apiCommand, args)
+		response := a.handleAdminCommand(ctx, apiCommand, args)
 
 		if !response.Success {
 			log.WithFields(log.Fields{
@@ -363,7 +364,7 @@ func (a *API) parseAdminCommand(line string) ([]string, []string, error) {
 }
 
 // handleAdminCommand directly dispatches admin commands without permission checks or handler map
-func (a *API) handleAdminCommand(apiCommand []string, args []string) *types.APIResponse {
+func (a *API) handleAdminCommand(ctx context.Context, apiCommand []string, args []string) *types.APIResponse {
 	if len(apiCommand) < 2 {
 		return types.NewAPIError(types.ErrCodeInvalidRequest, "Invalid command format", "expected at least verb and module")
 	}
@@ -400,8 +401,7 @@ func (a *API) handleAdminCommand(apiCommand []string, args []string) *types.APIR
 			}
 		}
 	case "set":
-		switch module {
-		case "host":
+		if module == "host" {
 			if submodule == "session" {
 				return a.handleAdminSetHostSession(args)
 			}
@@ -416,13 +416,12 @@ func (a *API) handleAdminCommand(apiCommand []string, args []string) *types.APIR
 			}
 		}
 	case "val":
-		switch module {
-		case "host":
+		if module == "host" {
 			switch submodule {
 			case "cookie":
 				return a.handleAdminValHostCookie(args)
 			case "captcha":
-				return a.handleAdminValHostCaptcha(args)
+				return a.handleAdminValHostCaptcha(ctx, args)
 			default:
 				return types.NewAPIError(types.ErrCodeNotFound, "Unknown host validation subcommand", submodule)
 			}

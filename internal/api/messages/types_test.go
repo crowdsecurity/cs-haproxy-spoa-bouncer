@@ -3,6 +3,7 @@ package messages
 import (
 	"bytes"
 	"encoding/gob"
+	"net/http"
 	"testing"
 )
 
@@ -143,7 +144,7 @@ func TestAppSecRequestEncoding(t *testing.T) {
 		t.Errorf("Expected host api.example.com, got %s", appSecReq.Host)
 	}
 
-	if appSecReq.Method != "POST" {
+	if appSecReq.Method != http.MethodPost {
 		t.Errorf("Expected method POST, got %s", appSecReq.Method)
 	}
 
