@@ -94,9 +94,46 @@
       });
     };
     function captchaCallback () {
-      setTimeout(() => {
-        document.querySelector('#captcha-form').submit();
-      }, 500);
+      // More robust captcha callback with multiple validation checks
+      function attemptSubmit(retryCount = 0) {
+        const maxRetries = 10;
+        const form = document.querySelector('#captcha-form');
+        
+        if (!form) {
+          console.error('Captcha form not found');
+          return;
+        }
+        
+        // Check for captcha response field (works for all providers)
+        const responseFields = form.querySelectorAll('input[name$="-response"], textarea[name$="-response"]');
+        let responseFound = false;
+        let responseValue = '';
+        
+        // Check if any response field has a value
+        for (const field of responseFields) {
+          if (field.value && field.value.trim() !== '') {
+            responseFound = true;
+            responseValue = field.value;
+            break;
+          }
+        }
+        
+        if (responseFound) {
+          console.log('Captcha response found, submitting form');
+          form.submit();
+        } else if (retryCount < maxRetries) {
+          // Retry with exponential backoff
+          const delay = Math.min(100 * Math.pow(1.5, retryCount), 2000);
+          console.log(`Captcha response not ready, retrying in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+          setTimeout(() => attemptSubmit(retryCount + 1), delay);
+        } else {
+          console.error('Captcha response not found after maximum retries, submitting anyway');
+          form.submit(); // Submit anyway as fallback
+        }
+      }
+      
+      // Initial delay to allow captcha providers to initialize
+      setTimeout(() => attemptSubmit(), 200);
     }
   </script>
 </body>
