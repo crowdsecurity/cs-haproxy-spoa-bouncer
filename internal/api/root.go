@@ -86,6 +86,15 @@ type API struct {
 	ConnChan      chan server.SocketConn
 }
 
+// APIConfig holds the configuration for creating a new API instance
+type APIConfig struct {
+	WorkerManager *worker.Manager
+	HostManager   *host.Manager
+	Dataset       *dataset.DataSet
+	GeoDatabase   *geo.GeoDatabase
+	SocketChan    chan server.SocketConn
+}
+
 func (a *API) HandleCommand(command string, args []string, permission apiPermission.APIPermission) (interface{}, error) {
 	if handler, ok := a.Handlers[command]; ok {
 		return handler.handle(permission, args...)
@@ -93,13 +102,14 @@ func (a *API) HandleCommand(command string, args []string, permission apiPermiss
 	return nil, fmt.Errorf("command not found")
 }
 
-func NewAPI(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *dataset.DataSet, geoDatabase *geo.GeoDatabase, socketChan chan server.SocketConn) *API {
+// NewAPI creates a new API instance and initializes it with the provided configuration
+func NewAPI(config APIConfig) *API {
 	a := &API{
-		WorkerManager: WorkerManager,
-		HostManager:   HostManager,
-		Dataset:       dataset,
-		GeoDatabase:   geoDatabase,
-		ConnChan:      socketChan,
+		WorkerManager: config.WorkerManager,
+		HostManager:   config.HostManager,
+		Dataset:       config.Dataset,
+		GeoDatabase:   config.GeoDatabase,
+		ConnChan:      config.SocketChan,
 	}
 
 	a.Handlers = map[string]APIHandler{
