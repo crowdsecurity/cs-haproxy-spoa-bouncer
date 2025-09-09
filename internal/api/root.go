@@ -22,13 +22,23 @@ type API struct {
 	ConnChan      chan server.SocketConn
 }
 
-func NewAPI(WorkerManager *worker.Manager, HostManager *host.Manager, dataset *dataset.DataSet, geoDatabase *geo.GeoDatabase, socketChan chan server.SocketConn) *API {
+// APIConfig holds the configuration for creating a new API instance
+type APIConfig struct {
+	WorkerManager *worker.Manager
+	HostManager   *host.Manager
+	Dataset       *dataset.DataSet
+	GeoDatabase   *geo.GeoDatabase
+	SocketChan    chan server.SocketConn
+}
+
+// NewAPI creates a new API instance and initializes it with the provided configuration
+func NewAPI(config APIConfig) *API {
 	a := &API{
-		WorkerManager: WorkerManager,
-		HostManager:   HostManager,
-		Dataset:       dataset,
-		GeoDatabase:   geoDatabase,
-		ConnChan:      socketChan,
+		WorkerManager: config.WorkerManager,
+		HostManager:   config.HostManager,
+		Dataset:       config.Dataset,
+		GeoDatabase:   config.GeoDatabase,
+		ConnChan:      config.SocketChan,
 	}
 
 	return a

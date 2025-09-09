@@ -207,7 +207,7 @@ func (c *Captcha) Validate(ctx context.Context, uuid, toParse string) (bool, err
 		return false, fmt.Errorf("failed to decode captcha response: %w", err)
 	}
 
-	// Log response details for debugging
+	// Create log fields once and reuse logger entry
 	logFields := log.Fields{
 		"success": captchaRes.Success,
 	}
@@ -217,18 +217,21 @@ func (c *Captcha) Validate(ctx context.Context, uuid, toParse string) (bool, err
 		logFields["error_codes"] = captchaRes.ErrorCodes
 	}
 
+	// Create logger entry once with all fields
+	l := clog.WithFields(logFields)
+
 	if captchaRes.Success {
-		clog.WithFields(logFields).Info("captcha validation successful")
+		l.Info("captcha validation successful")
 		return true, nil
 	}
 
 	// Log failure with error codes for troubleshooting
 	var errorMsg string
 	if len(captchaRes.ErrorCodes) > 0 {
-		clog.WithFields(logFields).Warn("captcha validation failed with provider error codes")
+		l.Warn("captcha validation failed with provider error codes")
 		errorMsg = fmt.Sprintf("captcha validation failed with error codes: %v", captchaRes.ErrorCodes)
 	} else {
-		clog.WithFields(logFields).Warn("captcha validation failed without error codes")
+		l.Warn("captcha validation failed without error codes")
 		errorMsg = "captcha validation failed without error codes"
 	}
 	return false, fmt.Errorf("%s", errorMsg)
