@@ -39,9 +39,10 @@ type Host struct {
 }
 
 type Manager struct {
-	Hosts []*Host
-	Chan  chan HostOp
-	cache map[string]*Host
+	Hosts  []*Host
+	Chan   chan HostOp
+	Logger *log.Entry
+	cache  map[string]*Host
 	sync.RWMutex
 }
 
@@ -63,11 +64,12 @@ func (h *Manager) String() string {
 	return b.String()
 }
 
-func NewManager() *Manager {
+func NewManager(l *log.Entry) *Manager {
 	return &Manager{
-		Hosts: make([]*Host, 0),
-		Chan:  make(chan HostOp),
-		cache: make(map[string]*Host),
+		Hosts:  make([]*Host, 0),
+		Chan:   make(chan HostOp),
+		Logger: l,
+		cache:  make(map[string]*Host),
 	}
 }
 
@@ -76,14 +78,14 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 	defer h.RUnlock()
 
 	if host, ok := h.cache[toMatch]; ok {
-		host.logger.WithField("value", toMatch).Debug("matched host from cache")
+		host.logger.WithField("requested_host", toMatch).Debug("matched host from cache")
 		return host
 	}
 
 	for _, host := range h.Hosts {
 		matched, err := filepath.Match(host.Host, toMatch)
 		if matched && err == nil {
-			host.logger.WithField("value", toMatch).Debug("matched host")
+			host.logger.WithField("requested_host", toMatch).Debug("matched host pattern")
 			h.cache[toMatch] = host
 			return host
 		}
@@ -187,14 +189,49 @@ func (h *Manager) patchHost(host *Host) {
 	//TODO
 }
 
-func (h *Manager) addHost(ctx context.Context, host *Host) {
-	clog := log.New()
-
+// createHostLogger creates a logger for a host that inherits from the base logger
+// while allowing host-specific overrides like log level
+func (h *Manager) createHostLogger(host *Host) *log.Entry {
+	// If the host specifies a custom log level, create a new logger instance
 	if host.LogLevel != nil {
-		clog.SetLevel(*host.LogLevel)
+		// Create a new logger with the host-specific level
+		// We need to create a new logger instance to avoid affecting the base logger
+		hostLogger := log.NewEntry(h.Logger.Logger)
+		hostLogger.Logger.SetLevel(*host.LogLevel)
+
+		// Copy the base logger's fields but exclude "component" since hosts should have their own context
+		for k, v := range h.Logger.Data {
+			if k != "component" {
+				hostLogger = hostLogger.WithField(k, v)
+			}
+		}
+
+		// Add the host field
+		return hostLogger.WithField("host", host.Host)
 	}
 
-	host.logger = clog.WithField("host", host.Host)
+	// For normal case, create a new logger entry without the "component" field
+	hostLogger := log.NewEntry(h.Logger.Logger)
+
+	// Copy the base logger's fields but exclude "component"
+	for k, v := range h.Logger.Data {
+		if k != "component" {
+			hostLogger = hostLogger.WithField(k, v)
+		}
+	}
+
+	return hostLogger.WithField("host", host.Host)
+}
+
+func (h *Manager) addHost(ctx context.Context, host *Host) {
+	// Create a logger for this host that inherits base logger values
+	host.logger = h.createHostLogger(host)
+
+	// Add additional useful fields for host context
+	host.logger = host.logger.WithFields(log.Fields{
+		"has_captcha":  host.Captcha.Provider != "",
+		"has_ban":      true, // Ban is always available
+	})
 
 	if err := host.Captcha.Init(host.logger, ctx); err != nil {
 		host.logger.Error(err)
