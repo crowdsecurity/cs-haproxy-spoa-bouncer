@@ -8,8 +8,9 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 )
 
-// WorkerRequest is the top-level request message for worker communication
-type WorkerRequest struct {
+// APIRequest is the unified request message for both worker and admin communication
+// This eliminates duplication while keeping the handlers separate
+type APIRequest struct {
 	Command APICommand  `gob:"cmd"`
 	Data    interface{} `gob:"data"`
 }

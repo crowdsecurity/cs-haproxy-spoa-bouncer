@@ -30,7 +30,7 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 	}()
 
 	for {
-		var req messages.WorkerRequest
+		var req messages.APIRequest
 		if err := sc.Decoder.Decode(&req); err != nil {
 			if errors.Is(err, io.EOF) {
 				// Client closed the connection gracefully
@@ -54,7 +54,7 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 }
 
 // handleTypedRequest processes typed requests based on the command
-func (a *API) handleTypedRequest(ctx context.Context, req messages.WorkerRequest) *types.APIResponse {
+func (a *API) handleTypedRequest(ctx context.Context, req messages.APIRequest) *types.APIResponse {
 	switch req.Command {
 	case messages.GetIP:
 		data, ok := req.Data.(messages.IPRequest)

@@ -229,9 +229,8 @@ func (h *Manager) addHost(ctx context.Context, host *Host) {
 
 	// Add additional useful fields for host context
 	host.logger = host.logger.WithFields(log.Fields{
-		"host_pattern": host.Host,
-		"has_captcha":  host.Captcha.Provider != "",
-		"has_ban":      true, // Ban is always available
+		"has_captcha": host.Captcha.Provider != "",
+		"has_ban":     true, // Ban is always available
 	})
 
 	if err := host.Captcha.Init(host.logger, ctx); err != nil {

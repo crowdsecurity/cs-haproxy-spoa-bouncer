@@ -60,16 +60,6 @@ func (a *API) Run(ctx context.Context) error {
 	}
 }
 
-func ArgsCheck(args []string, minValue int, maxValue int) error {
-	if len(args) < minValue {
-		return fmt.Errorf("missing argument")
-	}
-	if len(args) > maxValue {
-		return fmt.Errorf("too many arguments")
-	}
-	return nil
-}
-
 // ArgsCheckResponse returns a proper API response for argument validation
 func ArgsCheckResponse(args []string, minValue int, maxValue int) *types.APIResponse {
 	if len(args) < minValue {

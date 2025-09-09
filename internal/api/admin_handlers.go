@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/api/messages"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/api/types"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
@@ -363,70 +364,41 @@ func (a *API) parseAdminCommand(line string) ([]string, []string, error) {
 	return apiCommand, args, nil
 }
 
-// handleAdminCommand directly dispatches admin commands without permission checks or handler map
+// handleAdminCommand directly dispatches admin commands using clean APICommand constants
 func (a *API) handleAdminCommand(ctx context.Context, apiCommand []string, args []string) *types.APIResponse {
 	if len(apiCommand) < 2 {
 		return types.NewAPIError(types.ErrCodeInvalidRequest, "Invalid command format", "expected at least verb and module")
 	}
 
-	verb := apiCommand[0]
-	module := apiCommand[1]
-	var submodule string
-	if len(apiCommand) > 2 {
-		submodule = apiCommand[2]
-	}
+	// Build command string from parts and convert to APICommand for cleaner switching
+	cmdStr := strings.Join(apiCommand, ":")
+	cmd := messages.CommandFromString(cmdStr)
 
-	// Direct dispatch based on verb:module:submodule pattern
-	switch verb {
-	case "get":
-		switch module {
-		case "ip":
-			return a.handleAdminGetIP(args)
-		case "cn":
-			return a.handleAdminGetCN(args)
-		case "geo":
-			if submodule == "iso" {
-				return a.handleAdminGetGeoIso(args)
-			}
-		case "hosts":
-			return a.handleAdminGetHosts(args)
-		case "host":
-			switch submodule {
-			case "cookie":
-				return a.handleAdminGetHostCookie(args)
-			case "session":
-				return a.handleAdminGetHostSession(args)
-			default:
-				return types.NewAPIError(types.ErrCodeNotFound, "Unknown host subcommand", submodule)
-			}
-		}
-	case "set":
-		if module == "host" {
-			if submodule == "session" {
-				return a.handleAdminSetHostSession(args)
-			}
-		}
-	case "del":
-		switch module {
-		case "hosts":
-			return a.handleAdminDelHosts(args)
-		case "host":
-			if submodule == "session" {
-				return a.handleAdminDelHostSession(args)
-			}
-		}
-	case "val":
-		if module == "host" {
-			switch submodule {
-			case "cookie":
-				return a.handleAdminValHostCookie(args)
-			case "captcha":
-				return a.handleAdminValHostCaptcha(ctx, args)
-			default:
-				return types.NewAPIError(types.ErrCodeNotFound, "Unknown host validation subcommand", submodule)
-			}
-		}
+	// Use clean APICommand constants instead of nested string switches
+	switch cmd {
+	case messages.GetIP:
+		return a.handleAdminGetIP(args)
+	case messages.GetCN:
+		return a.handleAdminGetCN(args)
+	case messages.GetGeoIso:
+		return a.handleAdminGetGeoIso(args)
+	case messages.GetHosts:
+		return a.handleAdminGetHosts(args)
+	case messages.GetHostCookie:
+		return a.handleAdminGetHostCookie(args)
+	case messages.GetHostSession:
+		return a.handleAdminGetHostSession(args)
+	case messages.SetHostSession:
+		return a.handleAdminSetHostSession(args)
+	case messages.DelHostSession:
+		return a.handleAdminDelHostSession(args)
+	case messages.DelHosts:
+		return a.handleAdminDelHosts(args)
+	case messages.ValHostCookie:
+		return a.handleAdminValHostCookie(args)
+	case messages.ValHostCaptcha:
+		return a.handleAdminValHostCaptcha(ctx, args)
+	default:
+		return types.NewAPIError(types.ErrCodeNotFound, "Unknown command", cmdStr)
 	}
-
-	return types.NewAPIError(types.ErrCodeNotFound, "Unknown command", strings.Join(apiCommand, ":"))
 }

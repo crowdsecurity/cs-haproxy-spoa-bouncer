@@ -27,7 +27,7 @@ func (w *WorkerClient) sendRequest(cmd messages.APICommand, data interface{}) (*
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	req := messages.WorkerRequest{
+	req := messages.APIRequest{
 		Command: cmd,
 		Data:    data,
 	}

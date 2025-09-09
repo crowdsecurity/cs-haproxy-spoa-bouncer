@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-func TestWorkerRequestEncoding(t *testing.T) {
+func TestAPIRequestEncoding(t *testing.T) {
 	// Register types
 	RegisterGobTypes()
 
 	// Test encoding and decoding a simple IP request
-	originalReq := WorkerRequest{
+	originalReq := APIRequest{
 		Command: GetIP,
 		Data: IPRequest{
 			IP: "192.168.1.1",
@@ -29,7 +29,7 @@ func TestWorkerRequestEncoding(t *testing.T) {
 
 	// Decode
 	decoder := gob.NewDecoder(&buf)
-	var decodedReq WorkerRequest
+	var decodedReq APIRequest
 	err = decoder.Decode(&decodedReq)
 	if err != nil {
 		t.Fatalf("Failed to decode request: %v", err)
@@ -55,7 +55,7 @@ func TestHostCookieRequestEncoding(t *testing.T) {
 	RegisterGobTypes()
 
 	// Test encoding and decoding a host cookie request
-	originalReq := WorkerRequest{
+	originalReq := APIRequest{
 		Command: GetHostCookie,
 		Data: HostCookieRequest{
 			Host: "example.com",
@@ -73,7 +73,7 @@ func TestHostCookieRequestEncoding(t *testing.T) {
 
 	// Decode
 	decoder := gob.NewDecoder(&buf)
-	var decodedReq WorkerRequest
+	var decodedReq APIRequest
 	err = decoder.Decode(&decodedReq)
 	if err != nil {
 		t.Fatalf("Failed to decode request: %v", err)
@@ -103,7 +103,7 @@ func TestAppSecRequestEncoding(t *testing.T) {
 	RegisterGobTypes()
 
 	// Test encoding and decoding an AppSec request with binary data
-	originalReq := WorkerRequest{
+	originalReq := APIRequest{
 		Command: ValHostAppSec,
 		Data: AppSecRequest{
 			Host:     "api.example.com",
@@ -124,7 +124,7 @@ func TestAppSecRequestEncoding(t *testing.T) {
 
 	// Decode
 	decoder := gob.NewDecoder(&buf)
-	var decodedReq WorkerRequest
+	var decodedReq APIRequest
 	err = decoder.Decode(&decodedReq)
 	if err != nil {
 		t.Fatalf("Failed to decode request: %v", err)
