@@ -191,7 +191,9 @@ func Execute() error {
 		}
 	})
 
-	HostManager := host.NewManager()
+	// Create a base logger for the host manager
+	hostManagerLogger := log.WithField("component", "host_manager")
+	HostManager := host.NewManager(hostManagerLogger)
 
 	g.Go(func() error {
 		HostManager.Run(ctx)
