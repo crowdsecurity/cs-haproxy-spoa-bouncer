@@ -149,7 +149,12 @@ func NewAPI(config APIConfig) *API {
 					return "", nil
 				}
 
-				return h.Captcha.Validate(args[1], args[2]), nil
+				valid, err := h.Captcha.Validate(args[1], args[2])
+				if err != nil {
+					return "", err
+				}
+
+				return valid, nil
 			},
 		},
 		"del:host:session": {
