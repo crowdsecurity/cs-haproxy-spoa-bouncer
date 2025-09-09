@@ -5,10 +5,25 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/api/messages"
+	apipermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
 	log "github.com/sirupsen/logrus"
 )
+
+var (
+	// serverGobTypesRegistered ensures gob types are registered only once on server side
+	serverGobTypesRegistered sync.Once
+)
+
+// registerServerGobTypes registers types for server-side gob encoding
+func registerServerGobTypes() {
+	serverGobTypesRegistered.Do(func() {
+		// Register all message and response types
+		messages.RegisterGobTypes()
+	})
+}
 
 const (
 	WorkerSocketPrefix = "crowdsec-spoa-worker-"
@@ -27,6 +42,7 @@ type SocketConn struct {
 	Conn       net.Conn                    // underlying connection
 	Permission apipermission.APIPermission // Permission of the socket admin|worker
 	Encoder    *gob.Encoder                // Unique encoder for socket connection
+	Decoder    *gob.Decoder                // Unique decoder for socket connection
 }
 
 func NewAdminSocket(connChan chan SocketConn) (*Server, error) {
@@ -51,15 +67,20 @@ func NewWorkerSocket(connChan chan SocketConn, dir string) (*Server, error) {
 }
 
 func (s *Server) Run(l *net.Listener) error {
+	// Register gob types before creating encoder
+	registerServerGobTypes()
+
 	for {
 		conn, err := (*l).Accept()
 		if err != nil {
 			return err
 		}
+
 		s.connChan <- SocketConn{
 			Conn:       conn,
 			Permission: s.permission,
 			Encoder:    gob.NewEncoder(conn),
+			Decoder:    gob.NewDecoder(conn),
 		}
 	}
 }

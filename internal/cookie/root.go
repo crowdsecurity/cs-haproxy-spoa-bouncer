@@ -71,6 +71,7 @@ func (c *CookieGenerator) GenerateCookie(session *session.Session, ssl *bool) (*
 		HttpOnly: *c.HTTPOnly,
 		Secure:   false,
 		SameSite: http.SameSiteStrictMode,
+		Path:     "/",
 	}
 
 	switch c.Secure {
