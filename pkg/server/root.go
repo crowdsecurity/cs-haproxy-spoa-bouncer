@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/api/messages"
@@ -43,6 +45,7 @@ type SocketConn struct {
 	Permission apipermission.APIPermission // Permission of the socket admin|worker
 	Encoder    *gob.Encoder                // Unique encoder for socket connection
 	Decoder    *gob.Decoder                // Unique decoder for socket connection
+	WorkerName string                      // Worker name (only set for worker connections)
 }
 
 func NewAdminSocket(connChan chan SocketConn) (*Server, error) {
@@ -66,9 +69,46 @@ func NewWorkerSocket(connChan chan SocketConn, dir string) (*Server, error) {
 	return ws, nil
 }
 
+// extractWorkerNameFromListener extracts worker name from the listener's address
+func (s *Server) extractWorkerNameFromListener(l *net.Listener) string {
+	if s.permission != apipermission.WorkerPermission {
+		return ""
+	}
+
+	addr := (*l).Addr()
+	if addr == nil {
+		return ""
+	}
+
+	// Extract socket path from Unix address
+	socketPath := addr.String()
+	if !strings.HasPrefix(socketPath, "unix:") {
+		return ""
+	}
+
+	// Remove "unix:" prefix
+	socketPath = strings.TrimPrefix(socketPath, "unix:")
+
+	// Extract filename from path
+	filename := filepath.Base(socketPath)
+
+	// Remove prefix and suffix to get worker name
+	// Format: crowdsec-spoa-worker-{name}.sock
+	if strings.HasPrefix(filename, WorkerSocketPrefix) && strings.HasSuffix(filename, ".sock") {
+		workerName := strings.TrimPrefix(filename, WorkerSocketPrefix)
+		workerName = strings.TrimSuffix(workerName, ".sock")
+		return workerName
+	}
+
+	return ""
+}
+
 func (s *Server) Run(l *net.Listener) error {
 	// Register gob types before creating encoder
 	registerServerGobTypes()
+
+	// Extract worker name for worker connections
+	workerName := s.extractWorkerNameFromListener(l)
 
 	for {
 		conn, err := (*l).Accept()
@@ -81,6 +121,7 @@ func (s *Server) Run(l *net.Listener) error {
 			Permission: s.permission,
 			Encoder:    gob.NewEncoder(conn),
 			Decoder:    gob.NewDecoder(conn),
+			WorkerName: workerName,
 		}
 	}
 }
