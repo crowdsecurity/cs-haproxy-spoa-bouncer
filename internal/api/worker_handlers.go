@@ -91,6 +91,13 @@ func (a *API) handleTypedRequest(ctx context.Context, req messages.APIRequest) *
 		}
 		return a.handleGetHostCookie(data)
 
+	case messages.GetHostUnsetCookie:
+		data, ok := req.Data.(messages.HostCookieRequest)
+		if !ok {
+			return types.NewAPIError(types.ErrCodeInvalidRequest, "Invalid request data for GetHostUnsetCookie", "")
+		}
+		return a.handleGetHostUnsetCookie(data)
+
 	case messages.GetHostSession:
 		data, ok := req.Data.(messages.HostSessionRequest)
 		if !ok {
@@ -244,6 +251,20 @@ func (a *API) handleGetHostCookie(req messages.HostCookieRequest) *types.APIResp
 	}
 
 	ses.Set(session.CaptchaStatus, captcha.Pending)
+	return types.NewAPIResponse(cookie)
+}
+
+func (a *API) handleGetHostUnsetCookie(req messages.HostCookieRequest) *types.APIResponse {
+	h := a.HostManager.MatchFirstHost(req.Host)
+	if h == nil {
+		return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", req.Host)
+	}
+
+	cookie, err := h.Captcha.CookieGenerator.GenerateUnsetCookie(ptr.Of(req.SSL))
+	if err != nil {
+		return types.NewAPIError(types.ErrCodeServerError, "Failed to generate unset cookie", err.Error())
+	}
+
 	return types.NewAPIResponse(cookie)
 }
 
