@@ -250,7 +250,34 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	switch r {
 	case remediation.Allow:
-		// !TODO Check if cookie is sent and session is valid if not valid then issue an unset cookie
+		// Check if cookie is sent and session is valid, if not valid then issue an unset cookie
+		cookieB64, _ := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
+		if cookieB64 != nil {
+			uuid, err := s.workerClient.ValHostCookie(*hoststring, *cookieB64)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"host":  *hoststring,
+					"error": err,
+				}).Debug("Cookie validation failed for allow request, will clear cookie")
+				// Set captcha status to "clear" to unset invalid cookie
+				req.Actions.SetVar(action.ScopeTransaction, "captcha_status", "clear")
+				unsetCookie := host.Captcha.CookieGenerator.GenerateUnsetCookie()
+				req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", unsetCookie.String())
+			} else {
+				// Valid cookie exists, check if session is still valid
+				sess := host.Captcha.Sessions.GetSession(uuid)
+				if sess == nil {
+					log.WithFields(log.Fields{
+						"host":    *hoststring,
+						"session": uuid,
+					}).Debug("Session expired for allow request, will clear cookie")
+					// Session expired, clear the cookie
+					req.Actions.SetVar(action.ScopeTransaction, "captcha_status", "clear")
+					unsetCookie := host.Captcha.CookieGenerator.GenerateUnsetCookie()
+					req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", unsetCookie.String())
+				}
+			}
+		}
 	case remediation.Ban:
 		//Handle ban
 		host.Ban.InjectKeyValues(&req.Actions)
@@ -262,6 +289,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 		cookieB64, _ := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
 		uuid := ""
+		isExistingValidCookie := false
 
 		if cookieB64 != nil {
 			uuid, err = s.workerClient.ValHostCookie(*hoststring, *cookieB64)
@@ -271,6 +299,18 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 					"error": err,
 				}).Warn("Failed to validate existing cookie")
 				uuid = "" // Reset to generate new cookie
+			} else {
+				// Check if the session still exists (not expired)
+				sess := host.Captcha.Sessions.GetSession(uuid)
+				if sess != nil {
+					isExistingValidCookie = true
+				} else {
+					log.WithFields(log.Fields{
+						"host":    *hoststring,
+						"session": uuid,
+					}).Debug("Session expired, will generate new cookie")
+					uuid = "" // Session expired, generate new cookie
+				}
 			}
 		}
 
@@ -301,7 +341,12 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				return // Cannot proceed without valid cookie
 			}
 
+			// Set captcha status to "ok" for new cookie
+			req.Actions.SetVar(action.ScopeTransaction, "captcha_status", "ok")
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
+		} else if isExistingValidCookie {
+			// Existing valid cookie, don't set new status/cookie (let HAProxy keep existing)
+			// This avoids unnecessary Set-Cookie headers when cookie is already valid
 		}
 
 		if uuid == "" {
@@ -422,6 +467,8 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			}).Warn("Failed to get final captcha status")
 		} else if finalStatus == captcha.Valid {
 			r = remediation.Allow
+			// Set captcha status to "ok" to maintain the valid cookie
+			req.Actions.SetVar(action.ScopeTransaction, "captcha_status", "ok")
 			storedURL, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
 			if err != nil {
 				log.WithFields(log.Fields{

@@ -130,10 +130,8 @@ function runtime.Handle(txn)
             ["captcha_frontend_key"]=get_txn_var(txn, "crowdsec.captcha_frontend_key"),
             ["captcha_frontend_js"]=get_txn_var(txn, "crowdsec.captcha_frontend_js"),
         }))
-        local cookie = get_txn_var(txn, "crowdsec.captcha_cookie")
-        if cookie ~= "" then
-            reply:add_header("Set-Cookie", cookie)
-        end
+        -- Note: Cookie management is now handled by HAProxy via http-after-response rules
+        -- using the captcha_status and captcha_cookie variables set by the SPOA bouncer
     end
 
     if remediation == "ban" then
