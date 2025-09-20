@@ -5,8 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
     depends_on:
-      crowdsec:
-        condition: service_healthy
+      - crowdsec
     volumes:
       - sockets:/run/
       - templates:/var/lib/crowdsec/lua/haproxy/templates/
@@ -41,12 +40,9 @@ services:
     ports:
       - "9090:9090"
     depends_on:
-      crowdsec:
-        condition: service_healthy
-      spoa:
-        condition: service_started
-      whoami:
-        condition: service_started
+      - crowdsec
+      - spoa
+      - whoami
     networks:
       - crowdsec
   
@@ -60,12 +56,6 @@ services:
       - geodb:/staging/var/lib/crowdsec/data/
     networks:
       - crowdsec
-    healthcheck:
-      test: ["CMD", "cscli", "lapi", "status"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
 
 volumes:
   lua:
