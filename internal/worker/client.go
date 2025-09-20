@@ -2,114 +2,60 @@ package worker
 
 import (
 	"encoding/gob"
-	"errors"
 	"net"
 	"net/http"
-	"strconv"
 	"sync"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/api/messages"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/api/types"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/ban"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
-	log "github.com/sirupsen/logrus"
-)
-
-const (
-	headerLength = 52
-	lengthIndex  = 0
-	lengthSize   = 16
-	verbIndex    = 16
-	verbSize     = 4
-	commandIndex = 20
-	commandSize  = 16
-	submodIndex  = 36
-	submodSize   = 16
 )
 
 type WorkerClient struct {
 	conn    net.Conn
 	mutex   sync.Mutex
+	encoder *gob.Encoder
 	decoder *gob.Decoder
 }
 
-func (w *WorkerClient) write(_b []byte) error {
-	n, err := w.conn.Write(_b)
-	if err != nil {
-		return err
-	}
-	log.Debugf("wrote %d bytes", n)
-	return nil
-}
-
-func (w *WorkerClient) joinArgsBytes(args []string) []byte {
-	totalLength := 0
-	for _, a := range args {
-		totalLength += len(a) + 1
-	}
-	totalLength--
-
-	_b := make([]byte, totalLength)
-	offset := 0
-	for i, a := range args {
-		copy(_b[offset:], a)
-		offset += len(a)
-		if i < len(args)-1 {
-			_b[offset] = 0
-			offset++
-		}
-	}
-	return _b
-}
-
-func (w *WorkerClient) formatHeaderBytes(verb, command, submodule string, args []string) []byte {
-	_jd := w.joinArgsBytes(args)
-	_dl := len(_jd)
-	_b := make([]byte, headerLength+_dl)
-	copy(_b[lengthIndex:lengthIndex+lengthSize], strconv.Itoa(_dl))
-	copy(_b[verbIndex:verbIndex+verbSize], verb)
-	copy(_b[commandIndex:commandIndex+commandSize], command)
-	copy(_b[submodIndex:submodIndex+submodSize], submodule)
-	copy(_b[headerLength:], _jd)
-	return _b
-}
-
-func (w *WorkerClient) executeCommand(verb, command, submodule string, args ...string) error {
-	return w.write(w.formatHeaderBytes(verb, command, submodule, args))
-}
-
-func (w *WorkerClient) get(command, submodule string, args ...string) error {
-	return w.executeCommand("get", command, submodule, args...)
-}
-
-func (w *WorkerClient) set(command, submodule string, args ...string) error {
-	return w.executeCommand("set", command, submodule, args...)
-}
-
-func (w *WorkerClient) val(command, submodule string, args ...string) error {
-	return w.executeCommand("val", command, submodule, args...)
-}
-
-func (w *WorkerClient) del(command, submodule string, args ...string) error {
-	return w.executeCommand("del", command, submodule, args...)
-}
-
-func (w *WorkerClient) decode(i interface{}) error {
-	if err := w.decoder.Decode(i); err != nil {
-		log.Errorf("error decoding: %s", err)
-		return err
-	}
-	return nil
-}
-
-func (w *WorkerClient) GetIP(ip string) (remediation.Remediation, error) {
+// sendRequest sends a typed request and returns the response
+func (w *WorkerClient) sendRequest(cmd messages.APICommand, data interface{}) (*types.APIResponse, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	if err := w.get("ip", "", ip); err != nil {
+	req := messages.APIRequest{
+		Command: cmd,
+		Data:    data,
+	}
+
+	if err := w.encoder.Encode(req); err != nil {
+		return nil, err
+	}
+
+	var response types.APIResponse
+	if err := w.decoder.Decode(&response); err != nil {
+		return nil, err
+	}
+
+	return &response, nil
+}
+
+func (w *WorkerClient) GetIP(ip string) (remediation.Remediation, error) {
+	response, err := w.sendRequest(messages.GetIP, messages.IPRequest{IP: ip})
+	if err != nil {
 		return remediation.Allow, err
 	}
 
-	var rem remediation.Remediation
-	if err := w.decode(&rem); err != nil {
+	if !response.Success {
+		return remediation.Allow, response.Error
+	}
+
+	rem, err := types.GetData[remediation.Remediation](response)
+	if err != nil {
 		return remediation.Allow, err
 	}
 
@@ -117,15 +63,20 @@ func (w *WorkerClient) GetIP(ip string) (remediation.Remediation, error) {
 }
 
 func (w *WorkerClient) GetCN(cn string, ip string) (remediation.Remediation, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if err := w.get("cn", "", cn, ip); err != nil {
+	response, err := w.sendRequest(messages.GetCN, messages.CNRequest{
+		CountryCode: cn,
+		IP:          ip,
+	})
+	if err != nil {
 		return remediation.Allow, err
 	}
 
-	var rem remediation.Remediation
-	if err := w.decode(&rem); err != nil {
+	if !response.Success {
+		return remediation.Allow, response.Error
+	}
+
+	rem, err := types.GetData[remediation.Remediation](response)
+	if err != nil {
 		return remediation.Allow, err
 	}
 
@@ -133,15 +84,17 @@ func (w *WorkerClient) GetCN(cn string, ip string) (remediation.Remediation, err
 }
 
 func (w *WorkerClient) GetGeoIso(ip string) (string, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if err := w.get("geo", "iso", ip); err != nil {
+	response, err := w.sendRequest(messages.GetGeoIso, messages.GeoRequest{IP: ip})
+	if err != nil {
 		return "", err
 	}
 
-	var iso string
-	if err := w.decode(&iso); err != nil {
+	if !response.Success {
+		return "", response.Error
+	}
+
+	iso, err := types.GetData[string](response)
+	if err != nil {
 		return "", err
 	}
 
@@ -149,35 +102,55 @@ func (w *WorkerClient) GetGeoIso(ip string) (string, error) {
 }
 
 func (w *WorkerClient) GetHost(h string) (*host.Host, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if err := w.get("hosts", "", h); err != nil {
+	response, err := w.sendRequest(messages.GetHosts, messages.HostsRequest{Host: h})
+	if err != nil {
 		return nil, err
 	}
 
-	var hStruct *host.Host
-	if err := w.decode(&hStruct); err != nil {
+	if !response.Success {
+		return nil, response.Error
+	}
+
+	hostResp, err := types.GetData[*types.HostResponse](response)
+	if err != nil {
 		return nil, err
 	}
 
-	if hStruct != nil && hStruct.Host == "" {
-		return nil, errors.New("host not found")
+	// Convert HostResponse to host.Host
+	result := &host.Host{
+		Host: hostResp.Host,
+		Captcha: captcha.Captcha{
+			SiteKey:             hostResp.CaptchaSiteKey,
+			Provider:            hostResp.CaptchaProvider,
+			FallbackRemediation: hostResp.CaptchaFallbackRemediation,
+		},
+		Ban: ban.Ban{
+			ContactUsURL: hostResp.BanContactUsURL,
+		},
+		AppSec: appsec.AppSec{
+			AlwaysSend: hostResp.AppSecAlwaysSend,
+		},
 	}
 
-	return hStruct, nil
+	return result, nil
 }
 
 func (w *WorkerClient) GetHostCookie(h string, ssl string) (http.Cookie, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if err := w.get("host", "cookie", h, ssl); err != nil {
+	sslBool := ssl == "true"
+	response, err := w.sendRequest(messages.GetHostCookie, messages.HostCookieRequest{
+		Host: h,
+		SSL:  sslBool,
+	})
+	if err != nil {
 		return http.Cookie{}, err
 	}
 
-	var cookie http.Cookie
-	if err := w.decode(&cookie); err != nil {
+	if !response.Success {
+		return http.Cookie{}, response.Error
+	}
+
+	cookie, err := types.GetData[http.Cookie](response)
+	if err != nil {
 		return http.Cookie{}, err
 	}
 
@@ -185,15 +158,21 @@ func (w *WorkerClient) GetHostCookie(h string, ssl string) (http.Cookie, error) 
 }
 
 func (w *WorkerClient) GetHostSessionKey(h, s, k string) (string, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if err := w.get("host", "session", h, s, k); err != nil {
+	response, err := w.sendRequest(messages.GetHostSession, messages.HostSessionRequest{
+		Host: h,
+		UUID: s,
+		Key:  k,
+	})
+	if err != nil {
 		return "", err
 	}
 
-	var key string
-	if err := w.decode(&key); err != nil {
+	if !response.Success {
+		return "", response.Error
+	}
+
+	key, err := types.GetData[string](response)
+	if err != nil {
 		return "", err
 	}
 
@@ -201,15 +180,20 @@ func (w *WorkerClient) GetHostSessionKey(h, s, k string) (string, error) {
 }
 
 func (w *WorkerClient) ValHostCookie(h, cookie string) (string, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if err := w.val("host", "cookie", h, cookie); err != nil {
+	response, err := w.sendRequest(messages.ValHostCookie, messages.HostCookieValidationRequest{
+		Host:   h,
+		Cookie: cookie,
+	})
+	if err != nil {
 		return "", err
 	}
 
-	var uuid string
-	if err := w.decode(&uuid); err != nil {
+	if !response.Success {
+		return "", response.Error
+	}
+
+	uuid, err := types.GetData[string](response)
+	if err != nil {
 		return "", err
 	}
 
@@ -217,15 +201,21 @@ func (w *WorkerClient) ValHostCookie(h, cookie string) (string, error) {
 }
 
 func (w *WorkerClient) ValHostCaptcha(host, uuid, captcha string) (bool, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if err := w.val("host", "captcha", host, uuid, captcha); err != nil {
+	response, err := w.sendRequest(messages.ValHostCaptcha, messages.HostCaptchaValidationRequest{
+		Host:     host,
+		UUID:     uuid,
+		Response: captcha,
+	})
+	if err != nil {
 		return false, err
 	}
 
-	var valid bool
-	if err := w.decode(&valid); err != nil {
+	if !response.Success {
+		return false, response.Error
+	}
+
+	valid, err := types.GetData[bool](response)
+	if err != nil {
 		return false, err
 	}
 
@@ -233,15 +223,22 @@ func (w *WorkerClient) ValHostCaptcha(host, uuid, captcha string) (bool, error) 
 }
 
 func (w *WorkerClient) SetHostSessionKey(h, s, k, v string) (bool, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if err := w.set("host", "session", h, s, k, v); err != nil {
+	response, err := w.sendRequest(messages.SetHostSession, messages.HostSessionRequest{
+		Host:  h,
+		UUID:  s,
+		Key:   k,
+		Value: v,
+	})
+	if err != nil {
 		return false, err
 	}
 
-	var set bool
-	if err := w.decode(&set); err != nil {
+	if !response.Success {
+		return false, response.Error
+	}
+
+	set, err := types.GetData[bool](response)
+	if err != nil {
 		return false, err
 	}
 
@@ -249,15 +246,21 @@ func (w *WorkerClient) SetHostSessionKey(h, s, k, v string) (bool, error) {
 }
 
 func (w *WorkerClient) DeleteHostSessionKey(h, s, k string) (bool, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if err := w.del("host", "session", h, s, k); err != nil {
+	response, err := w.sendRequest(messages.DelHostSession, messages.HostSessionRequest{
+		Host: h,
+		UUID: s,
+		Key:  k,
+	})
+	if err != nil {
 		return false, err
 	}
 
-	var deleted bool
-	if err := w.decode(&deleted); err != nil {
+	if !response.Success {
+		return false, response.Error
+	}
+
+	deleted, err := types.GetData[bool](response)
+	if err != nil {
 		return false, err
 	}
 
@@ -265,10 +268,18 @@ func (w *WorkerClient) DeleteHostSessionKey(h, s, k string) (bool, error) {
 }
 
 func NewWorkerClient(path string) (*WorkerClient, error) {
+	// Register gob types before creating the client
+	messages.RegisterGobTypes()
+
 	c, err := net.Dial("unix", path)
 	if err != nil {
 		return nil, err
 	}
-	wGob := gob.NewDecoder(c)
-	return &WorkerClient{conn: c, decoder: wGob}, nil
+	encoder := gob.NewEncoder(c)
+	decoder := gob.NewDecoder(c)
+	return &WorkerClient{
+		conn:    c,
+		encoder: encoder,
+		decoder: decoder,
+	}, nil
 }
