@@ -41,26 +41,32 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 	}()
 
 	for {
-		// Check if context is cancelled (shutdown signal)
+		// Check if context is canceled (shutdown signal)
 		select {
 		case <-ctx.Done():
-			log.Debugf("Context cancelled, shutting down worker connection handler for worker: %s", workerName)
+			log.Debugf("Context canceled, shutting down worker connection handler for worker: %s", workerName)
 			return
 		default:
 			// Continue with normal processing
 		}
 
 		// Set short read timeout to make decode responsive to context cancellation
-		sc.Conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+		if err := sc.Conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+			log.Errorf("Failed to set read deadline for worker %s: %v", workerName, err)
+			return
+		}
 
 		var req messages.APIRequest
 		err := sc.Decoder.Decode(&req)
 
 		// Clear deadline immediately after decode attempt
-		sc.Conn.SetReadDeadline(time.Time{})
+		if err := sc.Conn.SetReadDeadline(time.Time{}); err != nil {
+			log.Errorf("Failed to clear read deadline for worker %s: %v", workerName, err)
+			return
+		}
 
 		if err != nil {
-			// Check if it's a timeout error
+			// Check if it's a timeout error using errors.As for wrapped errors
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
 				// Timeout occurred - loop back to check context again

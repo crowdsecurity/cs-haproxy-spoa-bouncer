@@ -262,10 +262,10 @@ func (a *API) handleAdminConnection(ctx context.Context, sc server.SocketConn) {
 	reader := bufio.NewReader(sc.Conn)
 
 	for {
-		// Check if context is cancelled (shutdown signal)
+		// Check if context is canceled (shutdown signal)
 		select {
 		case <-ctx.Done():
-			log.Debug("Context cancelled, shutting down admin connection handler")
+			log.Debug("Context canceled, shutting down admin connection handler")
 			return
 		default:
 			// Continue with normal processing
