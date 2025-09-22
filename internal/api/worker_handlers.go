@@ -22,7 +22,17 @@ import (
 
 // handleWorkerConnectionEncoded handles worker connections using encoded messages
 func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.SocketConn) {
+	// Use worker name from connection, fallback to "unknown" if not available
+	workerName := sc.WorkerName
+	if workerName == "" {
+		workerName = "unknown"
+	}
+
+	// Track connection events
+	metrics.TotalWorkerAPIConnectionEvents.With(prometheus.Labels{"worker_name": workerName, "event_type": "connect"}).Inc()
+
 	defer func() {
+		metrics.TotalWorkerAPIConnectionEvents.With(prometheus.Labels{"worker_name": workerName, "event_type": "disconnect"}).Inc()
 		err := sc.Conn.Close()
 		if err != nil {
 			log.Error("Error closing connection:", err)
@@ -36,8 +46,10 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 				// Client closed the connection gracefully
 				break
 			}
-			log.Error("Decode error:", err)
-			continue
+			log.Errorf("Decode error: %v - closing connection to force client reconnect", err)
+			metrics.TotalWorkerAPIConnectionErrors.With(prometheus.Labels{"worker_name": workerName, "error_type": "decode"}).Inc()
+			// Close connection on decode errors to prevent worker from waiting indefinitely
+			return
 		}
 
 		log.Debugf("Received encoded command: %s", req.Command)
@@ -48,7 +60,10 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 
 		// Send the response back
 		if err := sc.Encoder.Encode(response); err != nil {
-			log.Error("Error encoding response:", err)
+			log.Errorf("Error encoding response: %v - closing connection", err)
+			metrics.TotalWorkerAPIConnectionErrors.With(prometheus.Labels{"worker_name": workerName, "error_type": "encode"}).Inc()
+			// Close connection on encode errors as well
+			return
 		}
 	}
 }
