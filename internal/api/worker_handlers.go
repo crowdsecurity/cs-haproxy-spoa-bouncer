@@ -52,20 +52,20 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 
 		// Set short read timeout to make decode responsive to context cancellation
 		sc.Conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
-		
+
 		var req messages.APIRequest
 		err := sc.Decoder.Decode(&req)
-		
+
 		// Clear deadline immediately after decode attempt
 		sc.Conn.SetReadDeadline(time.Time{})
-		
+
 		if err != nil {
 			// Check if it's a timeout error
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				// Timeout occurred - loop back to check context again
 				continue
 			}
-			
+
 			if errors.Is(err, io.EOF) {
 				// Client closed the connection gracefully
 				break
