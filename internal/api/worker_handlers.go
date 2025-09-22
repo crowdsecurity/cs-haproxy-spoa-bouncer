@@ -40,6 +40,15 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 	}()
 
 	for {
+		// Check if context is cancelled (shutdown signal)
+		select {
+		case <-ctx.Done():
+			log.Debugf("Context cancelled, shutting down worker connection handler for worker: %s", workerName)
+			return
+		default:
+			// Continue with normal processing
+		}
+
 		var req messages.APIRequest
 		if err := sc.Decoder.Decode(&req); err != nil {
 			if errors.Is(err, io.EOF) {
