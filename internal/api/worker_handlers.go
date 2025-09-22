@@ -54,18 +54,20 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 			req messages.APIRequest
 			err error
 		}
-
+		
 		decodeChan := make(chan decodeResult, 1)
 		go func() {
 			var req messages.APIRequest
 			err := sc.Decoder.Decode(&req)
 			decodeChan <- decodeResult{req: req, err: err}
 		}()
-
+		
 		var req messages.APIRequest
 		select {
 		case <-ctx.Done():
-			log.Debugf("Context cancelled during decode, shutting down worker connection handler for worker: %s", workerName)
+			// Context cancelled - close connection to interrupt the decode goroutine
+			log.Debugf("Context cancelled during decode, closing connection for worker: %s", workerName)
+			sc.Conn.Close() // This will cause the decode goroutine to fail and exit
 			return
 		case result := <-decodeChan:
 			if result.err != nil {
