@@ -61,7 +61,8 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 
 		if err != nil {
 			// Check if it's a timeout error
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
 				// Timeout occurred - loop back to check context again
 				continue
 			}
