@@ -371,8 +371,8 @@ func (a *API) parseAdminCommand(line string) ([]string, []string, error) {
 		return parts[:2], parts[2:], nil
 	}
 
-	// If no valid command found, default to 2-part for better error messages
-	return parts[:2], parts[2:], nil
+	// If no valid command found, return an explicit error
+	return nil, nil, fmt.Errorf("invalid command: %q", line)
 }
 
 // isValidCommand checks if a command string matches any of our defined APICommands
