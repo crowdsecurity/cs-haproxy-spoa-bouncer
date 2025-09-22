@@ -80,14 +80,13 @@ func (s *Server) extractWorkerNameFromListener(l *net.Listener) string {
 		return ""
 	}
 
-	// Extract socket path from Unix address
-	socketPath := addr.String()
-	if !strings.HasPrefix(socketPath, "unix:") {
+	// Use type assertion to get Unix socket path
+	unixAddr, ok := addr.(*net.UnixAddr)
+	if !ok {
 		return ""
 	}
 
-	// Remove "unix:" prefix
-	socketPath = strings.TrimPrefix(socketPath, "unix:")
+	socketPath := unixAddr.Name
 
 	// Extract filename from path
 	filename := filepath.Base(socketPath)
