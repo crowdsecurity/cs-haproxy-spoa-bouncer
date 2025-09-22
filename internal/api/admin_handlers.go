@@ -271,78 +271,61 @@ func (a *API) handleAdminConnection(ctx context.Context, sc server.SocketConn) {
 			// Continue with normal processing
 		}
 
-		// Use a channel to make ReadString non-blocking with context cancellation
-		type readResult struct {
-			line string
-			err  error
-		}
-		
-		readChan := make(chan readResult, 1)
-		go func() {
-			line, err := reader.ReadString('\n')
-			readChan <- readResult{line: line, err: err}
-		}()
-		
-		select {
-		case <-ctx.Done():
-			log.Debug("Context cancelled during read, shutting down admin connection handler")
+		// Read line by line instead of fixed buffer - more efficient for admin commands
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				// Client closed the connection gracefully
+				break
+			}
+			log.Error("Read error:", err)
 			return
-		case result := <-readChan:
-			if result.err != nil {
-				if errors.Is(result.err, io.EOF) {
-					// Client closed the connection gracefully
-					break
-				}
-				log.Error("Read error:", result.err)
-				return
-			}
-			line := result.line
+		}
 
-			// Trim whitespace and skip empty lines
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
+		// Trim whitespace and skip empty lines
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
 
-			apiCommand, args, err := a.parseAdminCommand(line)
+		apiCommand, args, err := a.parseAdminCommand(line)
+		if err != nil {
+			_, writeErr := fmt.Fprintf(sc.Conn, "ERROR [INVALID_REQUEST]: %s\n", err.Error())
+			if writeErr != nil {
+				log.Errorf("error writing parse error to admin socket: %v", writeErr)
+			}
+			continue
+		}
+
+		if len(apiCommand) == 0 {
+			_, writeErr := fmt.Fprintf(sc.Conn, "ERROR [INVALID_REQUEST]: Empty command\n")
+			if writeErr != nil {
+				log.Errorf("error writing empty command error to admin socket: %v", writeErr)
+			}
+			continue
+		}
+
+		// Handle command directly without permission checks (admin-only connection)
+		response := a.handleAdminCommand(ctx, apiCommand, args)
+
+		if !response.Success {
+			log.WithFields(log.Fields{
+				"command":       strings.Join(apiCommand, ":"),
+				"args":          args,
+				"error_code":    response.Error.Code,
+				"error_message": response.Error.Message,
+			}).Debug("Admin command failed")
+
+			_, err := fmt.Fprintf(sc.Conn, "ERROR [%s]: %s\n", response.Error.Code, response.Error.Message)
 			if err != nil {
-				_, writeErr := fmt.Fprintf(sc.Conn, "ERROR [INVALID_REQUEST]: %s\n", err.Error())
-				if writeErr != nil {
-					log.Errorf("error writing parse error to admin socket: %v", writeErr)
-				}
-				continue
+				log.Errorf("error returning error to admin socket: %v", err)
 			}
+			continue
+		}
 
-			if len(apiCommand) == 0 {
-				_, writeErr := fmt.Fprintf(sc.Conn, "ERROR [INVALID_REQUEST]: Empty command\n")
-				if writeErr != nil {
-					log.Errorf("error writing empty command error to admin socket: %v", writeErr)
-				}
-				continue
-			}
-
-			// Handle command directly without permission checks (admin-only connection)
-			response := a.handleAdminCommand(ctx, apiCommand, args)
-
-			if !response.Success {
-				log.WithFields(log.Fields{
-					"command":       strings.Join(apiCommand, ":"),
-					"args":          args,
-					"error_code":    response.Error.Code,
-					"error_message": response.Error.Message,
-				}).Debug("Admin command failed")
-
-				_, err := fmt.Fprintf(sc.Conn, "ERROR [%s]: %s\n", response.Error.Code, response.Error.Message)
-				if err != nil {
-					log.Errorf("error returning error to admin socket: %v", err)
-				}
-				continue
-			}
-
-			_, err = fmt.Fprintf(sc.Conn, "%v\n", response.Data)
-			if err != nil {
-				log.Errorf("error writing response to admin socket: %v", err)
-			}
+		_, err = fmt.Fprintf(sc.Conn, "%v\n", response.Data)
+		if err != nil {
+			log.Errorf("error writing response to admin socket: %v", err)
 		}
 	}
 }

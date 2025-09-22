@@ -54,14 +54,14 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 			req messages.APIRequest
 			err error
 		}
-		
+
 		decodeChan := make(chan decodeResult, 1)
 		go func() {
 			var req messages.APIRequest
 			err := sc.Decoder.Decode(&req)
 			decodeChan <- decodeResult{req: req, err: err}
 		}()
-		
+
 		var req messages.APIRequest
 		select {
 		case <-ctx.Done():
