@@ -49,16 +49,36 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 			// Continue with normal processing
 		}
 
+		// Use a channel to make decode non-blocking with context cancellation
+		type decodeResult struct {
+			req messages.APIRequest
+			err error
+		}
+		
+		decodeChan := make(chan decodeResult, 1)
+		go func() {
+			var req messages.APIRequest
+			err := sc.Decoder.Decode(&req)
+			decodeChan <- decodeResult{req: req, err: err}
+		}()
+		
 		var req messages.APIRequest
-		if err := sc.Decoder.Decode(&req); err != nil {
-			if errors.Is(err, io.EOF) {
-				// Client closed the connection gracefully
-				break
-			}
-			log.Errorf("Decode error: %v - closing connection to force client reconnect", err)
-			metrics.TotalWorkerAPIConnectionErrors.With(prometheus.Labels{"worker_name": workerName, "error_type": "decode"}).Inc()
-			// Close connection on decode errors to prevent worker from waiting indefinitely
+		select {
+		case <-ctx.Done():
+			log.Debugf("Context cancelled during decode, shutting down worker connection handler for worker: %s", workerName)
 			return
+		case result := <-decodeChan:
+			if result.err != nil {
+				if errors.Is(result.err, io.EOF) {
+					// Client closed the connection gracefully
+					break
+				}
+				log.Errorf("Decode error: %v - closing connection to force client reconnect", result.err)
+				metrics.TotalWorkerAPIConnectionErrors.With(prometheus.Labels{"worker_name": workerName, "error_type": "decode"}).Inc()
+				// Close connection on decode errors to prevent worker from waiting indefinitely
+				return
+			}
+			req = result.req
 		}
 
 		log.Debugf("Received encoded command: %s", req.Command)
