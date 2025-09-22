@@ -345,7 +345,7 @@ func (a *API) parseAdminCommand(line string) ([]string, []string, error) {
 			if a.isValidCommand(candidateCmd) {
 				// Found valid 3-part command, collect arguments from everywhere except the command parts
 				cmdParts := []string{verb, module, parts[i]}
-				args := make([]string, 0, len(parts)-3)
+				args := make([]string, 0)
 
 				// Add arguments that come before the submodule
 				args = append(args, parts[2:i]...)
