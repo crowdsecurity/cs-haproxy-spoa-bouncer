@@ -74,14 +74,17 @@ func (w *WorkerClient) sendRequest(cmd messages.APICommand, data interface{}) (*
 	defer w.mutex.Unlock()
 
 	var lastErr error
+	baseDelay := 5 * time.Millisecond // Very short base for Unix sockets
 
 	for attempt := 0; attempt <= w.maxRetries; attempt++ {
 		// Ensure we have a connection
 		if err := w.connect(); err != nil {
 			lastErr = err
 			if attempt < w.maxRetries {
-				log.Warnf("Connection attempt %d failed: %v, retrying in %v", attempt+1, err, w.retryDelay)
-				time.Sleep(w.retryDelay)
+				// Exponential backoff: 5ms, 10ms, 20ms
+				delay := baseDelay * time.Duration(1<<attempt)
+				log.Warnf("Connection attempt %d failed: %v, retrying in %v", attempt+1, err, delay)
+				time.Sleep(delay)
 				continue
 			}
 			break
@@ -98,7 +101,8 @@ func (w *WorkerClient) sendRequest(cmd messages.APICommand, data interface{}) (*
 			w.disconnect()
 			lastErr = err
 			if attempt < w.maxRetries {
-				time.Sleep(w.retryDelay)
+				delay := baseDelay * time.Duration(1<<attempt)
+				time.Sleep(delay)
 				continue
 			}
 			break
@@ -111,7 +115,8 @@ func (w *WorkerClient) sendRequest(cmd messages.APICommand, data interface{}) (*
 			w.disconnect()
 			lastErr = err
 			if attempt < w.maxRetries {
-				time.Sleep(w.retryDelay)
+				delay := baseDelay * time.Duration(1<<attempt)
+				time.Sleep(delay)
 				continue
 			}
 			break
@@ -371,7 +376,7 @@ func NewWorkerClient(path string, workerName string) (*WorkerClient, error) {
 		socketPath:  path,
 		workerName:  workerName,
 		maxRetries:  3,
-		retryDelay:  100 * time.Millisecond,
+		retryDelay:  5 * time.Millisecond, // Reduced for Unix sockets (now using exponential backoff)
 		isConnected: false,
 	}
 
