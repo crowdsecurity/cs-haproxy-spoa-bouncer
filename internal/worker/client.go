@@ -375,10 +375,7 @@ func NewWorkerClient(path string, workerName string) (*WorkerClient, error) {
 		isConnected: false,
 	}
 
-	// Initial connection attempt
-	if err := client.connect(); err != nil {
-		return nil, fmt.Errorf("failed to establish initial connection: %w", err)
-	}
+	// Connection will be established lazily on first use
 
 	return client, nil
 }
