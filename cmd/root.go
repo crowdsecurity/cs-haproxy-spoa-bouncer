@@ -151,7 +151,7 @@ func Execute() error {
 		return metricsProvider.Run(ctx)
 	})
 
-	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests, metrics.TotalWorkerAPIConnectionErrors, metrics.TotalWorkerAPIConnectionRetries, metrics.ActiveWorkerAPIConnections, metrics.TotalWorkerAPIConnectionEvents)
+	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests, metrics.TotalWorkerAPIConnectionErrors, metrics.TotalWorkerAPIConnectionEvents)
 
 	if config.PrometheusConfig.Enabled {
 		go func() {

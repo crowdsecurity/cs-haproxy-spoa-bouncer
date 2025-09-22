@@ -50,11 +50,6 @@ const (
 	ErrCodeTimeout            ErrorCode = "TIMEOUT"
 	ErrCodeDatabaseError      ErrorCode = "DATABASE_ERROR"
 
-	// Connection errors
-	ErrCodeConnectionError ErrorCode = "CONNECTION_ERROR"
-	ErrCodeDecodeError     ErrorCode = "DECODE_ERROR"
-	ErrCodeEncodeError     ErrorCode = "ENCODE_ERROR"
-
 	// Configuration errors
 	ErrCodeConfigError      ErrorCode = "CONFIG_ERROR"
 	ErrCodeGeoDBUnavailable ErrorCode = "GEODB_UNAVAILABLE"
