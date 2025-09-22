@@ -27,7 +27,6 @@ type WorkerClient struct {
 	socketPath  string
 	workerName  string
 	maxRetries  int
-	retryDelay  time.Duration
 	isConnected bool
 }
 
@@ -376,7 +375,6 @@ func NewWorkerClient(path string, workerName string) (*WorkerClient, error) {
 		socketPath:  path,
 		workerName:  workerName,
 		maxRetries:  3,
-		retryDelay:  5 * time.Millisecond, // Reduced for Unix sockets (now using exponential backoff)
 		isConnected: false,
 	}
 
