@@ -53,7 +53,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 
 	clog.SetLevel(logLevel)
 
-	client, err := worker.NewWorkerClient(socket)
+	client, err := worker.NewWorkerClient(socket, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create worker client: %w", err)
 	}
