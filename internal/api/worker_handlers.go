@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/api/messages"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/api/types"
@@ -49,37 +50,30 @@ func (a *API) handleWorkerConnectionEncoded(ctx context.Context, sc server.Socke
 			// Continue with normal processing
 		}
 
-		// Use a channel to make decode non-blocking with context cancellation
-		type decodeResult struct {
-			req messages.APIRequest
-			err error
-		}
-
-		decodeChan := make(chan decodeResult, 1)
-		go func() {
-			var req messages.APIRequest
-			err := sc.Decoder.Decode(&req)
-			decodeChan <- decodeResult{req: req, err: err}
-		}()
-
+		// Set short read timeout to make decode responsive to context cancellation
+		sc.Conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+		
 		var req messages.APIRequest
-		select {
-		case <-ctx.Done():
-			// Context cancelled - defer function will handle connection cleanup
-			log.Debugf("Context cancelled during decode, shutting down worker connection handler for worker: %s", workerName)
-			return
-		case result := <-decodeChan:
-			if result.err != nil {
-				if errors.Is(result.err, io.EOF) {
-					// Client closed the connection gracefully
-					break
-				}
-				log.Errorf("Decode error: %v - closing connection to force client reconnect", result.err)
-				metrics.TotalWorkerAPIConnectionErrors.With(prometheus.Labels{"worker_name": workerName, "error_type": "decode"}).Inc()
-				// Close connection on decode errors to prevent worker from waiting indefinitely
-				return
+		err := sc.Decoder.Decode(&req)
+		
+		// Clear deadline immediately after decode attempt
+		sc.Conn.SetReadDeadline(time.Time{})
+		
+		if err != nil {
+			// Check if it's a timeout error
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				// Timeout occurred - loop back to check context again
+				continue
 			}
-			req = result.req
+			
+			if errors.Is(err, io.EOF) {
+				// Client closed the connection gracefully
+				break
+			}
+			log.Errorf("Decode error: %v - closing connection to force client reconnect", err)
+			metrics.TotalWorkerAPIConnectionErrors.With(prometheus.Labels{"worker_name": workerName, "error_type": "decode"}).Inc()
+			// Close connection on decode errors to prevent worker from waiting indefinitely
+			return
 		}
 
 		log.Debugf("Received encoded command: %s", req.Command)
