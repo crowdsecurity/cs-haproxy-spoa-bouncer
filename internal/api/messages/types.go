@@ -20,17 +20,18 @@ type APICommand string
 
 // All current worker API commands as constants
 const (
-	GetIP          APICommand = "get:ip"
-	GetCN          APICommand = "get:cn"
-	GetGeoIso      APICommand = "get:geo:iso"
-	GetHosts       APICommand = "get:hosts"
-	GetHostCookie  APICommand = "get:host:cookie"
-	GetHostSession APICommand = "get:host:session"
-	ValHostCookie  APICommand = "val:host:cookie"
-	ValHostCaptcha APICommand = "val:host:captcha"
-	SetHostSession APICommand = "set:host:session"
-	DelHostSession APICommand = "del:host:session"
-	DelHosts       APICommand = "del:hosts"
+	GetIP              APICommand = "get:ip"
+	GetCN              APICommand = "get:cn"
+	GetGeoIso          APICommand = "get:geo:iso"
+	GetHosts           APICommand = "get:hosts"
+	GetHostCookie      APICommand = "get:host:cookie"
+	GetHostUnsetCookie APICommand = "get:host:unset-cookie"
+	GetHostSession     APICommand = "get:host:session"
+	ValHostCookie      APICommand = "val:host:cookie"
+	ValHostCaptcha     APICommand = "val:host:captcha"
+	SetHostSession     APICommand = "set:host:session"
+	DelHostSession     APICommand = "del:host:session"
+	DelHosts           APICommand = "del:hosts"
 
 	// Future AppSec command
 	ValHostAppSec APICommand = "val:host:appsec"

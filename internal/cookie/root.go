@@ -51,15 +51,29 @@ func (c *CookieGenerator) IsValid() error {
 	return nil
 }
 
-func (c *CookieGenerator) GenerateUnsetCookie() *http.Cookie {
-	return &http.Cookie{
+func (c *CookieGenerator) GenerateUnsetCookie(ssl *bool) (*http.Cookie, error) {
+	cookie := &http.Cookie{
 		Name:     c.Name,
 		Value:    "",
 		MaxAge:   -1,
 		HttpOnly: *c.HTTPOnly,
 		Secure:   false,
 		SameSite: http.SameSiteStrictMode,
+		Path:     "/",
 	}
+
+	switch c.Secure {
+	case "auto":
+		if ssl != nil {
+			cookie.Secure = *ssl
+		} else {
+			c.logger.Warn("ssl flag not set, defaulting to false")
+		}
+	case "always":
+		cookie.Secure = true
+	}
+
+	return cookie, urlEncodeValue(cookie)
 }
 
 // Generate cookie from a session
