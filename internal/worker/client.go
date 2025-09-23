@@ -241,6 +241,28 @@ func (w *WorkerClient) GetHostCookie(h string, ssl string) (http.Cookie, error) 
 	return cookie, nil
 }
 
+func (w *WorkerClient) GetHostUnsetCookie(h string, ssl string) (http.Cookie, error) {
+	sslBool := ssl == "true"
+	response, err := w.sendRequest(messages.GetHostUnsetCookie, messages.HostCookieRequest{
+		Host: h,
+		SSL:  sslBool,
+	})
+	if err != nil {
+		return http.Cookie{}, err
+	}
+
+	if !response.Success {
+		return http.Cookie{}, response.Error
+	}
+
+	cookie, err := types.GetData[http.Cookie](response)
+	if err != nil {
+		return http.Cookie{}, err
+	}
+
+	return cookie, nil
+}
+
 func (w *WorkerClient) GetHostSessionKey(h, s, k string) (string, error) {
 	response, err := w.sendRequest(messages.GetHostSession, messages.HostSessionRequest{
 		Host: h,
