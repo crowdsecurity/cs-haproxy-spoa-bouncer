@@ -53,7 +53,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 
 	clog.SetLevel(logLevel)
 
-	client, err := worker.NewWorkerClient(socket)
+	client, err := worker.NewWorkerClient(socket, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create worker client: %w", err)
 	}
@@ -250,7 +250,31 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	switch r {
 	case remediation.Allow:
-		// !TODO Check if cookie is sent and session is valid if not valid then issue an unset cookie
+		// If user has a captcha cookie but decision is Allow, generate unset cookie
+		// We don't set captcha_status, so HAProxy knows to clear the cookie
+		cookieB64, _ := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
+		if cookieB64 != nil {
+			ssl, err := readKeyFromMessage[bool](mes, "ssl")
+			if err != nil {
+				log.Error(err)
+			}
+
+			unsetCookie, err := s.workerClient.GetHostUnsetCookie(*hoststring, fmt.Sprint(*ssl))
+			if err != nil {
+				log.WithFields(log.Fields{
+					"host":  *hoststring,
+					"ssl":   ssl,
+					"error": err,
+				}).Error("Failed to generate unset cookie")
+				return // Cannot proceed without unset cookie
+			}
+
+			log.WithFields(log.Fields{
+				"host": *hoststring,
+			}).Debug("Allow decision but captcha cookie present, will clear cookie")
+			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", unsetCookie.String())
+			// Note: We deliberately don't set captcha_status here
+		}
 	case remediation.Ban:
 		//Handle ban
 		host.Ban.InjectKeyValues(&req.Actions)
@@ -301,6 +325,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				return // Cannot proceed without valid cookie
 			}
 
+			// Set the captcha cookie - status will be set later based on session state
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
 		}
 
@@ -319,16 +344,19 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			return
 		}
 
-		// if captcha is not valid then update the url in the session
+		// Get the current captcha status from the session
 		val, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"host":    *hoststring,
 				"session": uuid,
 				"error":   err,
-			}).Warn("Failed to get captcha status, assuming invalid")
-			val = "" // Assume invalid if we can't get status
+			}).Warn("Failed to get captcha status, assuming pending")
+			val = captcha.Pending // Assume pending if we can't get status
 		}
+
+		// Set the captcha status in the transaction for HAProxy
+		req.Actions.SetVar(action.ScopeTransaction, "captcha_status", val)
 		if val != captcha.Valid {
 			// Update the incoming url if it is different from the stored url for the session ignore favicon requests
 			storedURL, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
@@ -422,6 +450,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			}).Warn("Failed to get final captcha status")
 		} else if finalStatus == captcha.Valid {
 			r = remediation.Allow
+			// The captcha_status was already set above with the actual session status
 			storedURL, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
 			if err != nil {
 				log.WithFields(log.Fields{
