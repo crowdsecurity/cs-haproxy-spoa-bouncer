@@ -113,14 +113,11 @@ function runtime.Handle(txn)
     reply:add_header("cache-control", "no-cache")
     reply:add_header("cache-control", "no-store")
 
+    -- NOTE: "allow" remediation with redirects is now handled natively by HAProxy
+    -- This Lua handler is only called for "captcha" and "ban" remediations
     if remediation == "allow" then
-        local redirect_uri = get_txn_var(txn, "crowdsec.redirect")
-        if redirect_uri ~= "" then
-            reply:set_status(302)
-            reply:add_header("Location", redirect_uri)
-        else
-            return
-        end
+        runtime.logger.warning("Lua handler called for 'allow' remediation - this should not happen with native redirects")
+        return
     end
 
     if remediation == "captcha" then
