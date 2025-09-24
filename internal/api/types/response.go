@@ -148,4 +148,5 @@ type HostResponse struct {
 	CaptchaFallbackRemediation string `json:"captcha_fallback_remediation"`
 	BanContactUsURL            string `json:"ban_contact_us_url"`
 	AppSecAlwaysSend           bool   `json:"appsec_always_send"`
+	AppSecEnabled              bool   `json:"appsec_enabled"`
 }

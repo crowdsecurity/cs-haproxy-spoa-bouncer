@@ -216,6 +216,9 @@ func (w *WorkerClient) GetHost(h string) (*host.Host, error) {
 		},
 	}
 
+	// Note: AppSecEnabled is used by SPOA to determine if AppSec validation should be attempted
+	// The actual AppSec client is not serialized and will be nil in the worker client copy
+
 	return result, nil
 }
 
@@ -371,6 +374,32 @@ func (w *WorkerClient) DeleteHostSessionKey(h, s, k string) (bool, error) {
 	}
 
 	return deleted, nil
+}
+
+func (w *WorkerClient) ValHostAppSec(host, method, url string, headers http.Header, body []byte, remoteIP, userAgent string) (remediation.Remediation, error) {
+	response, err := w.sendRequest(messages.ValHostAppSec, messages.AppSecRequest{
+		Host:      host,
+		Method:    method,
+		URL:       url,
+		Headers:   headers,
+		Body:      body,
+		RemoteIP:  remoteIP,
+		UserAgent: userAgent,
+	})
+	if err != nil {
+		return remediation.Allow, err
+	}
+
+	if !response.Success {
+		return remediation.Allow, response.Error
+	}
+
+	rem, err := types.GetData[remediation.Remediation](response)
+	if err != nil {
+		return remediation.Allow, err
+	}
+
+	return rem, nil
 }
 
 // Close gracefully closes the worker client connection

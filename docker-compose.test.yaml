@@ -1,0 +1,48 @@
+services:
+  # Test SPOA Bouncer (same name as HAProxy expects)
+  spoa:
+    image: crowdsecurity/crowdsec-spoa:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: host
+    volumes:
+      - sockets:/run/
+      - templates:/var/lib/crowdsec/lua/haproxy/templates/
+      - lua:/usr/local/crowdsec/lua/haproxy/
+      - geodb:/var/lib/crowdsec/data/
+      - ./config/crowdsec-spoa-bouncer.yaml.test:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml
+    environment:
+      - WORKERSOCKET=/run/crowdsec-spoa/spoa-1.sock
+      - WORKERNAME=spoa1
+      - LOG_LEVEL=info
+
+  # Test HAProxy
+  haproxy:
+    image: haproxy:2.9.7-alpine
+    network_mode: host
+    volumes:
+      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
+      - ./config/crowdsec.cfg:/etc/haproxy/crowdsec.cfg
+      - sockets:/run/
+      - templates:/var/lib/crowdsec/lua/haproxy/templates/
+      - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
+    depends_on:
+      - spoa
+      - whoami
+  # Test backend service
+  whoami:
+    image: traefik/whoami:latest
+    network_mode: host
+    command:
+       - --port=2020
+
+volumes:
+  lua:
+    driver: local
+  sockets:
+    driver: local
+  templates:
+    driver: local
+  geodb:
+    driver: local

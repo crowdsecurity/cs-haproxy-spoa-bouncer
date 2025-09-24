@@ -96,10 +96,8 @@ type AppSecRequest struct {
 	Body    []byte      `gob:"body"`
 
 	// Additional context from SPOE
-	RemoteIP    string `gob:"remote_ip"`
-	UserAgent   string `gob:"user_agent,omitempty"`
-	Referer     string `gob:"referer,omitempty"`
-	ContentType string `gob:"content_type,omitempty"`
+	RemoteIP  string `gob:"remote_ip"`
+	UserAgent string `gob:"user_agent,omitempty"`
 }
 
 // RegisterGobTypes registers all message types for GOB encoding/decoding

@@ -153,7 +153,7 @@ func (a *API) handleTypedRequest(ctx context.Context, req messages.APIRequest) *
 		if !ok {
 			return types.NewAPIError(types.ErrCodeInvalidRequest, "Invalid request data for ValHostAppSec", "")
 		}
-		return a.handleValHostAppSec(&data)
+		return a.handleValHostAppSec(ctx, &data)
 
 	default:
 		return types.NewAPIError(types.ErrCodeNotFound, "Unknown command", string(req.Command))
@@ -245,6 +245,7 @@ func (a *API) handleGetHosts(req messages.HostsRequest) *types.APIResponse {
 		CaptchaFallbackRemediation: h.Captcha.FallbackRemediation,
 		BanContactUsURL:            h.Ban.ContactUsURL,
 		AppSecAlwaysSend:           h.AppSec.AlwaysSend,
+		AppSecEnabled:              h.AppSec.Client != nil,
 	}
 	return types.NewAPIResponse(hostResponse)
 }
@@ -364,16 +365,33 @@ func (a *API) handleDelHostSession(req messages.HostSessionRequest) *types.APIRe
 	return types.NewAPIResponse(true)
 }
 
-func (a *API) handleValHostAppSec(req *messages.AppSecRequest) *types.APIResponse {
-	// Future AppSec implementation
-	// This is where we'll integrate with the AppSec engine
-	// For now, return allow
+func (a *API) handleValHostAppSec(ctx context.Context, req *messages.AppSecRequest) *types.APIResponse {
+	h := a.HostManager.MatchFirstHost(req.Host)
+	if h == nil {
+		return types.NewAPIError(types.ErrCodeHostNotFound, "Host not found", req.Host)
+	}
+
+	// Check if AppSec is configured for this host
+	if h.AppSec.Client == nil {
+		// If no AppSec client is configured, check if we should always send
+		if !h.AppSec.AlwaysSend {
+			log.Debugf("AppSec not configured for host %s, allowing request", req.Host)
+			return types.NewAPIResponse(remediation.Allow)
+		}
+		// If always_send is true but no client, this is a configuration error
+		return types.NewAPIError(types.ErrCodeServerError, "AppSec always_send is enabled but no AppSec client configured", "")
+	}
+
 	log.Debugf("AppSec request for host %s, method %s, URL %s", req.Host, req.Method, req.URL)
 
-	// TODO: Implement AppSec validation logic
-	// - Parse HTTP request from req.Method, req.URL, req.Headers, req.Body
-	// - Send to AppSec engine for analysis
-	// - Return appropriate remediation based on analysis
+	// Send request to AppSec engine
+	remediationResult, err := h.AppSec.ValidateRequest(ctx, req)
+	if err != nil {
+		log.Errorf("AppSec validation failed: %v", err)
+		// On error, allow the request to prevent blocking legitimate traffic
+		return types.NewAPIResponse(remediation.Allow)
+	}
 
-	return types.NewAPIResponse(remediation.Allow)
+	log.Debugf("AppSec validation result: %s", remediationResult.String())
+	return types.NewAPIResponse(remediationResult)
 }

@@ -189,6 +189,7 @@ func (a *API) handleAdminGetHosts(args []string) *types.APIResponse {
 		CaptchaFallbackRemediation: h.Captcha.FallbackRemediation,
 		BanContactUsURL:            h.Ban.ContactUsURL,
 		AppSecAlwaysSend:           h.AppSec.AlwaysSend,
+		AppSecEnabled:              h.AppSec.Client != nil,
 	}
 	return types.NewAPIResponse(hostResponse)
 }

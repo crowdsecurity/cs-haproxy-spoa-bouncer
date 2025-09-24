@@ -248,6 +248,19 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	var body *[]byte
 	var headers http.Header
 
+	// Extract method and url for AppSec validation (needed for all requests)
+	method, err = readKeyFromMessage[string](mes, "method")
+	if err != nil {
+		log.Printf("failed to read method: %v", err)
+		return
+	}
+
+	url, err = readKeyFromMessage[string](mes, "url")
+	if err != nil {
+		log.Printf("failed to read url: %v", err)
+		return
+	}
+
 	switch r {
 	case remediation.Allow:
 		// If user has a captcha cookie but decision is Allow, generate unset cookie
@@ -337,13 +350,6 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			return
 		}
 
-		url, err = readKeyFromMessage[string](mes, "url")
-
-		if err != nil {
-			log.Printf("failed to read url: %v", err)
-			return
-		}
-
 		// Get the current captcha status from the session
 		val, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus)
 		if err != nil {
@@ -381,12 +387,6 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 					}).Error("Failed to set host session URI")
 				}
 			}
-		}
-
-		method, err = readKeyFromMessage[string](mes, "method")
-		if err != nil {
-			log.Printf("failed to read method: %v", err)
-			return
 		}
 
 		headersType, err := readKeyFromMessage[string](mes, "headers")
@@ -478,19 +478,62 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	if r > remediation.Unknown && !host.AppSec.AlwaysSend {
 		return
 	}
-	// !TODO APPSEC STUFF
 
-	// headers, err := readHeaders(*headersType)
-	// if err != nil {
-	// 	log.Printf("failed to parse headers: %v", err)
-	// }
+	// AppSec validation
+	// Always attempt AppSec validation - the API will handle whether AppSec is enabled or not
 
-	// request, err := http.NewRequest(method, url, strings.NewReader(body))
-	// if err != nil {
-	// 	log.Printf("failed to create request: %v", err)
-	// 	return
-	// }
-	// request.Header = headers
+	// Extract additional information for AppSec validation
+	var remoteIP string
+	var userAgent string
+
+	// Get remote IP from the request
+	if srcIP, err := readKeyFromMessage[net.IP](mes, "src-ip"); err == nil {
+		remoteIP = srcIP.String()
+	}
+
+	// Extract User-Agent for AppSec validation (needed for X-Crowdsec-Appsec-User-Agent header)
+	if headers != nil {
+		userAgent = headers.Get("User-Agent")
+	}
+
+	// Prepare body for AppSec validation
+	if body == nil {
+		msgBody, err := readKeyFromMessage[[]byte](mes, "body")
+		if err == nil && msgBody != nil {
+			body = msgBody
+		}
+	}
+
+	appSecRemediation, err := s.workerClient.ValHostAppSec(
+		*hoststring,
+		*method,
+		*url,
+		headers,
+		*body,
+		remoteIP,
+		userAgent,
+	)
+
+	if err != nil {
+		log.WithFields(log.Fields{
+			"host":  *hoststring,
+			"error": err,
+		}).Error("AppSec validation failed, allowing request")
+		// On error, don't change the remediation to prevent blocking legitimate traffic
+	} else {
+		log.WithFields(log.Fields{
+			"host":        *hoststring,
+			"method":      *method,
+			"url":         *url,
+			"remediation": appSecRemediation.String(),
+		}).Debug("AppSec validation completed")
+
+		// Update remediation based on AppSec result
+		// AppSec can override the original remediation
+		if appSecRemediation > r {
+			r = appSecRemediation
+		}
+	}
 }
 
 // Handles checking the IP address against the dataset
