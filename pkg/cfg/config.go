@@ -33,6 +33,7 @@ type BouncerConfig struct {
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
 	AdminSocket      string                  `yaml:"admin_socket"`
 	WorkerSocketDir  string                  `yaml:"worker_socket"`
+	AppSecURL        string                  `yaml:"appsec_url"`
 	WorkerUid        int                     `yaml:"-"`
 	WorkerGid        int                     `yaml:"-"`
 }
