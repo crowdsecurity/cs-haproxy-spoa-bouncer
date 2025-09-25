@@ -23,13 +23,14 @@ func TestAppSec_ValidateRequest_Allow(t *testing.T) {
 		assert.Equal(t, "GET", r.Header.Get("X-Crowdsec-Appsec-Verb"))
 		assert.Equal(t, "test-api-key", r.Header.Get("X-Crowdsec-Appsec-Api-Key"))
 		assert.Equal(t, "Mozilla/5.0", r.Header.Get("X-Crowdsec-Appsec-User-Agent"))
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
 	appSec := &AppSec{}
 	logger := logrus.NewEntry(logrus.New())
-	appSec.Init(logger, context.Background(), server.URL, "test-api-key")
+	err := appSec.Init(logger, context.Background(), server.URL, "test-api-key")
+	require.NoError(t, err)
 
 	req := &messages.AppSecRequest{
 		Host:      "example.com",
@@ -49,13 +50,14 @@ func TestAppSec_ValidateRequest_Allow(t *testing.T) {
 func TestAppSec_ValidateRequest_Ban(t *testing.T) {
 	// Create a test server that returns 403 (ban)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(403)
+		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer server.Close()
 
 	appSec := &AppSec{}
 	logger := logrus.NewEntry(logrus.New())
-	appSec.Init(logger, context.Background(), server.URL, "test-api-key")
+	err := appSec.Init(logger, context.Background(), server.URL, "test-api-key")
+	require.NoError(t, err)
 
 	req := &messages.AppSecRequest{
 		Host:      "example.com",
@@ -75,7 +77,8 @@ func TestAppSec_ValidateRequest_Ban(t *testing.T) {
 func TestAppSec_ValidateRequest_NoURL(t *testing.T) {
 	appSec := &AppSec{}
 	logger := logrus.NewEntry(logrus.New())
-	appSec.Init(logger, context.Background(), "", "test-api-key")
+	err := appSec.Init(logger, context.Background(), "", "test-api-key")
+	require.NoError(t, err)
 
 	req := &messages.AppSecRequest{
 		Host:      "example.com",
@@ -98,15 +101,17 @@ func TestAppSec_ValidateRequest_POST(t *testing.T) {
 		assert.Equal(t, "POST", r.Method)
 		// Read the body to verify it was sent correctly
 		body := make([]byte, r.ContentLength)
-		r.Body.Read(body)
+		_, err := r.Body.Read(body)
+		require.NoError(t, err)
 		assert.Equal(t, "test-body", string(body))
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
 	appSec := &AppSec{}
 	logger := logrus.NewEntry(logrus.New())
-	appSec.Init(logger, context.Background(), server.URL, "test-api-key")
+	err := appSec.Init(logger, context.Background(), server.URL, "test-api-key")
+	require.NoError(t, err)
 
 	req := &messages.AppSecRequest{
 		Host:      "example.com",

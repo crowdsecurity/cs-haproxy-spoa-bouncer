@@ -112,9 +112,9 @@ func (a *AppSec) createAppSecRequest(req *messages.AppSecRequest) (*http.Request
 
 	// Determine HTTP method based on whether there's a body
 	if len(req.Body) > 0 {
-		httpReq, err = http.NewRequest("POST", a.Client.URL, bytes.NewReader(req.Body))
+		httpReq, err = http.NewRequest(http.MethodPost, a.Client.URL, bytes.NewReader(req.Body))
 	} else {
-		httpReq, err = http.NewRequest("GET", a.Client.URL, nil)
+		httpReq, err = http.NewRequest(http.MethodGet, a.Client.URL, http.NoBody)
 	}
 
 	if err != nil {
@@ -170,20 +170,20 @@ func (a *AppSec) createAppSecRequest(req *messages.AppSecRequest) (*http.Request
 
 func (a *AppSec) processAppSecResponse(resp *http.Response) (remediation.Remediation, error) {
 	switch resp.StatusCode {
-	case 200:
+	case http.StatusOK:
 		// Request allowed
 		return remediation.Allow, nil
 
-	case 403:
+	case http.StatusForbidden:
 		// Request blocked - return ban remediation
 		return remediation.Ban, nil
 
-	case 401:
+	case http.StatusUnauthorized:
 		// Authentication failed
 		a.logger.Error("AppSec authentication failed - check API key")
 		return remediation.Allow, fmt.Errorf("AppSec authentication failed")
 
-	case 500:
+	case http.StatusInternalServerError:
 		// AppSec engine error
 		a.logger.Error("AppSec engine error")
 		return remediation.Allow, fmt.Errorf("AppSec engine error")
