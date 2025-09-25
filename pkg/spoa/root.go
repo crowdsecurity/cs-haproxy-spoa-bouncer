@@ -238,11 +238,6 @@ func (s *Spoa) extractHTTPRequestData(mes *message.Message) (*string, *string, h
 	return method, url, headers, body, nil
 }
 
-// handleCaptchaValidation handles captcha-related logic
-func (s *Spoa) handleCaptchaValidation(req *request.Request, mes *message.Message, host *host.Host, method, url *string, headers http.Header, body *[]byte) {
-	// Captcha validation logic remains the same but extracted
-	// This is a placeholder for the extracted logic
-}
 
 // handleAppSecValidation handles AppSec validation logic
 func (s *Spoa) handleAppSecValidation(mes *message.Message, host *host.Host, method, url *string, headers http.Header, body *[]byte) remediation.Remediation {

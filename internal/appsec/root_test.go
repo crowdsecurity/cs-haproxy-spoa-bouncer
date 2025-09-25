@@ -102,7 +102,7 @@ func TestAppSec_ValidateRequest_POST(t *testing.T) {
 		assert.Equal(t, "POST", r.Method)
 		// Read the body to verify it was sent correctly
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		assert.Equal(t, "test-body", string(body))
 		w.WriteHeader(http.StatusOK)
 	}))
