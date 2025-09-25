@@ -36,3 +36,4 @@ venv/
 
 # local configuration
 /config/*.yaml.local
+.vagrant/

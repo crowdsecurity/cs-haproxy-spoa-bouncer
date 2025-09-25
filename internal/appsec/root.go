@@ -121,10 +121,21 @@ func (a *AppSec) createAppSecRequest(req *messages.AppSecRequest) (*http.Request
 		return nil, err
 	}
 
+	// Copy original headers first
+	if req.Headers != nil {
+		for key, values := range req.Headers {
+			for _, value := range values {
+				httpReq.Header.Add(key, value)
+			}
+		}
+	}
+
+	// Now override with our trusted CrowdSec headers
 	httpReq.Header.Set("X-Crowdsec-Appsec-Ip", req.RemoteIP)
 	httpReq.Header.Set("X-Crowdsec-Appsec-Uri", req.URL)
 	httpReq.Header.Set("X-Crowdsec-Appsec-Host", req.Host)
 	httpReq.Header.Set("X-Crowdsec-Appsec-Verb", req.Method)
+
 	// Ensure we have a valid API key
 	if a.Client.APIKey == "" {
 		a.logger.Error("AppSec API key is empty")
@@ -134,26 +145,25 @@ func (a *AppSec) createAppSecRequest(req *messages.AppSecRequest) (*http.Request
 	httpReq.Header.Set("X-Crowdsec-Appsec-Api-Key", a.Client.APIKey)
 	httpReq.Header.Set("X-Crowdsec-Appsec-User-Agent", req.UserAgent)
 
-	// Set HTTP version (default to 1.1 if not specified)
-	httpVersion := "11"
-	if req.Headers != nil {
-		if version := req.Headers.Get("HTTP-Version"); version != "" {
-			httpVersion = version
+	// Set HTTP version from the request (set by HAProxy SPOE)
+	httpVersion := "11" // Default to HTTP/1.1
+	if req.Version != "" {
+		// Convert version format from HAProxy (e.g., "1.1", "2.0") to our format (e.g., "11", "20")
+		switch req.Version {
+		case "1.0":
+			httpVersion = "10"
+		case "1.1":
+			httpVersion = "11"
+		case "2.0":
+			httpVersion = "20"
+		case "3.0":
+			httpVersion = "30"
+		default:
+			// For any other version, just strip the dots
+			httpVersion = strings.ReplaceAll(req.Version, ".", "")
 		}
 	}
 	httpReq.Header.Set("X-Crowdsec-Appsec-Http-Version", httpVersion)
-
-	// Copy original headers
-	if req.Headers != nil {
-		for key, values := range req.Headers {
-			// Skip headers that might conflict with our AppSec headers
-			if !strings.HasPrefix(strings.ToLower(key), "x-crowdsec-appsec-") {
-				for _, value := range values {
-					httpReq.Header.Add(key, value)
-				}
-			}
-		}
-	}
 
 	return httpReq, nil
 }

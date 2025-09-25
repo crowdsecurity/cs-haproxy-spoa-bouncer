@@ -28,6 +28,7 @@ func TestWorkerClient_ValHostAppSec(t *testing.T) {
 		[]byte("test body"),
 		"192.168.1.1",
 		"test-agent",
+		"1.1",
 	)
 
 	// We expect an error because there's no real connection
@@ -46,6 +47,7 @@ func TestWorkerClient_ValHostAppSec_EmptyHeaders(t *testing.T) {
 		[]byte(""),
 		"10.0.0.1",
 		"",
+		"2.0",
 	)
 
 	// We expect an error because there's no real connection
@@ -67,6 +69,7 @@ func TestWorkerClient_ValHostAppSec_NoBody(t *testing.T) {
 		nil,
 		"203.0.113.1",
 		"curl/7.68.0",
+		"1.0",
 	)
 
 	// We expect an error because there's no real connection

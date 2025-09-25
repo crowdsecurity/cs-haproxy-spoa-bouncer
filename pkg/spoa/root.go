@@ -248,7 +248,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	var body *[]byte
 	var headers http.Header
 
-	// Extract method and url for AppSec validation (needed for all requests)
+	// Extract method, url, and headers for AppSec validation (needed for all requests)
 	method, err = readKeyFromMessage[string](mes, "method")
 	if err != nil {
 		log.Printf("failed to read method: %v", err)
@@ -259,6 +259,20 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	if err != nil {
 		log.Printf("failed to read url: %v", err)
 		return
+	}
+
+	// Extract headers for AppSec validation
+	headersType, err := readKeyFromMessage[string](mes, "headers")
+	if err != nil {
+		log.Printf("failed to read headers: %v", err)
+		return
+	}
+
+	headers, err = readHeaders(*headersType)
+	if err != nil {
+		log.Printf("failed to parse headers: %v", err)
+		// Don't return here, continue with empty headers
+		headers = make(http.Header)
 	}
 
 	switch r {
@@ -389,18 +403,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			}
 		}
 
-		headersType, err := readKeyFromMessage[string](mes, "headers")
-
-		if err != nil {
-			log.Printf("failed to read headers: %v", err)
-			return
-		}
-
-		headers, err = readHeaders(*headersType)
-
-		if err != nil {
-			log.Printf("failed to parse headers: %v", err)
-		}
+		// Headers are already extracted above for AppSec validation
 
 		// Check if the request is a captcha validation request
 		captchaStatus, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus)
@@ -485,6 +488,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	// Extract additional information for AppSec validation
 	var remoteIP string
 	var userAgent string
+	var version string
 
 	// Get remote IP from the request
 	if srcIP, err := readKeyFromMessage[net.IP](mes, "src-ip"); err == nil {
@@ -494,6 +498,11 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	// Extract User-Agent for AppSec validation (needed for X-Crowdsec-Appsec-User-Agent header)
 	if headers != nil {
 		userAgent = headers.Get("User-Agent")
+	}
+
+	// Extract HTTP version from the message (set by HAProxy SPOE)
+	if msgVersion, err := readKeyFromMessage[string](mes, "version"); err == nil && msgVersion != nil {
+		version = *msgVersion
 	}
 
 	// Prepare body for AppSec validation
@@ -512,6 +521,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		*body,
 		remoteIP,
 		userAgent,
+		version,
 	)
 
 	if err != nil {

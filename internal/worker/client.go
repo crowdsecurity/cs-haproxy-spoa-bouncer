@@ -376,7 +376,7 @@ func (w *WorkerClient) DeleteHostSessionKey(h, s, k string) (bool, error) {
 	return deleted, nil
 }
 
-func (w *WorkerClient) ValHostAppSec(host, method, url string, headers http.Header, body []byte, remoteIP, userAgent string) (remediation.Remediation, error) {
+func (w *WorkerClient) ValHostAppSec(host, method, url string, headers http.Header, body []byte, remoteIP, userAgent, version string) (remediation.Remediation, error) {
 	response, err := w.sendRequest(messages.ValHostAppSec, messages.AppSecRequest{
 		Host:      host,
 		Method:    method,
@@ -385,6 +385,7 @@ func (w *WorkerClient) ValHostAppSec(host, method, url string, headers http.Head
 		Body:      body,
 		RemoteIP:  remoteIP,
 		UserAgent: userAgent,
+		Version:   version,
 	})
 	if err != nil {
 		return remediation.Allow, err
