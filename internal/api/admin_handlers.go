@@ -321,47 +321,82 @@ func (a *API) handleAdminConnection(ctx context.Context, sc server.SocketConn) {
 	}
 }
 
-// parseAdminCommand parses admin commands - optimized version using strings.Fields
+// parseAdminCommand parses admin commands using a smart pattern-matching approach
 func (a *API) parseAdminCommand(line string) ([]string, []string, error) {
-	// Split by whitespace - much more efficient than byte-by-byte parsing
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
 		return nil, nil, fmt.Errorf("empty command")
 	}
 
-	// First part is always the verb
-	verb := parts[0]
-
 	if len(parts) < 2 {
 		return nil, nil, fmt.Errorf("missing module")
 	}
 
-	// Second part is the module
-	module := parts[1]
+	// For 3-part commands, we need to handle cases where arguments come between command parts
+	// e.g., "get host 127.0.0.1 session uuid key" should parse as "get:host:session"
+	if len(parts) >= 4 {
+		// Try verb:module:submodule pattern with different positions for submodule
+		verb := parts[0]
+		module := parts[1]
 
-	apiCommand := []string{verb, module}
-	args := []string{}
+		// Look for known submodules in the remaining parts
+		for i := 2; i < len(parts); i++ {
+			candidateCmd := fmt.Sprintf("%s:%s:%s", verb, module, parts[i])
+			if a.isValidCommand(candidateCmd) {
+				// Found valid 3-part command, collect arguments from everywhere except the command parts
+				cmdParts := []string{verb, module, parts[i]}
+				args := make([]string, 0)
 
-	// Handle submodule and arguments
-	if len(parts) > 2 {
-		// Check if third part could be a submodule (no spaces, reasonable length)
-		potentialSubmodule := parts[2]
-		if len(potentialSubmodule) <= 16 && !strings.Contains(potentialSubmodule, " ") {
-			// Treat as submodule if it makes sense contextually
-			if (verb == "get" || verb == "set" || verb == "del" || verb == "val") &&
-				(module == "host" && (potentialSubmodule == "session" || potentialSubmodule == "cookie" || potentialSubmodule == "captcha")) ||
-				(module == "geo" && potentialSubmodule == "iso") {
-				apiCommand = append(apiCommand, potentialSubmodule)
-				args = parts[3:] // Remaining parts are arguments
-			} else {
-				args = parts[2:] // All remaining parts are arguments
+				// Add arguments that come before the submodule
+				args = append(args, parts[2:i]...)
+				// Add arguments that come after the submodule
+				args = append(args, parts[i+1:]...)
+
+				return cmdParts, args, nil
 			}
-		} else {
-			args = parts[2:] // All remaining parts are arguments
 		}
 	}
 
-	return apiCommand, args, nil
+	// Try standard 3-part commands (verb:module:submodule at start)
+	if len(parts) >= 3 {
+		threePartCmd := strings.Join(parts[:3], ":")
+		if a.isValidCommand(threePartCmd) {
+			return parts[:3], parts[3:], nil
+		}
+	}
+
+	// Try 2-part commands (verb:module)
+	twoPartCmd := strings.Join(parts[:2], ":")
+	if a.isValidCommand(twoPartCmd) {
+		return parts[:2], parts[2:], nil
+	}
+
+	// If no valid command found, return an explicit error
+	return nil, nil, fmt.Errorf("invalid command: %q", line)
+}
+
+// isValidCommand checks if a command string matches any of our defined APICommands
+func (a *API) isValidCommand(cmdStr string) bool {
+	cmd := messages.CommandFromString(cmdStr)
+
+	// Use the actual APICommand constants - no duplication!
+	switch cmd {
+	case messages.GetIP,
+		messages.GetCN,
+		messages.GetGeoIso,
+		messages.GetHosts,
+		messages.GetHostCookie,
+		messages.GetHostSession,
+		messages.ValHostCookie,
+		messages.ValHostCaptcha,
+		messages.SetHostSession,
+		messages.DelHostSession,
+		messages.DelHosts,
+		messages.ValHostAppSec:
+		return true
+	default:
+		return false
+	}
 }
 
 // handleAdminCommand directly dispatches admin commands using clean APICommand constants
