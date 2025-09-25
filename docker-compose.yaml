@@ -50,7 +50,7 @@ services:
   crowdsec:
     image: crowdsecurity/crowdsec:latest
     environment:
-      - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
+      - BOUNCER_KEY_SPOA=this_is_a_bad_password
       - DISABLE_ONLINE_API=true
       - CROWDSEC_BYPASS_DB_VOLUME_CHECK=true
       - COLLECTIONS=crowdsecurity/appsec-virtual-patching crowdsecurity/appsec-generic-rules
