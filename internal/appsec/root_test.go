@@ -2,6 +2,7 @@ package appsec
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -100,8 +101,7 @@ func TestAppSec_ValidateRequest_POST(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "POST", r.Method)
 		// Read the body to verify it was sent correctly
-		body := make([]byte, r.ContentLength)
-		_, err := r.Body.Read(body)
+		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
 		assert.Equal(t, "test-body", string(body))
 		w.WriteHeader(http.StatusOK)
