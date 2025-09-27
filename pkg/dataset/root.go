@@ -13,22 +13,18 @@ import (
 )
 
 type DataSet struct {
-	PrefixSet *PrefixSet
-	IPSet     *IPSet
-	CNSet     *CNSet
+	CNSet *CNSet
+	// CIDR-based trie implementation using cidranger library
+	CIDRUnifiedIPSet *CIDRUnifiedIPSet
 }
 
 func New() *DataSet {
-	PrefixSet := PrefixSet{}
-	PrefixSet.Init("CIDRSet")
 	CNSet := CNSet{}
 	CNSet.Init("CNSet")
-	IPSet := IPSet{}
-	IPSet.Init("IPSet")
+	CIDRUnifiedIPSet := NewCIDRUnifiedIPSet("CIDRUnifiedIPSet")
 	return &DataSet{
-		PrefixSet: &PrefixSet,
-		CNSet:     &CNSet,
-		IPSet:     &IPSet,
+		CNSet:            &CNSet,
+		CIDRUnifiedIPSet: CIDRUnifiedIPSet,
 	}
 }
 
@@ -53,10 +49,7 @@ func (d *DataSet) CheckIP(ipString string) (remediation.Remediation, string, err
 	if err != nil || !ip.IsValid() {
 		return remediation.Allow, "", err
 	}
-	if ipCheck, origin := d.IPSet.Contains(ip); ipCheck > remediation.Unknown {
-		return ipCheck, origin, nil
-	}
-	r, origin := d.PrefixSet.Contains(ip)
+	r, origin := d.CIDRUnifiedIPSet.Contains(ip)
 	return r, origin, nil
 }
 
@@ -141,8 +134,7 @@ func (d *DataSet) AddCIDR(cidr *string, origin string, r remediation.Remediation
 	if err != nil {
 		return err
 	}
-	d.PrefixSet.Add(prefix, origin, r, id)
-	return nil
+	return d.CIDRUnifiedIPSet.AddPrefix(prefix, origin, r, id)
 }
 
 func (d *DataSet) AddIP(ipString string, origin string, r remediation.Remediation, id int64) error {
@@ -150,8 +142,7 @@ func (d *DataSet) AddIP(ipString string, origin string, r remediation.Remediatio
 	if err != nil || !ip.IsValid() {
 		return err
 	}
-	d.IPSet.Add(ip, origin, r, id)
-	return nil
+	return d.CIDRUnifiedIPSet.AddIP(ip, origin, r, id)
 }
 
 func (d *DataSet) AddCN(cn string, origin string, r remediation.Remediation, id int64) error {
@@ -167,7 +158,7 @@ func (d *DataSet) RemoveCIDR(cidr *string, r remediation.Remediation, id int64) 
 	if err != nil {
 		return false, err
 	}
-	removed := d.PrefixSet.Remove(prefix, r, id)
+	removed := d.CIDRUnifiedIPSet.RemovePrefix(prefix, r, id)
 	return removed, nil
 }
 
@@ -184,6 +175,6 @@ func (d *DataSet) RemoveIP(ipString string, r remediation.Remediation, id int64)
 	if err != nil || !ip.IsValid() {
 		return false, err
 	}
-	removed := d.IPSet.Remove(ip, r, id)
+	removed := d.CIDRUnifiedIPSet.RemoveIP(ip, r, id)
 	return removed, nil
 }
