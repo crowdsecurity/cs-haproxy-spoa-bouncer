@@ -75,44 +75,6 @@ func generateTestDecisions(ipCount, prefixCount int) models.GetDecisionsResponse
 	return decisions
 }
 
-func BenchmarkCIDRImplementation(b *testing.B) {
-	// Generate test data
-	decisions := generateTestDecisions(1000, 1000) // 1000 IPs + 1000 prefixes
-	testIPs := generateTestIPs(100)                // 100 IPs to test against
-
-	// Create dataset and populate it
-	dataset := New()
-	dataset.Add(decisions)
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		// Test against random IPs using cidranger trie
-		testIP := testIPs[i%len(testIPs)]
-		_, _, _ = dataset.CheckIP(testIP.String())
-	}
-}
-
-func BenchmarkCIDRImplementationLarge(b *testing.B) {
-	// Generate larger test data
-	decisions := generateTestDecisions(10000, 10000) // 10k IPs + 10k prefixes
-	testIPs := generateTestIPs(1000)                 // 1000 IPs to test against
-
-	// Create dataset and populate it
-	dataset := New()
-	dataset.Add(decisions)
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		// Test against random IPs using cidranger trie
-		testIP := testIPs[i%len(testIPs)]
-		_, _, _ = dataset.CheckIP(testIP.String())
-	}
-}
-
 // BenchmarkAddRemove tests the performance of adding and removing items
 func BenchmarkAddRemove(b *testing.B) {
 	dataset := New()
@@ -208,7 +170,7 @@ func TestLongestPrefixMatch(t *testing.T) {
 // BenchmarkBartLookup benchmarks the bart implementation
 func BenchmarkBartLookup(b *testing.B) {
 	dataset := New()
-	
+
 	// Add some test data
 	decisions := models.GetDecisionsResponse{
 		{
@@ -229,7 +191,7 @@ func BenchmarkBartLookup(b *testing.B) {
 	dataset.Add(decisions)
 
 	testIP := "192.168.1.1"
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _, _ = dataset.CheckIP(testIP)
@@ -239,7 +201,7 @@ func BenchmarkBartLookup(b *testing.B) {
 // BenchmarkBartAdd benchmarks adding decisions with bart
 func BenchmarkBartAdd(b *testing.B) {
 	dataset := New()
-	
+
 	decisions := models.GetDecisionsResponse{
 		{
 			ID:     1,
@@ -249,7 +211,7 @@ func BenchmarkBartAdd(b *testing.B) {
 			Type:   ptr.Of("ban"),
 		},
 	}
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dataset.Add(decisions)
@@ -260,7 +222,7 @@ func BenchmarkBartAdd(b *testing.B) {
 // BenchmarkBartRemove benchmarks removing decisions with bart
 func BenchmarkBartRemove(b *testing.B) {
 	dataset := New()
-	
+
 	decisions := models.GetDecisionsResponse{
 		{
 			ID:     1,
@@ -270,10 +232,10 @@ func BenchmarkBartRemove(b *testing.B) {
 			Type:   ptr.Of("ban"),
 		},
 	}
-	
+
 	// Pre-populate
 	dataset.Add(decisions)
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dataset.Remove(decisions)

@@ -6,6 +6,7 @@ require (
 	github.com/crowdsecurity/crowdsec v1.6.9
 	github.com/crowdsecurity/go-cs-bouncer v0.0.17-0.20250707133957-deca82fa1fa5
 	github.com/crowdsecurity/go-cs-lib v0.0.20
+	github.com/gaissmai/bart v0.25.0
 	github.com/google/uuid v1.6.0
 	github.com/negasus/haproxy-spoe-go v1.0.5
 	github.com/oschwald/geoip2-golang v1.9.0
@@ -14,7 +15,6 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/pflag v1.0.6
 	github.com/stretchr/testify v1.10.0
-	github.com/yl2chen/cidranger v1.0.2
 	golang.org/x/sync v0.15.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v2 v2.4.0
@@ -28,7 +28,6 @@ require (
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/expr-lang/expr v1.17.5 // indirect
-	github.com/gaissmai/bart v0.25.0 // indirect
 	github.com/go-openapi/analysis v0.23.0 // indirect
 	github.com/go-openapi/errors v0.22.1 // indirect
 	github.com/go-openapi/jsonpointer v0.21.1 // indirect
