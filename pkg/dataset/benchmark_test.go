@@ -166,13 +166,19 @@ func TestLongestPrefixMatch(t *testing.T) {
 	dataset := New()
 
 	// Add a broader prefix first
-	dataset.CIDRUnifiedIPSet.AddPrefix(netip.MustParsePrefix("192.168.0.0/16"), "test", remediation.Ban, 1)
+	if err := dataset.CIDRUnifiedIPSet.AddPrefix(netip.MustParsePrefix("192.168.0.0/16"), "test", remediation.Ban, 1); err != nil {
+		t.Fatalf("Failed to add prefix: %v", err)
+	}
 
 	// Add a more specific prefix
-	dataset.CIDRUnifiedIPSet.AddPrefix(netip.MustParsePrefix("192.168.1.0/24"), "test", remediation.Captcha, 2)
+	if err := dataset.CIDRUnifiedIPSet.AddPrefix(netip.MustParsePrefix("192.168.1.0/24"), "test", remediation.Captcha, 2); err != nil {
+		t.Fatalf("Failed to add prefix: %v", err)
+	}
 
 	// Add an even more specific IP
-	dataset.CIDRUnifiedIPSet.AddIP(netip.MustParseAddr("192.168.1.1"), "test", remediation.Allow, 3)
+	if err := dataset.CIDRUnifiedIPSet.AddIP(netip.MustParseAddr("192.168.1.1"), "test", remediation.Allow, 3); err != nil {
+		t.Fatalf("Failed to add IP: %v", err)
+	}
 
 	// Test that we get the most specific match (Allow should win over Ban)
 	result, _, _ := dataset.CheckIP("192.168.1.1")
