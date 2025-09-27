@@ -65,38 +65,3 @@ func (s *CIDRUnifiedIPSet) RemovePrefix(prefix netip.Prefix, r remediation.Remed
 func (s *CIDRUnifiedIPSet) Contains(ip netip.Addr) (remediation.Remediation, string) {
 	return s.trie.Contains(ip)
 }
-
-// Legacy compatibility methods for existing code
-
-// Add is a generic method that works with both netip.Addr and netip.Prefix
-func (s *CIDRUnifiedIPSet) Add(item interface{}, origin string, r remediation.Remediation, id int64) error {
-	switch v := item.(type) {
-	case netip.Addr:
-		return s.AddIP(v, origin, r, id)
-	case netip.Prefix:
-		return s.AddPrefix(v, origin, r, id)
-	default:
-		s.logger.Errorf("unsupported type for Add: %T", item)
-		return nil
-	}
-}
-
-// Remove is a generic method that works with both netip.Addr and netip.Prefix
-func (s *CIDRUnifiedIPSet) Remove(item interface{}, r remediation.Remediation, id int64) bool {
-	switch v := item.(type) {
-	case netip.Addr:
-		return s.RemoveIP(v, r, id)
-	case netip.Prefix:
-		return s.RemovePrefix(v, r, id)
-	default:
-		s.logger.Errorf("unsupported type for Remove: %T", item)
-		return false
-	}
-}
-
-// Init initializes the unified IP set (for compatibility with existing code)
-func (s *CIDRUnifiedIPSet) Init(logAlias string) {
-	s.trie = NewCIDRTrie(logAlias)
-	s.logger = log.WithField("alias", logAlias)
-	s.logger.Tracef("initialized CIDR unified IP set")
-}

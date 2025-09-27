@@ -10,13 +10,6 @@ import (
 	"github.com/yl2chen/cidranger"
 )
 
-// DecisionEntry represents a decision stored in the trie
-type DecisionEntry struct {
-	Remediation remediation.Remediation
-	Origin      string
-	ID          int64
-}
-
 // RangerEntry implements cidranger.RangerEntry
 type RangerEntry struct {
 	IPNet net.IPNet
