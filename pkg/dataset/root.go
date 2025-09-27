@@ -14,17 +14,17 @@ import (
 
 type DataSet struct {
 	CNSet *CNSet
-	// CIDR-based trie implementation using cidranger library
-	CIDRUnifiedIPSet *CIDRUnifiedIPSet
+	// CIDR-based trie implementation using bart library
+	BartUnifiedIPSet *BartUnifiedIPSet
 }
 
 func New() *DataSet {
 	CNSet := CNSet{}
 	CNSet.Init("CNSet")
-	CIDRUnifiedIPSet := NewCIDRUnifiedIPSet("CIDRUnifiedIPSet")
+	BartUnifiedIPSet := NewBartUnifiedIPSet("BartUnifiedIPSet")
 	return &DataSet{
 		CNSet:            &CNSet,
-		CIDRUnifiedIPSet: CIDRUnifiedIPSet,
+		BartUnifiedIPSet: BartUnifiedIPSet,
 	}
 }
 
@@ -49,7 +49,7 @@ func (d *DataSet) CheckIP(ipString string) (remediation.Remediation, string, err
 	if err != nil || !ip.IsValid() {
 		return remediation.Allow, "", err
 	}
-	r, origin := d.CIDRUnifiedIPSet.Contains(ip)
+	r, origin := d.BartUnifiedIPSet.Contains(ip)
 	return r, origin, nil
 }
 
@@ -134,7 +134,7 @@ func (d *DataSet) AddCIDR(cidr *string, origin string, r remediation.Remediation
 	if err != nil {
 		return err
 	}
-	return d.CIDRUnifiedIPSet.AddPrefix(prefix, origin, r, id)
+	return d.BartUnifiedIPSet.AddPrefix(prefix, origin, r, id)
 }
 
 func (d *DataSet) AddIP(ipString string, origin string, r remediation.Remediation, id int64) error {
@@ -142,7 +142,7 @@ func (d *DataSet) AddIP(ipString string, origin string, r remediation.Remediatio
 	if err != nil || !ip.IsValid() {
 		return err
 	}
-	return d.CIDRUnifiedIPSet.AddIP(ip, origin, r, id)
+	return d.BartUnifiedIPSet.AddIP(ip, origin, r, id)
 }
 
 func (d *DataSet) AddCN(cn string, origin string, r remediation.Remediation, id int64) error {
@@ -158,7 +158,7 @@ func (d *DataSet) RemoveCIDR(cidr *string, r remediation.Remediation, id int64) 
 	if err != nil {
 		return false, err
 	}
-	removed := d.CIDRUnifiedIPSet.RemovePrefix(prefix, r, id)
+	removed := d.BartUnifiedIPSet.RemovePrefix(prefix, r, id)
 	return removed, nil
 }
 
@@ -175,6 +175,6 @@ func (d *DataSet) RemoveIP(ipString string, r remediation.Remediation, id int64)
 	if err != nil || !ip.IsValid() {
 		return false, err
 	}
-	removed := d.CIDRUnifiedIPSet.RemoveIP(ip, r, id)
+	removed := d.BartUnifiedIPSet.RemoveIP(ip, r, id)
 	return removed, nil
 }

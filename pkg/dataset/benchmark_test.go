@@ -166,17 +166,17 @@ func TestLongestPrefixMatch(t *testing.T) {
 	dataset := New()
 
 	// Add a broader prefix first
-	if err := dataset.CIDRUnifiedIPSet.AddPrefix(netip.MustParsePrefix("192.168.0.0/16"), "test", remediation.Ban, 1); err != nil {
+	if err := dataset.BartUnifiedIPSet.AddPrefix(netip.MustParsePrefix("192.168.0.0/16"), "test", remediation.Ban, 1); err != nil {
 		t.Fatalf("Failed to add prefix: %v", err)
 	}
 
 	// Add a more specific prefix
-	if err := dataset.CIDRUnifiedIPSet.AddPrefix(netip.MustParsePrefix("192.168.1.0/24"), "test", remediation.Captcha, 2); err != nil {
+	if err := dataset.BartUnifiedIPSet.AddPrefix(netip.MustParsePrefix("192.168.1.0/24"), "test", remediation.Captcha, 2); err != nil {
 		t.Fatalf("Failed to add prefix: %v", err)
 	}
 
 	// Add an even more specific IP
-	if err := dataset.CIDRUnifiedIPSet.AddIP(netip.MustParseAddr("192.168.1.1"), "test", remediation.Allow, 3); err != nil {
+	if err := dataset.BartUnifiedIPSet.AddIP(netip.MustParseAddr("192.168.1.1"), "test", remediation.Allow, 3); err != nil {
 		t.Fatalf("Failed to add IP: %v", err)
 	}
 
@@ -202,5 +202,81 @@ func TestLongestPrefixMatch(t *testing.T) {
 	result, _, _ = dataset.CheckIP("10.0.0.1")
 	if result != remediation.Allow {
 		t.Errorf("Expected Allow for 10.0.0.1, got %v", result)
+	}
+}
+
+// BenchmarkBartLookup benchmarks the bart implementation
+func BenchmarkBartLookup(b *testing.B) {
+	dataset := New()
+	
+	// Add some test data
+	decisions := models.GetDecisionsResponse{
+		{
+			ID:     1,
+			Origin: ptr.Of("test"),
+			Scope:  ptr.Of("ip"),
+			Value:  ptr.Of("192.168.1.1"),
+			Type:   ptr.Of("ban"),
+		},
+		{
+			ID:     2,
+			Origin: ptr.Of("test"),
+			Scope:  ptr.Of("range"),
+			Value:  ptr.Of("192.168.0.0/16"),
+			Type:   ptr.Of("captcha"),
+		},
+	}
+	dataset.Add(decisions)
+
+	testIP := "192.168.1.1"
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, _ = dataset.CheckIP(testIP)
+	}
+}
+
+// BenchmarkBartAdd benchmarks adding decisions with bart
+func BenchmarkBartAdd(b *testing.B) {
+	dataset := New()
+	
+	decisions := models.GetDecisionsResponse{
+		{
+			ID:     1,
+			Origin: ptr.Of("test"),
+			Scope:  ptr.Of("ip"),
+			Value:  ptr.Of("192.168.1.1"),
+			Type:   ptr.Of("ban"),
+		},
+	}
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		dataset.Add(decisions)
+		dataset.Remove(decisions)
+	}
+}
+
+// BenchmarkBartRemove benchmarks removing decisions with bart
+func BenchmarkBartRemove(b *testing.B) {
+	dataset := New()
+	
+	decisions := models.GetDecisionsResponse{
+		{
+			ID:     1,
+			Origin: ptr.Of("test"),
+			Scope:  ptr.Of("ip"),
+			Value:  ptr.Of("192.168.1.1"),
+			Type:   ptr.Of("ban"),
+		},
+	}
+	
+	// Pre-populate
+	dataset.Add(decisions)
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		dataset.Remove(decisions)
+		dataset.Add(decisions)
 	}
 }

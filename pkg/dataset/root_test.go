@@ -24,9 +24,9 @@ func TestDataSet(t *testing.T) {
 		// Test new returns the types we expect
 		assert.NotNil(t, dataSet)
 		assert.IsType(t, &CNSet{}, dataSet.CNSet)
-		assert.IsType(t, &CIDRUnifiedIPSet{}, dataSet.CIDRUnifiedIPSet)
+		assert.IsType(t, &BartUnifiedIPSet{}, dataSet.BartUnifiedIPSet)
 		assert.NotNil(t, dataSet.CNSet)
-		assert.NotNil(t, dataSet.CIDRUnifiedIPSet)
+		assert.NotNil(t, dataSet.BartUnifiedIPSet)
 		assert.IsType(t, map[string]RemediationIdsMap{}, dataSet.CNSet.Items)
 	})
 	tests := []struct {

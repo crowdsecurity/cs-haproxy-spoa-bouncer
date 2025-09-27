@@ -80,6 +80,11 @@ func (rM *RemediationIdsMap) GetRemediationAndOrigin() (remediation.Remediation,
 	return maxRemediation, maxOrigin
 }
 
+// IsEmpty returns true if the RemediationIdsMap has no entries
+func (rM *RemediationIdsMap) IsEmpty() bool {
+	return len(*rM) == 0
+}
+
 type Set[T string | netip.Prefix | netip.Addr] struct {
 	sync.RWMutex
 
