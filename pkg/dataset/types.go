@@ -25,7 +25,9 @@ func (rM *RemediationIdsMap) RemoveID(clog *log.Entry, r remediation.Remediation
 	if !ok {
 		return fmt.Errorf("id %d not found", id)
 	}
-	clog.Tracef("removing id %d", id)
+	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
+		clog.Tracef("removing id %d", id)
+	}
 	// Optimize removal: swap with last element and truncate (order doesn't matter for RemediationDetails)
 	lastIndex := len(ids) - 1
 	if index != lastIndex {
@@ -34,7 +36,9 @@ func (rM *RemediationIdsMap) RemoveID(clog *log.Entry, r remediation.Remediation
 	(*rM)[r] = ids[:lastIndex]
 
 	if len((*rM)[r]) == 0 {
-		clog.Tracef("removing empty remediation %s", r.String())
+		if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
+			clog.Tracef("removing empty remediation %s", r.String())
+		}
 		delete(*rM, r)
 	}
 
@@ -53,13 +57,24 @@ func (rM *RemediationIdsMap) ContainsID(r remediation.Remediation, id int64) (in
 }
 
 func (rM *RemediationIdsMap) AddID(clog *log.Entry, r remediation.Remediation, id int64, origin string) {
+	// Initialize map if nil
+	if *rM == nil {
+		*rM = make(RemediationIdsMap, 1) // Pre-allocate for 1 remediation type
+	}
+
 	ids, ok := (*rM)[r]
 	if !ok {
-		clog.Tracef("remediation %s not found, creating", r.String())
-		(*rM)[r] = []RemediationDetails{{id, origin}}
+		if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
+			clog.Tracef("remediation %s not found, creating", r.String())
+		}
+		// Pre-allocate slice with capacity for multiple IDs per remediation
+		(*rM)[r] = make([]RemediationDetails, 0, 4) // Start with capacity 4
+		(*rM)[r] = append((*rM)[r], RemediationDetails{id, origin})
 		return
 	}
-	clog.Tracef("remediation %s found, appending id %d", r.String(), id)
+	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
+		clog.Tracef("remediation %s found, appending id %d", r.String(), id)
+	}
 	(*rM)[r] = append(ids, RemediationDetails{id, origin})
 }
 

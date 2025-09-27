@@ -92,6 +92,68 @@ func BenchmarkAddRemove(b *testing.B) {
 	}
 }
 
+// BenchmarkAddOnly tests the performance of adding items only
+func BenchmarkAddOnly(b *testing.B) {
+	decisions := generateTestDecisions(1000, 1000)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		dataset := New() // Fresh dataset each iteration
+		dataset.Add(decisions)
+	}
+}
+
+// BenchmarkRemoveOnly tests the performance of removing items only
+func BenchmarkRemoveOnly(b *testing.B) {
+	dataset := New()
+	decisions := generateTestDecisions(1000, 1000)
+
+	// Preload the dataset once
+	dataset.Add(decisions)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		// Create a copy of decisions for each iteration
+		decisionsCopy := make(models.GetDecisionsResponse, len(decisions))
+		copy(decisionsCopy, decisions)
+		dataset.Remove(decisionsCopy)
+		// Re-add for next iteration
+		dataset.Add(decisionsCopy)
+	}
+}
+
+// BenchmarkDifferentSizes tests performance with different dataset sizes
+func BenchmarkDifferentSizes(b *testing.B) {
+	sizes := []struct {
+		name        string
+		ipCount     int
+		prefixCount int
+	}{
+		{"Small", 100, 100},
+		{"Medium", 1000, 1000},
+		{"Large", 5000, 5000},
+	}
+
+	for _, size := range sizes {
+		b.Run(size.name, func(b *testing.B) {
+			dataset := New()
+			decisions := generateTestDecisions(size.ipCount, size.prefixCount)
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				dataset.Add(decisions)
+				dataset.Remove(decisions)
+			}
+		})
+	}
+}
+
 // TestCorrectness verifies that the implementation works correctly
 func TestCorrectness(t *testing.T) {
 	// Generate test data
