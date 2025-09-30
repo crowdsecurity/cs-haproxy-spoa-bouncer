@@ -5,11 +5,15 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/api/messages"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
+
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -94,7 +98,24 @@ func (a *AppSec) ValidateRequest(ctx context.Context, req *messages.AppSecReques
 	defer resp.Body.Close()
 
 	// Process response based on HTTP status code
-	return a.processAppSecResponse(resp)
+	rem, err := a.processAppSecResponse(resp)
+	if rem == remediation.Ban {
+		addr, err2 := netip.ParseAddr(req.RemoteIP)
+		if err2 != nil || !addr.IsValid() {
+			a.logger.Errorf("%s is not valid: %v\n", req.RemoteIP, err)
+			return rem, err
+		}
+		var iptype string
+		if addr.Is4() {
+			iptype = "ipv4"
+		} else {
+			iptype = "ipv6"
+		}
+
+		metrics.TotalBlockedRequests.With(prometheus.Labels{"ip_type": iptype, "origin": "appsec", "remediation": rem.String()}).Inc()
+	}
+
+	return rem, err
 }
 
 func (a *AppSec) createAppSecRequest(req *messages.AppSecRequest) (*http.Request, error) {
