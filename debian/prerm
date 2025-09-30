@@ -2,11 +2,17 @@
 
 set -eu
 
-#shellcheck source=./scripts/_bouncer.sh
-. "/usr/lib/$DPKG_MAINTSCRIPT_PACKAGE/_bouncer.sh"
-
-systemctl stop "$SERVICE" || echo "cannot stop service"
-systemctl disable "$SERVICE" || echo "cannot disable service"
+# Source the bouncer script if it exists
+if [ -f "/usr/lib/$DPKG_MAINTSCRIPT_PACKAGE/_bouncer.sh" ]; then
+    #shellcheck source=./scripts/_bouncer.sh
+    . "/usr/lib/$DPKG_MAINTSCRIPT_PACKAGE/_bouncer.sh"
+    systemctl stop "$SERVICE" || echo "cannot stop service"
+    systemctl disable "$SERVICE" || echo "cannot disable service"
+else
+    # Fallback if _bouncer.sh is not available
+    systemctl stop "crowdsec-spoa-bouncer" || echo "cannot stop service"
+    systemctl disable "crowdsec-spoa-bouncer" || echo "cannot disable service"
+fi
 
 cmp /etc/haproxy/crowdsec.cfg /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/crowdsec.cfg &&
     rm -f /etc/haproxy/crowdsec.cfg || echo "not removing /etc/haproxy/crowdsec.cfg, it has been modified"

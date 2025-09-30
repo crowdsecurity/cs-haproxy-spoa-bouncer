@@ -2,8 +2,15 @@
 
 set -eu
 
-#shellcheck source=./scripts/_bouncer.sh
-. "/usr/lib/$DPKG_MAINTSCRIPT_PACKAGE/_bouncer.sh"
+# Source the bouncer script if it exists
+if [ -f "/usr/lib/$DPKG_MAINTSCRIPT_PACKAGE/_bouncer.sh" ]; then
+    #shellcheck source=./scripts/_bouncer.sh
+    . "/usr/lib/$DPKG_MAINTSCRIPT_PACKAGE/_bouncer.sh"
+else
+    # Fallback if _bouncer.sh is not available
+    BOUNCER="crowdsec-spoa-bouncer"
+    CONFIG="/etc/crowdsec/bouncers/$BOUNCER.yaml"
+fi
 
 if [ "$1" = "purge" ]; then
     if [ -f "$CONFIG.id" ]; then
