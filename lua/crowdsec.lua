@@ -113,14 +113,11 @@ function runtime.Handle(txn)
     reply:add_header("cache-control", "no-cache")
     reply:add_header("cache-control", "no-store")
 
+    -- NOTE: "allow" remediation with redirects is now handled natively by HAProxy
+    -- This Lua handler is only called for "captcha" and "ban" remediations
     if remediation == "allow" then
-        local redirect_uri = get_txn_var(txn, "crowdsec.redirect")
-        if redirect_uri ~= "" then
-            reply:set_status(302)
-            reply:add_header("Location", redirect_uri)
-        else
-            return
-        end
+        runtime.logger.warning("Lua handler called for 'allow' remediation - this should not happen with native redirects")
+        return
     end
 
     if remediation == "captcha" then
@@ -130,10 +127,8 @@ function runtime.Handle(txn)
             ["captcha_frontend_key"]=get_txn_var(txn, "crowdsec.captcha_frontend_key"),
             ["captcha_frontend_js"]=get_txn_var(txn, "crowdsec.captcha_frontend_js"),
         }))
-        local cookie = get_txn_var(txn, "crowdsec.captcha_cookie")
-        if cookie ~= "" then
-            reply:add_header("Set-Cookie", cookie)
-        end
+        -- Note: Cookie management is now handled by HAProxy via http-after-response rules
+        -- using the captcha_status and captcha_cookie variables set by the SPOA bouncer
     end
 
     if remediation == "ban" then

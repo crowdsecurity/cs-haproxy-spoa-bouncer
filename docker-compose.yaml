@@ -33,10 +33,10 @@ services:
     image: haproxy:2.9.7-alpine
     volumes:
       - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
-      - ./config/crowdsec.cfg:/usr/local/etc/haproxy/crowdsec.cfg
+      - ./config/crowdsec.cfg:/etc/haproxy/crowdsec.cfg
       - sockets:/run/
       - templates:/var/lib/crowdsec/lua/haproxy/templates/
-      - lua:/usr/local/crowdsec/lua/haproxy/
+      - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
     ports:
       - "9090:9090"
     depends_on:
@@ -51,6 +51,7 @@ services:
     environment:
       - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
       - DISABLE_ONLINE_API=true
+      - CROWDSEC_BYPASS_DB_VOLUME_CHECK=true
     volumes:
       - geodb:/staging/var/lib/crowdsec/data/
     networks:

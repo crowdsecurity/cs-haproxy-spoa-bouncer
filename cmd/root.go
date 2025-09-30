@@ -151,7 +151,7 @@ func Execute() error {
 		return metricsProvider.Run(ctx)
 	})
 
-	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests)
+	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests, metrics.TotalWorkerAPIConnectionErrors, metrics.TotalWorkerAPIConnectionEvents)
 
 	if config.PrometheusConfig.Enabled {
 		go func() {
@@ -191,7 +191,9 @@ func Execute() error {
 		}
 	})
 
-	HostManager := host.NewManager()
+	// Create a base logger for the host manager
+	hostManagerLogger := log.WithField("component", "host_manager")
+	HostManager := host.NewManager(hostManagerLogger)
 
 	g.Go(func() error {
 		HostManager.Run(ctx)
@@ -240,7 +242,13 @@ func Execute() error {
 		return workerManager.Run(ctx)
 	})
 
-	apiServer := api.NewAPI(workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
+	apiServer := api.NewAPI(api.APIConfig{
+		WorkerManager: workerManager,
+		HostManager:   HostManager,
+		Dataset:       dataSet,
+		GeoDatabase:   &config.Geo,
+		SocketChan:    socketConnChan,
+	})
 
 	for _, worker := range config.Workers {
 		workerManager.CreateChan <- worker
