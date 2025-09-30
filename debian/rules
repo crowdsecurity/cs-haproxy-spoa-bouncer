@@ -18,6 +18,8 @@ override_dh_auto_install:
 	PKG="crowdsec-haproxy-spoa-bouncer"; \
 	install -D "$$BOUNCER" -t "debian/$$PKG/usr/bin/"; \
 	install -D "scripts/_bouncer.sh" -t "debian/$$PKG/usr/lib/$$PKG/"; \
+	echo "Installed _bouncer.sh to: debian/$$PKG/usr/lib/$$PKG/"; \
+	ls -la "debian/$$PKG/usr/lib/$$PKG/_bouncer.sh" || echo "WARNING: _bouncer.sh not found after install"; \
 	install -D "config/$$BOUNCER.yaml" "debian/$$PKG/etc/crowdsec/bouncers/$$BOUNCER.yaml"; \
 	BIN="/usr/bin/$$BOUNCER" CFG="/etc/crowdsec/bouncers" envsubst '$$BIN $$CFG' < "config/$$BOUNCER.service" | install -D /dev/stdin "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"; \
 	mkdir -p "debian/$$PKG/usr/lib/$$PKG/lua"; \
