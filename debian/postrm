@@ -2,8 +2,8 @@
 
 set -eu
 
-BOUNCER="crowdsec-haproxy-spoa-bouncer"
-CONFIG="/etc/crowdsec/bouncers/$BOUNCER.yaml"
+#shellcheck source=./scripts/_bouncer.sh
+. "/usr/lib/$DPKG_MAINTSCRIPT_PACKAGE/_bouncer.sh"
 
 if [ "$1" = "purge" ]; then
     if [ -f "$CONFIG.id" ]; then
