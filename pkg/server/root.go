@@ -166,6 +166,14 @@ func (s *Server) NewWorkerListener(name string, gid int) (string, error) {
 }
 
 func newUnixSocket(path string) (net.Listener, error) {
+	// Remove stale socket file if it exists
+	// This handles cases where the server crashed and left the socket file behind
+	if _, err := os.Stat(path); err == nil {
+		if err := os.Remove(path); err != nil {
+			return nil, fmt.Errorf("failed to remove stale socket file %s: %w", path, err)
+		}
+	}
+
 	l, err := net.Listen("unix", path)
 	if err != nil {
 		return nil, err
