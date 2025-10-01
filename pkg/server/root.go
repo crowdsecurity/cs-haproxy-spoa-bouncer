@@ -33,7 +33,7 @@ const (
 )
 
 type Server struct {
-	listeners       []*net.Listener             // Listener
+	listeners       []net.Listener              // Listener
 	permission      apipermission.APIPermission // Worker or Admin
 	logger          *log.Entry                  // Logger
 	connChan        chan SocketConn             // Channel to send new connections
@@ -70,12 +70,12 @@ func NewWorkerSocket(connChan chan SocketConn, dir string) (*Server, error) {
 }
 
 // extractWorkerNameFromListener extracts worker name from the listener's address
-func (s *Server) extractWorkerNameFromListener(l *net.Listener) string {
+func (s *Server) extractWorkerNameFromListener(l net.Listener) string {
 	if s.permission != apipermission.WorkerPermission {
 		return ""
 	}
 
-	addr := (*l).Addr()
+	addr := l.Addr()
 	if addr == nil {
 		return ""
 	}
@@ -102,7 +102,7 @@ func (s *Server) extractWorkerNameFromListener(l *net.Listener) string {
 	return ""
 }
 
-func (s *Server) Run(l *net.Listener) error {
+func (s *Server) Run(l net.Listener) error {
 	// Register gob types before creating encoder
 	registerServerGobTypes()
 
@@ -110,7 +110,7 @@ func (s *Server) Run(l *net.Listener) error {
 	workerName := s.extractWorkerNameFromListener(l)
 
 	for {
-		conn, err := (*l).Accept()
+		conn, err := l.Accept()
 		if err != nil {
 			return err
 		}
@@ -136,10 +136,10 @@ func (s *Server) NewAdminListener(path string) error {
 		return err
 	}
 
-	s.listeners = append(s.listeners, &l)
+	s.listeners = append(s.listeners, l)
 
 	//TODO: improve the error handling here
-	go s.Run(&l) //nolint
+	go s.Run(l) //nolint
 
 	return nil
 }
@@ -157,10 +157,10 @@ func (s *Server) NewWorkerListener(name string, gid int) (string, error) {
 		return "", err
 	}
 
-	s.listeners = append(s.listeners, &l)
+	s.listeners = append(s.listeners, l)
 
 	//TODO: improve the error handling here
-	go s.Run(&l) //nolint
+	go s.Run(l) //nolint
 
 	return socketString, nil
 }
@@ -202,7 +202,7 @@ func configAdminSocket(path string) error {
 
 func (s *Server) Close() error {
 	for _, l := range s.listeners {
-		if err := (*l).Close(); err != nil {
+		if err := l.Close(); err != nil {
 			return err
 		}
 	}
