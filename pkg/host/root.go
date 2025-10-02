@@ -39,10 +39,12 @@ type Host struct {
 }
 
 type Manager struct {
-	Hosts  []*Host
-	Chan   chan HostOp
-	Logger *log.Entry
-	cache  map[string]*Host
+	Hosts           []*Host
+	Chan            chan HostOp
+	Logger          *log.Entry
+	cache           map[string]*Host
+	GlobalAppSecURL string
+	GlobalAPIKey    string
 	sync.RWMutex
 }
 
@@ -71,6 +73,12 @@ func NewManager(l *log.Entry) *Manager {
 		Logger: l,
 		cache:  make(map[string]*Host),
 	}
+}
+
+// SetGlobalAppSecConfig sets the global AppSec configuration for the host manager
+func (h *Manager) SetGlobalAppSecConfig(appSecURL, apiKey string) {
+	h.GlobalAppSecURL = appSecURL
+	h.GlobalAPIKey = apiKey
 }
 
 func (h *Manager) MatchFirstHost(toMatch string) *Host {
@@ -239,7 +247,7 @@ func (h *Manager) addHost(ctx context.Context, host *Host) {
 	if err := host.Ban.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
-	if err := host.AppSec.Init(host.logger, ctx); err != nil {
+	if err := host.AppSec.Init(host.logger, ctx, h.GlobalAppSecURL, h.GlobalAPIKey); err != nil {
 		host.logger.Error(err)
 	}
 	h.Hosts = append(h.Hosts, host)

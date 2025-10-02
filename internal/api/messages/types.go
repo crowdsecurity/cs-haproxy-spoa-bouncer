@@ -96,10 +96,9 @@ type AppSecRequest struct {
 	Body    []byte      `gob:"body"`
 
 	// Additional context from SPOE
-	RemoteIP    string `gob:"remote_ip"`
-	UserAgent   string `gob:"user_agent,omitempty"`
-	Referer     string `gob:"referer,omitempty"`
-	ContentType string `gob:"content_type,omitempty"`
+	RemoteIP  string `gob:"remote_ip"`
+	UserAgent string `gob:"user_agent,omitempty"`
+	Version   string `gob:"version,omitempty"` // HTTP version from HAProxy (e.g., "1.1", "2.0")
 }
 
 // RegisterGobTypes registers all message types for GOB encoding/decoding
@@ -120,6 +119,9 @@ func RegisterGobTypes() {
 	gob.Register(&types.HostResponse{})
 	gob.Register(http.Cookie{})
 	gob.Register(remediation.Remediation(0))
+
+	// Register http.Header type used in AppSecRequest
+	gob.Register(http.Header{})
 }
 
 // CommandFromString converts a string command to APICommand for backward compatibility

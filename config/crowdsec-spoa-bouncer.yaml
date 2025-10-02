@@ -13,6 +13,9 @@ api_url: http://127.0.0.1:8080/
 api_key: ${API_KEY}
 insecure_skip_verify: false
 
+## AppSec configuration
+##appsec_url: http://127.0.0.1:7422/
+
 ## SPOA configuration
 workers:
   - name: spoa1

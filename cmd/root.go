@@ -195,6 +195,9 @@ func Execute() error {
 	hostManagerLogger := log.WithField("component", "host_manager")
 	HostManager := host.NewManager(hostManagerLogger)
 
+	// Set global AppSec configuration
+	HostManager.SetGlobalAppSecConfig(config.AppSecURL, bouncer.APIKey)
+
 	g.Go(func() error {
 		HostManager.Run(ctx)
 		return nil
