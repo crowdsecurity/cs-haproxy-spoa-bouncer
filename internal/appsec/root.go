@@ -99,7 +99,7 @@ func (a *AppSec) ValidateRequest(ctx context.Context, req *messages.AppSecReques
 
 	// Process response based on HTTP status code
 	rem, err := a.processAppSecResponse(resp)
-	if rem == remediation.Ban {
+	if rem > remediation.Allow {
 		addr, err2 := netip.ParseAddr(req.RemoteIP)
 		if err2 != nil || !addr.IsValid() {
 			a.logger.Errorf("%s is not valid: %v\n", req.RemoteIP, err)
