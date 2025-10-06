@@ -58,7 +58,7 @@ func Execute() error {
 	// Parent pflags
 	configPath := pflag.StringP("config", "c", "/etc/crowdsec/bouncer/crowdsec-spoa-bouncer.yaml", "path to crowdsec-spoa-bouncer.yaml")
 	verbose := pflag.BoolP("verbose", "v", false, "set verbose mode")
-	bouncerVersion := pflag.Bool("V", false, "display version and exit (deprecated)")
+	bouncerVersion := pflag.BoolP("V", "V", false, "display version and exit (deprecated)")
 	pflag.BoolVar(bouncerVersion, "version", *bouncerVersion, "display version and exit")
 	testConfig := pflag.BoolP("test", "t", false, "test config and exit")
 	showConfig := pflag.BoolP("show-config", "T", false, "show full config (.yaml + .yaml.local) and exit")
@@ -67,6 +67,13 @@ func Execute() error {
 	workerConfigJSON := pflag.String("worker-config", "", "worker configuration as JSON string")
 
 	pflag.Parse()
+
+	// Handle version flags
+	if *bouncerVersion {
+		fmt.Printf("%s %s\n", name, version.String())
+		return nil
+	}
+
 	if *workerConfigJSON != "" {
 		var w *worker.Worker
 		if err := json.Unmarshal([]byte(*workerConfigJSON), &w); err != nil {
