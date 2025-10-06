@@ -37,6 +37,7 @@ const (
 
 // Server manages unix socket listeners and their lifecycle
 // It contains a context for proper lifecycle management tied to errgroup
+//
 //nolint:containedctx // Server owns its lifecycle and manages listener goroutines via errgroup
 type Server struct {
 	listeners       []net.Listener              // Listener
