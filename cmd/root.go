@@ -70,7 +70,7 @@ func Execute() error {
 
 	// Handle version flags
 	if *bouncerVersion {
-		fmt.Printf("%s %s\n", name, version.String())
+		fmt.Fprint(os.Stdout, version.FullString())
 		return nil
 	}
 
