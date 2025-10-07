@@ -56,7 +56,7 @@ func HandleSignals(ctx context.Context) error {
 
 func Execute() error {
 	// Parent pflags
-	configPath := pflag.StringP("config", "c", "/etc/crowdsec/bouncer/crowdsec-spoa-bouncer.yaml", "path to crowdsec-spoa-bouncer.yaml")
+	configPath := pflag.StringP("config", "c", "/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml", "path to crowdsec-spoa-bouncer.yaml")
 	verbose := pflag.BoolP("verbose", "v", false, "set verbose mode")
 	bouncerVersion := pflag.Bool("V", false, "display version and exit (deprecated)")
 	pflag.BoolVar(bouncerVersion, "version", *bouncerVersion, "display version and exit")
