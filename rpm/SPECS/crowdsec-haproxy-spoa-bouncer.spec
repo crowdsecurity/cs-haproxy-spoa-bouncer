@@ -104,18 +104,33 @@ if [ -d "/etc/haproxy" ]; then
     cp /usr/share/doc/%{name}/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
 fi
 
-# Handle systemd unit
+# Display installation message
+echo ""
+echo "=========================================="
+echo "CrowdSec HAProxy SPOA Bouncer installed"
+echo "=========================================="
+echo ""
+
 if [ "$START" -eq 0 ]; then
-    echo "No API key was generated. You can generate one on your LAPI server with:"
-    echo "    cscli bouncers add <bouncer_name>"
-    echo "Then add it to: $CONFIG"
-else
-    echo "Not starting the bouncer automatically. Please update your haproxy and start the service manually."
-%if 0%{?fc35}
-    systemctl enable "$SERVICE" >/dev/null 2>&1 || :
-%endif
-    systemctl start "$SERVICE" >/dev/null 2>&1 || :
+    echo "⚠ No API key was generated. Generate one on your LAPI server with:"
+    echo "  cscli bouncers add <bouncer_name>"
+    echo "  Then add it to: $CONFIG"
+    echo ""
 fi
+
+echo "Next steps:"
+echo "  1. Configure the bouncer in: $CONFIG"
+echo "     - Define SPOA workers with a free listen address"
+echo "     - Note: 0.0.0.0 exposes the listener externally; use 127.0.0.1 for local-only access"
+echo "  2. Ensure /etc/haproxy/crowdsec.cfg exists (SPOE agent configuration)"
+echo "  3. Update your HAProxy configuration (/etc/haproxy/haproxy.cfg):"
+echo "     - Load Lua packages and crowdsec.lua (see examples)"
+echo "     - Add SPOE filter and crowdsec-spoa backend"
+echo "  4. Enable and start the bouncer: systemctl enable --now $SERVICE"
+echo "  5. Restart HAProxy to apply changes: systemctl restart haproxy"
+echo ""
+echo "Documentation: https://docs.crowdsec.net/u/bouncers/haproxy_spoa"
+echo "Examples: /usr/share/doc/%{name}/examples/"
 
 %changelog
 * Fri Jun 13 2025 Manuel Sabban <manuel@crowdsec.net>
