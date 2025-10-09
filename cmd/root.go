@@ -222,7 +222,7 @@ func Execute() error {
 
 	socketConnChan := make(chan server.SocketConn)
 
-	workerServer, err := server.NewWorkerSocket(socketConnChan, config.WorkerSocketDir)
+	workerServer, err := server.NewWorkerSocket(ctx, socketConnChan, config.WorkerSocketDir)
 
 	if err != nil {
 		return fmt.Errorf("failed to create worker server: %w", err)
@@ -231,7 +231,7 @@ func Execute() error {
 	var adminServer *server.Server
 	if config.AdminSocket != "" {
 		var err error
-		adminServer, err = server.NewAdminSocket(socketConnChan)
+		adminServer, err = server.NewAdminSocket(ctx, socketConnChan)
 
 		if err != nil {
 			return fmt.Errorf("failed to create admin server: %w", err)
@@ -265,11 +265,21 @@ func Execute() error {
 		return apiServer.Run(ctx)
 	})
 
+	// Add worker server to errgroup
+	g.Go(func() error {
+		return workerServer.Wait()
+	})
+
+	// Add admin server to errgroup if configured
+	if adminServer != nil {
+		g.Go(func() error {
+			return adminServer.Wait()
+		})
+	}
+
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
 
 	if err := g.Wait(); err != nil {
-		workerServer.Close()
-		adminServer.Close()
 		switch err.Error() {
 		case "received SIGTERM":
 			log.Info("Received SIGTERM, shutting down")
