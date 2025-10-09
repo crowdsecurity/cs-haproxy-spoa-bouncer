@@ -18,10 +18,6 @@ systemctl --quiet is-enabled "$SERVICE" || systemctl unmask "$SERVICE" && system
 
 set_local_lapi_url 'CROWDSEC_LAPI_URL'
 
-if [ "$START" -eq 0 ]; then
-    echo "no api key was generated, you can generate one on your LAPI server by running 'cscli bouncers add <bouncer_name>' and add it to '$CONFIG'" >&2
-fi
-
 if ! getent passwd crowdsec-spoa >/dev/null; then
     adduser crowdsec-spoa --system --group --comment "crowdsec haproxy spoa bouncer"
 fi
@@ -30,6 +26,21 @@ if [ -d "/etc/haproxy" ]; then
     cp /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
 fi
 
-echo "please enter the binary path in '$CONFIG' and start the bouncer via 'sudo systemctl start $SERVICE'"
-echo "To configure your haproxy, please refer to the documentation at https://docs.crowdsec.net/docs/haproxy_spoa/"
-echo "Some configuration examples can be found in /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/"
+echo ""
+echo "=========================================="
+echo "CrowdSec HAProxy SPOA Bouncer installed"
+echo "=========================================="
+echo ""
+
+if [ "$START" -eq 0 ]; then
+    echo "⚠ No API key was generated."
+    echo "  Generate one with: cscli bouncers add <bouncer_name>"
+    echo "  Add it to: $CONFIG"
+    echo ""
+fi
+
+echo "Configuration: $CONFIG"
+echo "Examples: /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/"
+echo "Documentation: https://docs.crowdsec.net/u/bouncers/haproxy_spoa"
+echo ""
+echo "Start bouncer: systemctl enable --now $SERVICE"
