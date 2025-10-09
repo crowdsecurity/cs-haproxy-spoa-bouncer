@@ -2,6 +2,7 @@ package spoa
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/api/types"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
@@ -518,10 +520,18 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	if r < remediation.Unknown {
 		iso, err := s.workerClient.GetGeoIso(ipStr)
 		if err != nil {
-			log.WithFields(log.Fields{
+			// Log at trace level if GeoIP database is intentionally not configured
+			// Otherwise log as warning since it's an unexpected error
+			logFields := log.Fields{
 				"ip":    ipStr,
 				"error": err,
-			}).Warn("Failed to get geo ISO, skipping country check")
+			}
+			var apiErr *types.APIError
+			if errors.As(err, &apiErr) && apiErr.Code == types.ErrCodeGeoDBUnavailable {
+				log.WithFields(logFields).Trace("GeoIP database not available, skipping country check")
+			} else {
+				log.WithFields(logFields).Warn("Failed to get geo ISO, skipping country check")
+			}
 		} else if iso != "" {
 			cnR, err := s.workerClient.GetCN(iso, ipStr)
 			if err != nil {
