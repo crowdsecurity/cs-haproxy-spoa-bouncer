@@ -90,6 +90,7 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 			return host
 		}
 	}
+	h.Logger.WithField("requested_host", toMatch).Debug("no matching host found")
 	return nil
 }
 
