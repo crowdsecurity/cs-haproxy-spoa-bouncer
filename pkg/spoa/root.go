@@ -84,21 +84,12 @@ func New(config *SpoaConfig) (*Spoa, error) {
 	}
 
 	if config.UnixAddr != "" {
-		// Get current process uid/gid
-		uid := syscall.Getuid()
-		gid := syscall.Getgid()
-
-		// Get existing socket stat to preserve group ownership
-		var stat syscall.Stat_t
-		if err := syscall.Stat(config.UnixAddr, &stat); err == nil {
-			// Use existing socket group if available
-			gid = int(stat.Gid)
-		}
-
-		// Remove existing socket
+		// Remove existing socket if present
 		_ = syscall.Unlink(config.UnixAddr)
 
 		// Set umask to 0o117 (result: 0o660 permissions)
+		// Socket inherits group ownership from parent directory if setgid bit is set
+		// To set this: chmod g+s /run/crowdsec-spoa && chgrp haproxy /run/crowdsec-spoa
 		origUmask := syscall.Umask(0o117)
 
 		// Create new socket
@@ -110,11 +101,6 @@ func New(config *SpoaConfig) (*Spoa, error) {
 
 		// Reset umask
 		syscall.Umask(origUmask)
-
-		// Change socket owner and permissions
-		if err := syscall.Chown(config.UnixAddr, uid, gid); err != nil {
-			return nil, fmt.Errorf("failed to change owner of socket %s: %w", config.UnixAddr, err)
-		}
 
 		s.ListenSocket = addr
 	}
