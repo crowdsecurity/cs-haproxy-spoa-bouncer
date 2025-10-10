@@ -1,12 +1,14 @@
 [Unit]
 Description=The haproxy spoa bouncer for CrowdSec
 Documentation=https://docs.crowdsec.net/u/bouncers/haproxy_spoa/
-After=syslog.target network.target remote-fs.target nss-lookup.target crowdsec.service crowdsec-spoa-bouncer-admin.socket
+After=syslog.target network.target remote-fs.target nss-lookup.target crowdsec.service
 
 [Service]
 Type=notify
 User=crowdsec-spoa
 Group=crowdsec-spoa
+# Optional: If crowdsec-spoa-bouncer-admin.socket is enabled, use it for admin access
+Sockets=crowdsec-spoa-bouncer-admin.socket
 # Allow binding to lower ports if needed
 # AmbientCapabilities=CAP_NET_BIND_SERVICE
 ExecStart=${BIN} -c ${CFG}/crowdsec-spoa-bouncer.yaml
