@@ -23,10 +23,13 @@ workers:
 #city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
 
 # Admin socket (optional) - Enables root-only management access
-# To enable:
-#  1. Uncomment the line below
-#  2. Enable systemd socket: systemctl enable --now crowdsec-spoa-bouncer-admin.socket
-# Socket is created by systemd with root-only permissions (0600)
+# 
+# For Docker: Uncomment the line below to enable admin socket
+# For systemd: Do NOT uncomment - use the socket unit instead:
+#   1. systemctl stop crowdsec-spoa-bouncer.service
+#   2. systemctl enable --now crowdsec-spoa-bouncer-admin.socket
+#   3. systemctl start crowdsec-spoa-bouncer.service
+#
 #admin_socket: /run/crowdsec-spoa/admin.sock
 
 
