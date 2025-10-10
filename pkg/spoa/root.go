@@ -52,7 +52,7 @@ type SpoaConfig struct {
 	GeoDatabase *geo.GeoDatabase
 }
 
-func New(config SpoaConfig) (*Spoa, error) {
+func New(config *SpoaConfig) (*Spoa, error) {
 	clog := log.New()
 
 	if config.LogLevel != nil {

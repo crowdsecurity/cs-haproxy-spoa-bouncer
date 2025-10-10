@@ -28,7 +28,7 @@ func TestNewManager(t *testing.T) {
 	assert.NotNil(t, manager.hostManager, "hostManager should be set")
 	assert.NotNil(t, manager.geoDatabase, "geoDatabase should be set")
 	assert.NotNil(t, manager.workers, "workers slice should be initialized")
-	assert.Len(t, manager.workers, 0, "workers slice should be empty initially")
+	assert.Empty(t, manager.workers, "workers slice should be empty initially")
 }
 
 func TestAddWorker(t *testing.T) {
@@ -162,7 +162,7 @@ func TestManagerStop(t *testing.T) {
 
 	// Stop manager
 	err = manager.Stop()
-	assert.NoError(t, err, "stopping manager should not return error")
+	require.NoError(t, err, "stopping manager should not return error")
 
 	// Cancel context
 	cancel()
@@ -203,4 +203,3 @@ func TestWorkerWithLogLevel(t *testing.T) {
 	// Wait for workers to finish
 	_ = manager.Wait()
 }
-

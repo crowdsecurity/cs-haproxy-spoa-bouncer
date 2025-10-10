@@ -28,12 +28,12 @@ type Manager struct {
 	hostManager *host.Manager
 	geoDatabase *geo.GeoDatabase
 	g           *errgroup.Group
-	ctx         context.Context
+	gCtx        context.Context //nolint:containedctx // Context from errgroup.WithContext, needed for worker goroutines
 }
 
 // NewManager creates a new worker manager
 func NewManager(ctx context.Context, dataset *dataset.DataSet, hostManager *host.Manager, geoDatabase *geo.GeoDatabase) *Manager {
-	g, ctx := errgroup.WithContext(ctx)
+	g, gCtx := errgroup.WithContext(ctx)
 
 	return &Manager{
 		workers:     make([]*spoa.Spoa, 0),
@@ -41,13 +41,13 @@ func NewManager(ctx context.Context, dataset *dataset.DataSet, hostManager *host
 		hostManager: hostManager,
 		geoDatabase: geoDatabase,
 		g:           g,
-		ctx:         ctx,
+		gCtx:        gCtx,
 	}
 }
 
 // AddWorker adds a new SPOA worker goroutine
 func (m *Manager) AddWorker(config WorkerConfig) error {
-	spoaConfig := spoa.SpoaConfig{
+	spoaConfig := &spoa.SpoaConfig{
 		TcpAddr:     config.TcpAddr,
 		UnixAddr:    config.UnixAddr,
 		Name:        config.Name,
@@ -68,7 +68,7 @@ func (m *Manager) AddWorker(config WorkerConfig) error {
 	if config.TcpAddr != "" {
 		m.g.Go(func() error {
 			log.Infof("Starting SPOA worker %s on TCP %s", config.Name, config.TcpAddr)
-			if err := worker.ServeTCP(m.ctx); err != nil {
+			if err := worker.ServeTCP(m.gCtx); err != nil {
 				return fmt.Errorf("worker %s TCP server failed: %w", config.Name, err)
 			}
 			return nil
@@ -79,7 +79,7 @@ func (m *Manager) AddWorker(config WorkerConfig) error {
 	if config.UnixAddr != "" {
 		m.g.Go(func() error {
 			log.Infof("Starting SPOA worker %s on Unix socket %s", config.Name, config.UnixAddr)
-			if err := worker.ServeUnix(m.ctx); err != nil {
+			if err := worker.ServeUnix(m.gCtx); err != nil {
 				return fmt.Errorf("worker %s Unix server failed: %w", config.Name, err)
 			}
 			return nil
@@ -99,15 +99,17 @@ func (m *Manager) Stop() error {
 	// Context cancellation will stop all workers
 	// Individual workers handle graceful shutdown via their Shutdown methods
 	log.Info("Stopping all SPOA workers")
-
+	
 	for _, worker := range m.workers {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		if err := worker.Shutdown(shutdownCtx); err != nil {
-			log.Errorf("Failed to shutdown worker: %v", err)
-		}
+		func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			
+			if err := worker.Shutdown(shutdownCtx); err != nil {
+				log.Errorf("Failed to shutdown worker: %v", err)
+			}
+		}()
 	}
-
+	
 	return nil
 }
