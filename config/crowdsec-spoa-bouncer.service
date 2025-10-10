@@ -1,9 +1,16 @@
 [Unit]
 Description=The haproxy spoa bouncer for CrowdSec
+Documentation=https://docs.crowdsec.net/u/bouncers/haproxy_spoa/
 After=syslog.target network.target remote-fs.target nss-lookup.target crowdsec.service
+# Optional: Enable admin socket for root-only management access
+# After=crowdsec-spoa-bouncer-admin.socket
 
 [Service]
 Type=notify
+User=crowdsec-spoa
+Group=crowdsec-spoa
+# Allow binding to lower ports if needed
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
 ExecStart=${BIN} -c ${CFG}/crowdsec-spoa-bouncer.yaml
 ExecStartPre=${BIN} -c ${CFG}/crowdsec-spoa-bouncer.yaml -t
 ExecStartPre=/bin/mkdir -p /run/crowdsec-spoa
@@ -11,6 +18,14 @@ ExecStartPre=/bin/chown crowdsec-spoa:crowdsec-spoa /run/crowdsec-spoa
 ExecStartPost=/bin/sleep 0.1
 Restart=always
 RestartSec=10
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run/crowdsec-spoa
+RuntimeDirectory=crowdsec-spoa
+RuntimeDirectoryMode=0750
 
 [Install]
 WantedBy=multi-user.target

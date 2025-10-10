@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 
+	"github.com/coreos/go-systemd/v22/activation"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/api/messages"
@@ -153,8 +155,25 @@ func (s *Server) Run(l net.Listener) error {
 }
 
 func (s *Server) NewAdminListener(path string) error {
-	l, err := newUnixSocket(path)
+	// Try systemd socket activation first
+	listeners, err := activation.Listeners()
+	if err != nil {
+		log.Warnf("Failed to get systemd listeners: %v, falling back to manual socket creation", err)
+	} else if len(listeners) > 0 {
+		// Use systemd-provided socket
+		log.Infof("Using systemd socket activation for admin socket")
+		for _, l := range listeners {
+			s.listeners = append(s.listeners, l)
+			// Launch listener in errgroup with SO_PEERCRED check
+			s.g.Go(func() error {
+				return s.RunWithPeerCheck(l)
+			})
+		}
+		return nil
+	}
 
+	// Fallback to manual socket creation
+	l, err := newUnixSocket(path)
 	if err != nil {
 		return err
 	}
@@ -165,12 +184,71 @@ func (s *Server) NewAdminListener(path string) error {
 
 	s.listeners = append(s.listeners, l)
 
-	// Launch listener in errgroup
+	// Launch listener in errgroup with SO_PEERCRED check
 	s.g.Go(func() error {
-		return s.Run(l)
+		return s.RunWithPeerCheck(l)
 	})
 
 	return nil
+}
+
+// RunWithPeerCheck runs the server with SO_PEERCRED verification for root access
+func (s *Server) RunWithPeerCheck(l net.Listener) error {
+	// Register gob types before creating encoder
+	registerServerGobTypes()
+
+	// Close listener when context is canceled
+	go func() {
+		<-s.ctx.Done()
+		l.Close()
+	}()
+
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			// Check if error is due to context cancellation
+			if s.ctx.Err() != nil {
+				return s.ctx.Err()
+			}
+			return err
+		}
+
+		// Verify peer credentials (must be root)
+		if unixConn, ok := conn.(*net.UnixConn); ok {
+			file, err := unixConn.File()
+			if err != nil {
+				log.Errorf("Failed to get connection file: %v", err)
+				conn.Close()
+				continue
+			}
+
+			ucred, err := syscall.GetsockoptUcred(int(file.Fd()), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+			file.Close()
+
+			if err != nil {
+				log.Errorf("Failed to get peer credentials: %v", err)
+				conn.Close()
+				continue
+			}
+
+			// Only allow root (UID 0) to connect
+			if ucred.Uid != 0 {
+				log.Warnf("Rejecting admin connection from non-root user (UID: %d)", ucred.Uid)
+				conn.Close()
+				continue
+			}
+
+			log.Debugf("Accepted admin connection from root (UID: %d)", ucred.Uid)
+		}
+
+		s.connChan <- SocketConn{
+			Conn:       conn,
+			Permission: s.permission,
+			Encoder:    gob.NewEncoder(conn),
+			Decoder:    gob.NewDecoder(conn),
+			WorkerName: "",
+		}
+	}
 }
 
 func (s *Server) NewWorkerListener(name string, gid int) (string, error) {

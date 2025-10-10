@@ -7,7 +7,6 @@ import (
 	apiPermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/api/types"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
@@ -15,30 +14,27 @@ import (
 )
 
 type API struct {
-	WorkerManager *worker.Manager
-	HostManager   *host.Manager
-	Dataset       *dataset.DataSet
-	GeoDatabase   *geo.GeoDatabase
-	ConnChan      chan server.SocketConn
+	HostManager *host.Manager
+	Dataset     *dataset.DataSet
+	GeoDatabase *geo.GeoDatabase
+	ConnChan    chan server.SocketConn
 }
 
 // APIConfig holds the configuration for creating a new API instance
 type APIConfig struct {
-	WorkerManager *worker.Manager
-	HostManager   *host.Manager
-	Dataset       *dataset.DataSet
-	GeoDatabase   *geo.GeoDatabase
-	SocketChan    chan server.SocketConn
+	HostManager *host.Manager
+	Dataset     *dataset.DataSet
+	GeoDatabase *geo.GeoDatabase
+	SocketChan  chan server.SocketConn
 }
 
 // NewAPI creates a new API instance and initializes it with the provided configuration
 func NewAPI(config APIConfig) *API {
 	a := &API{
-		WorkerManager: config.WorkerManager,
-		HostManager:   config.HostManager,
-		Dataset:       config.Dataset,
-		GeoDatabase:   config.GeoDatabase,
-		ConnChan:      config.SocketChan,
+		HostManager: config.HostManager,
+		Dataset:     config.Dataset,
+		GeoDatabase: config.GeoDatabase,
+		ConnChan:    config.SocketChan,
 	}
 
 	return a
@@ -48,12 +44,13 @@ func (a *API) Run(ctx context.Context) error {
 	for {
 		select {
 		case sc := <-a.ConnChan:
-			log.Info("New connection")
-			if sc.Permission == apiPermission.WorkerPermission {
-				go a.handleWorkerConnectionEncoded(ctx, sc)
-				continue
+			log.Info("New admin connection")
+			if sc.Permission == apiPermission.AdminPermission {
+				go a.handleAdminConnection(ctx, sc)
+			} else {
+				log.Warnf("Unexpected connection with permission %v, closing", sc.Permission)
+				sc.Conn.Close()
 			}
-			go a.handleAdminConnection(ctx, sc)
 		case <-ctx.Done():
 			return nil
 		}

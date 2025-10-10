@@ -14,17 +14,20 @@ api_key: ${API_KEY}
 insecure_skip_verify: false
 
 ## SPOA configuration
+# Workers run as goroutines within the main process
 workers:
   - name: spoa1
     listen_addr: 0.0.0.0:9000
     listen_socket: /run/crowdsec-spoa/spoa-1.sock
-worker_user: crowdsec-spoa
-worker_group: crowdsec-spoa
 #asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
 #city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
 
-#admin socket
-admin_socket: /run/crowdsec-spoa-admin.sock
+# Admin socket (optional) - Enables root-only management access
+# To enable:
+#  1. Uncomment the line below
+#  2. Enable systemd socket: systemctl enable --now crowdsec-spoa-bouncer-admin.socket
+# Socket is created by systemd with root-only permissions (0600)
+#admin_socket: /run/crowdsec-spoa/admin.sock
 
 
 prometheus:
