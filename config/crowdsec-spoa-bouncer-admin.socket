@@ -2,8 +2,9 @@
 Description=CrowdSec SPOA Bouncer Admin Socket (Optional)
 Documentation=https://docs.crowdsec.net/u/bouncers/haproxy_spoa/
 # This socket is OPTIONAL and disabled by default
-# To use it: systemctl enable --now crowdsec-spoa-bouncer-admin.socket
-# Then restart the service: systemctl restart crowdsec-spoa-bouncer.service
+# To enable: systemctl enable --now crowdsec-spoa-bouncer-admin.socket
+# To disable: systemctl stop crowdsec-spoa-bouncer-admin.socket && systemctl disable crowdsec-spoa-bouncer-admin.socket
+# The main service will detect and use the socket if it's active when the service starts
 Before=crowdsec-spoa-bouncer.service
 
 [Socket]
