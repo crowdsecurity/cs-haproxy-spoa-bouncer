@@ -11,6 +11,7 @@ ListenStream=/run/crowdsec-spoa/admin.sock
 SocketMode=0600
 SocketUser=root
 SocketGroup=root
+Service=crowdsec-spoa-bouncer.service
 Accept=no
 
 [Install]
