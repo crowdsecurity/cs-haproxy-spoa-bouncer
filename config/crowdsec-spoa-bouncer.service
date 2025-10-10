@@ -2,6 +2,7 @@
 Description=The haproxy spoa bouncer for CrowdSec
 Documentation=https://docs.crowdsec.net/u/bouncers/haproxy_spoa/
 After=syslog.target network.target remote-fs.target nss-lookup.target crowdsec.service crowdsec-spoa-bouncer-admin.socket
+Wants=crowdsec-spoa-bouncer-admin.socket
 
 [Service]
 Type=notify
