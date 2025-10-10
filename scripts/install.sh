@@ -44,6 +44,11 @@ install_bouncer() {
     install -D -m 0600 "./config/$CONFIG_FILE" "$CONFIG"
     # shellcheck disable=SC2016
     CFG=${CONFIG_DIR} BIN=${BIN_PATH_INSTALLED} envsubst '$CFG $BIN' <"./config/$SERVICE" >"$SYSTEMD_PATH_FILE"
+    # Install optional admin socket unit (disabled by default)
+    if [ -f "./config/$ADMIN_SOCKET" ]; then
+        msg info "Installing optional admin socket unit (disabled by default)"
+        install -D -m 0644 "./config/$ADMIN_SOCKET" "$SYSTEMD_ADMIN_SOCKET_FILE"
+    fi
     systemctl daemon-reload
     gen_apikey
     gen_config_file
@@ -68,7 +73,12 @@ fi
 
 echo "Configuration: $CONFIG"
 echo "Example configs: /usr/share/crowdsec/config/ (or ./config/ in source)"
-echo "Documentation: https://docs.crowdsec.net/u/bouncers/haproxy_spoa"
+echo "Documentation: https://docs.crowdsec.net/u/bouncers/haproxy_spoa/"
 echo ""
 echo "Start bouncer: systemctl enable --now $SERVICE"
+echo ""
+echo "Optional admin socket (disabled by default):"
+echo "  Enable: systemctl enable --now $ADMIN_SOCKET"
+echo "  Uncomment 'admin_socket' in $CONFIG"
+echo "  Restart: systemctl restart $SERVICE"
 exit 0

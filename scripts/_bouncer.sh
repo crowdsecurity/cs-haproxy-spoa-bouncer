@@ -60,12 +60,14 @@ require() {
 # shellcheck disable=SC2034
 {
     SERVICE="$BOUNCER.service"
+    ADMIN_SOCKET="$BOUNCER-admin.socket"
     BIN_PATH_INSTALLED="/usr/bin/$BOUNCER"
     BIN_PATH="./$BOUNCER"
     CONFIG_DIR="/etc/crowdsec/bouncers"
     CONFIG_FILE="$BOUNCER.yaml"
     CONFIG="$CONFIG_DIR/$CONFIG_FILE"
     SYSTEMD_PATH_FILE="/etc/systemd/system/$SERVICE"
+    SYSTEMD_ADMIN_SOCKET_FILE="/etc/systemd/system/$ADMIN_SOCKET"
 }
 
 assert_root() {
