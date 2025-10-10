@@ -21,6 +21,7 @@ ProtectSystem=strict
 ProtectHome=true
 RuntimeDirectory=crowdsec-spoa
 RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 LogsDirectory=crowdsec-spoa
 LogsDirectoryMode=0750
 
