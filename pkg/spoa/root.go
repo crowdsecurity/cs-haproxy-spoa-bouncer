@@ -50,18 +50,26 @@ type SpoaConfig struct {
 	Dataset     *dataset.DataSet
 	HostManager *host.Manager
 	GeoDatabase *geo.GeoDatabase
+	Logger      *log.Entry // Parent logger to inherit from
 }
 
 func New(config *SpoaConfig) (*Spoa, error) {
-	clog := log.New()
+	// Use provided logger or fallback to standard logger
+	var workerLogger *log.Entry
+	if config.Logger != nil {
+		workerLogger = config.Logger.WithField("worker", config.Name)
+	} else {
+		workerLogger = log.WithField("worker", config.Name)
+	}
 
+	// Apply log level if specified (for compatibility)
 	if config.LogLevel != nil {
-		clog.SetLevel(*config.LogLevel)
+		workerLogger.Logger.SetLevel(*config.LogLevel)
 	}
 
 	s := &Spoa{
 		HAWaitGroup: &sync.WaitGroup{},
-		logger:      clog.WithField("worker", config.Name),
+		logger:      workerLogger,
 		dataset:     config.Dataset,
 		hostManager: config.HostManager,
 		geoDatabase: config.GeoDatabase,

@@ -17,13 +17,12 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/api"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/admin"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
-	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
 	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
 	"github.com/crowdsecurity/go-cs-lib/csdaemon"
 	"github.com/crowdsecurity/go-cs-lib/csstring"
@@ -202,7 +201,8 @@ func Execute() error {
 	}
 
 	// Create worker manager for goroutine-based workers
-	workerManager := worker.NewManager(ctx, dataSet, HostManager, &config.Geo)
+	workerLogger := log.WithField("component", "worker")
+	workerManager := worker.NewManager(ctx, dataSet, HostManager, &config.Geo, workerLogger)
 
 	// Add all workers as goroutines
 	for _, w := range config.Workers {
@@ -222,37 +222,21 @@ func Execute() error {
 		return workerManager.Wait()
 	})
 
-	// Setup admin socket if configured
-	socketConnChan := make(chan server.SocketConn)
-	var adminServer *server.Server
-	if config.AdminSocket != "" {
-		var err error
-		adminServer, err = server.NewAdminSocket(ctx, socketConnChan)
+	// Setup admin socket (systemd activation or config-based)
+	adminServer, err := admin.NewServer(ctx, admin.Config{
+		SocketPath:  config.AdminSocket,
+		HostManager: HostManager,
+		Dataset:     dataSet,
+		GeoDatabase: &config.Geo,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create admin server: %w", err)
+	}
 
-		if err != nil {
-			return fmt.Errorf("failed to create admin server: %w", err)
-		}
-
-		err = adminServer.NewAdminListener(config.AdminSocket)
-		if err != nil {
-			return fmt.Errorf("failed to create admin listener: %w", err)
-		}
-
-		// Start admin API server
-		apiServer := api.NewAPI(api.APIConfig{
-			HostManager: HostManager,
-			Dataset:     dataSet,
-			GeoDatabase: &config.Geo,
-			SocketChan:  socketConnChan,
-		})
-
+	// Start admin server if it has listeners
+	if adminServer.HasListeners() {
 		g.Go(func() error {
-			return apiServer.Run(ctx)
-		})
-
-		// Add admin server to errgroup
-		g.Go(func() error {
-			return adminServer.Wait()
+			return adminServer.Run()
 		})
 	}
 

@@ -20,13 +20,15 @@ func TestNewManager(t *testing.T) {
 	ds := dataset.New()
 	hm := host.NewManager(log.WithField("test", "manager"))
 	gdb := &geo.GeoDatabase{}
+	logger := log.WithField("component", "worker")
 
-	manager := NewManager(ctx, ds, hm, gdb)
+	manager := NewManager(ctx, ds, hm, gdb, logger)
 
 	assert.NotNil(t, manager, "manager should not be nil")
 	assert.NotNil(t, manager.dataset, "dataset should be set")
 	assert.NotNil(t, manager.hostManager, "hostManager should be set")
 	assert.NotNil(t, manager.geoDatabase, "geoDatabase should be set")
+	assert.NotNil(t, manager.logger, "logger should be set")
 	assert.NotNil(t, manager.workers, "workers slice should be initialized")
 	assert.Empty(t, manager.workers, "workers slice should be empty initially")
 }
@@ -38,8 +40,9 @@ func TestAddWorker(t *testing.T) {
 	ds := dataset.New()
 	hm := host.NewManager(log.WithField("test", "manager"))
 	gdb := &geo.GeoDatabase{}
+	logger := log.WithField("component", "worker")
 
-	manager := NewManager(ctx, ds, hm, gdb)
+	manager := NewManager(ctx, ds, hm, gdb, logger)
 
 	// Create a worker config with TCP listener
 	config := WorkerConfig{
@@ -71,8 +74,9 @@ func TestAddMultipleWorkers(t *testing.T) {
 	ds := dataset.New()
 	hm := host.NewManager(log.WithField("test", "manager"))
 	gdb := &geo.GeoDatabase{}
+	logger := log.WithField("component", "worker")
 
-	manager := NewManager(ctx, ds, hm, gdb)
+	manager := NewManager(ctx, ds, hm, gdb, logger)
 
 	// Add multiple workers
 	configs := []WorkerConfig{
@@ -114,8 +118,9 @@ func TestAddWorkerWithUnixSocket(t *testing.T) {
 	ds := dataset.New()
 	hm := host.NewManager(log.WithField("test", "manager"))
 	gdb := &geo.GeoDatabase{}
+	logger := log.WithField("component", "worker")
 
-	manager := NewManager(ctx, ds, hm, gdb)
+	manager := NewManager(ctx, ds, hm, gdb, logger)
 
 	config := WorkerConfig{
 		Name:     "unix-worker",
@@ -145,8 +150,9 @@ func TestManagerStop(t *testing.T) {
 	ds := dataset.New()
 	hm := host.NewManager(log.WithField("test", "manager"))
 	gdb := &geo.GeoDatabase{}
+	logger := log.WithField("component", "worker")
 
-	manager := NewManager(ctx, ds, hm, gdb)
+	manager := NewManager(ctx, ds, hm, gdb, logger)
 
 	config := WorkerConfig{
 		Name:     "stoppable-worker",
@@ -178,8 +184,9 @@ func TestWorkerWithLogLevel(t *testing.T) {
 	ds := dataset.New()
 	hm := host.NewManager(log.WithField("test", "manager"))
 	gdb := &geo.GeoDatabase{}
+	logger := log.WithField("component", "worker")
 
-	manager := NewManager(ctx, ds, hm, gdb)
+	manager := NewManager(ctx, ds, hm, gdb, logger)
 
 	debugLevel := log.DebugLevel
 	config := WorkerConfig{

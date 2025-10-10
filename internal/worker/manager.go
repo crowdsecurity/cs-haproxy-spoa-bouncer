@@ -27,12 +27,13 @@ type Manager struct {
 	dataset     *dataset.DataSet
 	hostManager *host.Manager
 	geoDatabase *geo.GeoDatabase
+	logger      *log.Entry
 	g           *errgroup.Group
 	gCtx        context.Context //nolint:containedctx // Context from errgroup.WithContext, needed for worker goroutines
 }
 
 // NewManager creates a new worker manager
-func NewManager(ctx context.Context, dataset *dataset.DataSet, hostManager *host.Manager, geoDatabase *geo.GeoDatabase) *Manager {
+func NewManager(ctx context.Context, dataset *dataset.DataSet, hostManager *host.Manager, geoDatabase *geo.GeoDatabase, logger *log.Entry) *Manager {
 	g, gCtx := errgroup.WithContext(ctx)
 
 	return &Manager{
@@ -40,6 +41,7 @@ func NewManager(ctx context.Context, dataset *dataset.DataSet, hostManager *host
 		dataset:     dataset,
 		hostManager: hostManager,
 		geoDatabase: geoDatabase,
+		logger:      logger,
 		g:           g,
 		gCtx:        gCtx,
 	}
@@ -55,6 +57,7 @@ func (m *Manager) AddWorker(config WorkerConfig) error {
 		Dataset:     m.dataset,
 		HostManager: m.hostManager,
 		GeoDatabase: m.geoDatabase,
+		Logger:      m.logger, // Pass manager's logger to worker
 	}
 
 	worker, err := spoa.New(spoaConfig)
