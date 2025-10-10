@@ -215,7 +215,10 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		log.Debug("remediation: ", *rstring)
 		r = remediation.FromString(*rstring)
 	} else {
-		log.Info("ip remediation was not found in message, defaulting to allow")
+		// IP remediation not found - fallback to checking IP directly
+		// This handles cases where crowdsec-ip message didn't fire (e.g., on-client-session not triggered)
+		log.Debug("ip remediation was not found in message, checking IP directly")
+		s.checkIPRemediation(req, mes, &r)
 	}
 
 	hoststring, err := readKeyFromMessage[string](mes, "host")
@@ -493,26 +496,16 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	// request.Header = headers
 }
 
-// Handles checking the IP address against the dataset
-func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
-	var r remediation.Remediation
-
-	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
-
-	if err != nil {
-		log.Error(err)
-		return
-	}
-
-	ipStr := ipType.String()
-
-	r, err = s.workerClient.GetIP(ipStr)
+// getIPRemediation performs IP and geo/country remediation checks
+// Returns the final remediation after checking IP, geo, and country
+func (s *Spoa) getIPRemediation(req *request.Request, ipStr string) remediation.Remediation {
+	r, err := s.workerClient.GetIP(ipStr)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"ip":    ipStr,
 			"error": err,
 		}).Error("Failed to get IP remediation")
-		r = remediation.Allow // Safe default
+		return remediation.Allow // Safe default
 	}
 
 	if r < remediation.Unknown {
@@ -537,7 +530,38 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 		}
 	}
 
+	return r
+}
+
+// Handles checking the IP address against the dataset
+func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
+	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
+	if err != nil {
+		log.Error(err)
+		return
+	}
+
+	ipStr := ipType.String()
+	r := s.getIPRemediation(req, ipStr)
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
+}
+
+// checkIPRemediation extracts IP from the message and checks remediation
+// Used as fallback when crowdsec-ip message didn't set remediation variable
+func (s *Spoa) checkIPRemediation(req *request.Request, mes *message.Message, r *remediation.Remediation) {
+	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
+	if err != nil {
+		log.WithError(err).Debug("failed to extract src-ip from message for fallback check")
+		return
+	}
+
+	ipStr := ipType.String()
+	*r = s.getIPRemediation(req, ipStr)
+
+	log.WithFields(log.Fields{
+		"ip":          ipStr,
+		"remediation": r.String(),
+	}).Debug("IP remediation checked via fallback")
 }
 
 func handlerWrapper(s *Spoa) func(req *request.Request) {
