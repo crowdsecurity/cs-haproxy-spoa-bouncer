@@ -22,7 +22,7 @@ import (
 
 // Server manages admin socket and handles admin commands
 type Server struct {
-	listeners   []net.Listener
+	listener    net.Listener
 	hostManager *host.Manager
 	dataset     *dataset.DataSet
 	geoDatabase *geo.GeoDatabase
@@ -67,9 +67,9 @@ func (s *Server) setupListeners(configPath string) error {
 	if err != nil {
 		log.Debugf("Failed to get systemd listeners: %v", err)
 	} else if len(listeners) > 0 {
-		// Use systemd-provided socket
+		// Use the first systemd-provided socket (admin socket)
 		log.Infof("Using systemd socket activation for admin socket")
-		s.listeners = listeners
+		s.listener = listeners[0]
 		return nil
 	}
 
@@ -100,7 +100,7 @@ func (s *Server) setupListeners(configPath string) error {
 		return err
 	}
 
-	s.listeners = append(s.listeners, l)
+	s.listener = l
 	return nil
 }
 
@@ -119,25 +119,21 @@ func (s *Server) createUnixSocket(path string) (net.Listener, error) {
 	return l, nil
 }
 
-// HasListeners returns true if the server has any active listeners
+// HasListeners returns true if the server has an active listener
 func (s *Server) HasListeners() bool {
-	return len(s.listeners) > 0
+	return s.listener != nil
 }
 
 // Run starts the admin server
 func (s *Server) Run() error {
-	if len(s.listeners) == 0 {
-		log.Debug("No admin socket listeners, skipping admin server")
+	if s.listener == nil {
+		log.Debug("No admin socket listener, skipping admin server")
 		return nil
 	}
 
-	// Start accepting connections on each listener
-	for _, l := range s.listeners {
-		listener := l // Capture for goroutine
-		s.g.Go(func() error {
-			return s.acceptConnections(listener)
-		})
-	}
+	s.g.Go(func() error {
+		return s.acceptConnections(s.listener)
+	})
 
 	return s.g.Wait()
 }
