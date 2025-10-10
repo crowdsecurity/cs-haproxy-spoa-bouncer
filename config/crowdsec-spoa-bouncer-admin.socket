@@ -9,6 +9,8 @@ ListenStream=/run/crowdsec-spoa/admin.sock
 SocketMode=0600
 SocketUser=root
 SocketGroup=root
+# Activate the main bouncer service when connection arrives
+Service=crowdsec-spoa-bouncer.service
 # Accept connections before service starts
 Accept=no
 
