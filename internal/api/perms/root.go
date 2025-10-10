@@ -1,8 +1,8 @@
-package apiPermission
+package apipermission
 
 const (
-	WorkerPermission ApiPermission = iota
+	WorkerPermission APIPermission = iota
 	AdminPermission
 )
 
-type ApiPermission int
+type APIPermission int

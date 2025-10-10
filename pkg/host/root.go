@@ -39,10 +39,10 @@ type Host struct {
 }
 
 type Manager struct {
-	Hosts []*Host
-	ctx   context.Context
-	Chan  chan HostOp
-	cache map[string]*Host
+	Hosts  []*Host
+	Chan   chan HostOp
+	Logger *log.Entry
+	cache  map[string]*Host
 	sync.RWMutex
 }
 
@@ -52,24 +52,24 @@ Host: {{ .Host }}
 {{ end -}}
 `
 
-func (m *Manager) String() string {
+func (h *Manager) String() string {
 	tmpl, err := template.New("test").Parse(t)
 	if err != nil {
 		return ""
 	}
 	var b strings.Builder
-	if err := tmpl.Execute(&b, m); err != nil {
+	if err := tmpl.Execute(&b, h); err != nil {
 		return ""
 	}
 	return b.String()
 }
 
-func NewManager(ctx context.Context) *Manager {
+func NewManager(l *log.Entry) *Manager {
 	return &Manager{
-		ctx:   ctx,
-		Hosts: make([]*Host, 0),
-		Chan:  make(chan HostOp),
-		cache: make(map[string]*Host),
+		Hosts:  make([]*Host, 0),
+		Chan:   make(chan HostOp),
+		Logger: l,
+		cache:  make(map[string]*Host),
 	}
 }
 
@@ -77,23 +77,28 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 	h.RLock()
 	defer h.RUnlock()
 
+	if len(h.Hosts) == 0 {
+		return nil
+	}
+
 	if host, ok := h.cache[toMatch]; ok {
-		host.logger.WithField("value", toMatch).Debug("matched host from cache")
+		host.logger.WithField("requested_host", toMatch).Debug("matched host from cache")
 		return host
 	}
 
 	for _, host := range h.Hosts {
 		matched, err := filepath.Match(host.Host, toMatch)
 		if matched && err == nil {
-			host.logger.WithField("value", toMatch).Debug("matched host")
+			host.logger.WithField("requested_host", toMatch).Debug("matched host pattern")
 			h.cache[toMatch] = host
 			return host
 		}
 	}
+	h.Logger.WithField("requested_host", toMatch).Debug("no matching host found")
 	return nil
 }
 
-func (h *Manager) Run() {
+func (h *Manager) Run(ctx context.Context) {
 	for {
 		select {
 		case instruction := <-h.Chan:
@@ -104,13 +109,13 @@ func (h *Manager) Run() {
 				h.removeHost(instruction.Host)
 			case OpAdd:
 				h.cache = make(map[string]*Host)
-				h.addHost(instruction.Host)
+				h.addHost(ctx, instruction.Host)
 				h.sort()
 			case OpPatch:
 				h.patchHost(instruction.Host)
 			}
 			h.Unlock()
-		case <-h.ctx.Done():
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -171,14 +176,14 @@ func (h *Manager) sort() {
 	})
 }
 
-func (hM *Manager) removeHost(host *Host) {
-	for i, h := range hM.Hosts {
-		if h == host {
+func (h *Manager) removeHost(host *Host) {
+	for i, th := range h.Hosts {
+		if th == host {
 			host.Captcha.Cancel()
-			if i == len(hM.Hosts)-1 {
-				hM.Hosts = hM.Hosts[:i]
+			if i == len(h.Hosts)-1 {
+				h.Hosts = h.Hosts[:i]
 			} else {
-				hM.Hosts = append(hM.Hosts[:i], hM.Hosts[i+1:]...)
+				h.Hosts = append(h.Hosts[:i], h.Hosts[i+1:]...)
 			}
 			return
 		}
@@ -189,22 +194,57 @@ func (h *Manager) patchHost(host *Host) {
 	//TODO
 }
 
-func (h *Manager) addHost(host *Host) {
-	clog := log.New()
-
+// createHostLogger creates a logger for a host that inherits from the base logger
+// while allowing host-specific overrides like log level
+func (h *Manager) createHostLogger(host *Host) *log.Entry {
+	// If the host specifies a custom log level, create a new logger instance
 	if host.LogLevel != nil {
-		clog.SetLevel(*host.LogLevel)
+		// Create a new logger with the host-specific level
+		// We need to create a new logger instance to avoid affecting the base logger
+		hostLogger := log.NewEntry(h.Logger.Logger)
+		hostLogger.Logger.SetLevel(*host.LogLevel)
+
+		// Copy the base logger's fields but exclude "component" since hosts should have their own context
+		for k, v := range h.Logger.Data {
+			if k != "component" {
+				hostLogger = hostLogger.WithField(k, v)
+			}
+		}
+
+		// Add the host field
+		return hostLogger.WithField("host", host.Host)
 	}
 
-	host.logger = clog.WithField("host", host.Host)
+	// For normal case, create a new logger entry without the "component" field
+	hostLogger := log.NewEntry(h.Logger.Logger)
 
-	if err := host.Captcha.Init(host.logger, h.ctx); err != nil {
+	// Copy the base logger's fields but exclude "component"
+	for k, v := range h.Logger.Data {
+		if k != "component" {
+			hostLogger = hostLogger.WithField(k, v)
+		}
+	}
+
+	return hostLogger.WithField("host", host.Host)
+}
+
+func (h *Manager) addHost(ctx context.Context, host *Host) {
+	// Create a logger for this host that inherits base logger values
+	host.logger = h.createHostLogger(host)
+
+	// Add additional useful fields for host context
+	host.logger = host.logger.WithFields(log.Fields{
+		"has_captcha": host.Captcha.Provider != "",
+		"has_ban":     true, // Ban is always available
+	})
+
+	if err := host.Captcha.Init(host.logger, ctx); err != nil {
 		host.logger.Error(err)
 	}
 	if err := host.Ban.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
-	if err := host.AppSec.Init(host.logger, h.ctx); err != nil {
+	if err := host.AppSec.Init(host.logger, ctx); err != nil {
 		host.logger.Error(err)
 	}
 	h.Hosts = append(h.Hosts, host)

@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -eu
+
+BOUNCER="crowdsec-haproxy-spoa-bouncer"
+
+systemctl stop "$BOUNCER" || echo "cannot stop service"
+systemctl disable "$BOUNCER" || echo "cannot disable service"
+
+cmp /etc/haproxy/crowdsec.cfg /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/crowdsec.cfg &&
+    rm -f /etc/haproxy/crowdsec.cfg || echo "not removing /etc/haproxy/crowdsec.cfg, it has been modified"

@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
+	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/api"
@@ -23,6 +24,7 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/spoa"
 	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
@@ -53,35 +55,36 @@ func HandleSignals(ctx context.Context) error {
 }
 
 func Execute() error {
-	// Parent flags
-	configPath := flag.String("c", "", "path to crowdsec-spoa-bouncer.yaml")
-	verbose := flag.Bool("v", false, "set verbose mode")
-	bouncerVersion := flag.Bool("V", false, "display version and exit (deprecated)")
-	flag.BoolVar(bouncerVersion, "version", *bouncerVersion, "display version and exit")
-	testConfig := flag.Bool("t", false, "test config and exit")
-	showConfig := flag.Bool("T", false, "show full config (.yaml + .yaml.local) and exit")
+	// Parent pflags
+	configPath := pflag.StringP("config", "c", "/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml", "path to crowdsec-spoa-bouncer.yaml")
+	verbose := pflag.BoolP("verbose", "v", false, "set verbose mode")
+	bouncerVersion := pflag.BoolP("V", "V", false, "display version and exit (deprecated)")
+	pflag.BoolVar(bouncerVersion, "version", *bouncerVersion, "display version and exit")
+	testConfig := pflag.BoolP("test", "t", false, "test config and exit")
+	showConfig := pflag.BoolP("show-config", "T", false, "show full config (.yaml + .yaml.local) and exit")
 
-	// Worker flags
-	tcpAddr := flag.String("tcp", "", "tcp listener address")
-	unixAddr := flag.String("unix", "", "unix listener address")
-	workerMode := flag.Bool("worker", false, "run as worker")
+	// Worker pflags
+	workerConfigJSON := pflag.String("worker-config", "", "worker configuration as JSON string")
 
-	flag.Parse()
+	pflag.Parse()
 
-	if !*workerMode && (*tcpAddr != "" || *unixAddr != "") {
-		return fmt.Errorf("parent process cannot have listener address")
-	}
-
-	if *workerMode {
-		if *tcpAddr == "" && *unixAddr == "" {
-			return fmt.Errorf("worker process must have one listener address")
-		}
-		return WorkerExecute(*tcpAddr, *unixAddr)
-	}
-
+	// Handle version flags
 	if *bouncerVersion {
-		fmt.Print(version.FullString())
+		fmt.Fprint(os.Stdout, version.FullString())
 		return nil
+	}
+
+	if *workerConfigJSON != "" {
+		var w *worker.Worker
+		if err := json.Unmarshal([]byte(*workerConfigJSON), &w); err != nil {
+			return fmt.Errorf("failed to parse worker config JSON: %w", err)
+		}
+
+		if w.TcpAddr == "" && w.UnixAddr == "" {
+			return fmt.Errorf("worker must have one listener address")
+		}
+		return WorkerExecute(w)
+
 	}
 
 	if configPath == nil || *configPath == "" {
@@ -141,14 +144,23 @@ func Execute() error {
 	})
 
 	g.Go(func() error {
-		bouncer.Run(ctx)
-		return errors.New("bouncer stream halted")
+		err := bouncer.Run(ctx)
+		return fmt.Errorf("bouncer run halted: %w", err)
 	})
 
+	metricsProvider, err := csbouncer.NewMetricsProvider(bouncer.APIClient, name, metricsUpdater, log.StandardLogger())
+
+	if err != nil {
+		return fmt.Errorf("failed to create metrics provider: %w", err)
+	}
+
+	g.Go(func() error {
+		return metricsProvider.Run(ctx)
+	})
+
+	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests, metrics.TotalWorkerAPIConnectionErrors, metrics.TotalWorkerAPIConnectionEvents)
+
 	if config.PrometheusConfig.Enabled {
-
-		prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError)
-
 		go func() {
 			http.Handle("/metrics", promhttp.Handler())
 
@@ -186,10 +198,12 @@ func Execute() error {
 		}
 	})
 
-	HostManager := host.NewManager(ctx)
+	// Create a base logger for the host manager
+	hostManagerLogger := log.WithField("component", "host_manager")
+	HostManager := host.NewManager(hostManagerLogger)
 
 	g.Go(func() error {
-		HostManager.Run()
+		HostManager.Run(ctx)
 		return nil
 	})
 
@@ -208,38 +222,60 @@ func Execute() error {
 
 	socketConnChan := make(chan server.SocketConn)
 
-	workerServer, err := server.NewWorkerSocket(socketConnChan, config.WorkerSocketDir)
+	workerServer, err := server.NewWorkerSocket(ctx, socketConnChan, config.WorkerSocketDir)
 
 	if err != nil {
 		return fmt.Errorf("failed to create worker server: %w", err)
 	}
 
+	var adminServer *server.Server
 	if config.AdminSocket != "" {
-		adminServer, err := server.NewAdminSocket(socketConnChan)
+		var err error
+		adminServer, err = server.NewAdminSocket(ctx, socketConnChan)
 
 		if err != nil {
 			return fmt.Errorf("failed to create admin server: %w", err)
 		}
 
-		adminServer.NewAdminListener(config.AdminSocket)
-		defer adminServer.Close()
+		err = adminServer.NewAdminListener(config.AdminSocket)
+		if err != nil {
+			return fmt.Errorf("failed to create admin listener: %w", err)
+		}
 	}
 
-	workerManager := worker.NewManager(ctx, workerServer, config.WorkerUid, config.WorkerGid)
+	workerManager := worker.NewManager(workerServer, config.WorkerUid, config.WorkerGid)
 
 	g.Go(func() error {
-		return workerManager.Run()
+		return workerManager.Run(ctx)
 	})
 
-	apiServer := api.NewApi(ctx, workerManager, HostManager, dataSet, &config.Geo, socketConnChan)
+	apiServer := api.NewAPI(api.APIConfig{
+		WorkerManager: workerManager,
+		HostManager:   HostManager,
+		Dataset:       dataSet,
+		GeoDatabase:   &config.Geo,
+		SocketChan:    socketConnChan,
+	})
 
 	for _, worker := range config.Workers {
 		workerManager.CreateChan <- worker
 	}
 
 	g.Go(func() error {
-		return apiServer.Run()
+		return apiServer.Run(ctx)
 	})
+
+	// Add worker server to errgroup
+	g.Go(func() error {
+		return workerServer.Wait()
+	})
+
+	// Add admin server to errgroup if configured
+	if adminServer != nil {
+		g.Go(func() error {
+			return adminServer.Wait()
+		})
+	}
 
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
 
@@ -254,12 +290,10 @@ func Execute() error {
 		}
 	}
 
-	workerServer.Close()
-
 	return nil
 }
 
-func WorkerExecute(tcpAddr, unixAddr string) error {
+func WorkerExecute(w *worker.Worker) error {
 
 	g, ctx := errgroup.WithContext(context.Background())
 
@@ -267,7 +301,7 @@ func WorkerExecute(tcpAddr, unixAddr string) error {
 		return HandleSignals(ctx)
 	})
 
-	spoad, err := spoa.New(tcpAddr, unixAddr)
+	spoad, err := spoa.New(w.TcpAddr, w.UnixAddr)
 
 	if err != nil {
 		return fmt.Errorf("failed to create SPOA: %w", err)
@@ -300,7 +334,7 @@ func WorkerExecute(tcpAddr, unixAddr string) error {
 	defer cancel()
 
 	if err := spoad.Shutdown(cancelCtx); err != nil {
-		return fmt.Errorf("failed to shutdown server: %s", err)
+		return fmt.Errorf("failed to shutdown server: %w", err)
 	}
 
 	return nil

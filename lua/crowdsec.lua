@@ -1,4 +1,16 @@
-package.path = package.path .. ";./?.lua"
+-- Dynamically set package.path based on the script location
+local function get_script_dir()
+    local info = debug.getinfo(1, "S") -- "S" = source
+    local source = info.source
+    if source:sub(1, 1) == "@" then
+        local path = source:sub(2) -- remove the "@"
+        return path:match("(.*/)")
+    end
+    return "./"
+end
+
+local script_dir = get_script_dir()
+package.path = package.path .. ";" .. script_dir .. "?.lua"
 
 local utils = require "utils"
 local template = require "template"
@@ -15,6 +27,8 @@ local function NewTemplate(path)
     return self
 end
 
+-- @param prefix the prefix to add to the log
+-- @return object with log, info, error, warning and debug functions
 local function NewLogger(prefix)
     local self = {}
     self.prefix = prefix
@@ -22,43 +36,52 @@ local function NewLogger(prefix)
         core.log(level, self.prefix .. message)
     end
     self.info = function(message)
-        self.log(core.info, "[INFO] " .. message)
+        core.Info("[INFO] " .. message)
     end
     self.error = function(message)
-        self.log(core.error, "[ERROR] " .. message)
+        core.log(core.err, "[ERROR] " .. message)
     end
     self.warning = function(message)
-        self.log(core.warning, "[WARN] " .. message)
+        core.Warning("[WARN] " .. message)
     end
     self.debug = function(message)
-        self.log(core.debug, "[DEBUG] " .. message)
+        core.Debug("[DEBUG] " .. message)
     end
     return self
 end
+
 
 local runtime = {}
 
 -- Loads the configuration
 local function init()
-    ban_template_path = os.getenv("CROWDSEC_BAN_TEMPLATE_PATH")
-    captcha_template_path = os.getenv("CROWDSEC_CAPTCHA_TEMPLATE_PATH")
-    crowdsec_log_level = os.getenv("CROWDSEC_LOG_LEVEL")
+    BAN_TEMPLATE_PATH = os.getenv("CROWDSEC_BAN_TEMPLATE_PATH")
+    CAPTCHA_TEMPLATE_PATH = os.getenv("CROWDSEC_CAPTCHA_TEMPLATE_PATH")
+    CROWDSEC_LOG_LEVEL = os.getenv("CROWDSEC_LOG_LEVEL")
     runtime.logger = NewLogger("[crowdsec] ")
     runtime.logger.info("initialising lua modules")
 
-    if ban_template_path == nil then
-        runtime.logger.error("CROWDSEC_BAN_TEMPLATE_PATH env is not set")
-        return
-    end
-    
-    runtime.ban = NewTemplate(ban_template_path)
-    
-    if captcha_template_path == nil then
-        runtime.logger.error("CROWDSEC_CAPTCHA_TEMPLATE_PATH env is not set")
-        return
+    if BAN_TEMPLATE_PATH == nil then
+        runtime.logger.warning("CROWDSEC_BAN_TEMPLATE_PATH env is not set trying default")
+        BAN_TEMPLATE_PATH =  "/var/lib/crowdsec-haproxy-spoa-bouncer/html/ban.html"
+        if not utils.file_exist(BAN_TEMPLATE_PATH) then
+            runtime.logger.error("Default ban template not found at " .. BAN_TEMPLATE_PATH)
+            return
+        end
     end
 
-    runtime.captcha = NewTemplate(captcha_template_path)
+    runtime.ban = NewTemplate(BAN_TEMPLATE_PATH)
+
+    if CAPTCHA_TEMPLATE_PATH == nil then
+        runtime.logger.warning("CROWDSEC_CAPTCHA_TEMPLATE_PATH env is not set using default")
+        CAPTCHA_TEMPLATE_PATH = "/var/lib/crowdsec-haproxy-spoa-bouncer/html/captcha.html"
+        if not utils.file_exist(CAPTCHA_TEMPLATE_PATH) then
+            runtime.logger.error("Default captcha template not found at " .. CAPTCHA_TEMPLATE_PATH)
+            return
+        end
+    end
+
+    runtime.captcha = NewTemplate(CAPTCHA_TEMPLATE_PATH)
     runtime.logger.info("lua modules initialised")
 end
 
@@ -85,19 +108,16 @@ function runtime.Handle(txn)
         runtime.logger.error("No remediation found")
         return
     end
-    
+
     -- Always disable cache
     reply:add_header("cache-control", "no-cache")
     reply:add_header("cache-control", "no-store")
-    
+
+    -- NOTE: "allow" remediation with redirects is now handled natively by HAProxy
+    -- This Lua handler is only called for "captcha" and "ban" remediations
     if remediation == "allow" then
-        local redirect_uri = get_txn_var(txn, "crowdsec.redirect")
-        if redirect_uri ~= "" then
-            reply:set_status(302)
-            reply:add_header("Location", redirect_uri)
-        else
-            return
-        end
+        runtime.logger.warning("Lua handler called for 'allow' remediation - this should not happen with native redirects")
+        return
     end
 
     if remediation == "captcha" then
@@ -107,10 +127,8 @@ function runtime.Handle(txn)
             ["captcha_frontend_key"]=get_txn_var(txn, "crowdsec.captcha_frontend_key"),
             ["captcha_frontend_js"]=get_txn_var(txn, "crowdsec.captcha_frontend_js"),
         }))
-        local cookie = get_txn_var(txn, "crowdsec.captcha_cookie")
-        if cookie ~= "" then
-            reply:add_header("Set-Cookie", cookie)
-        end
+        -- Note: Cookie management is now handled by HAProxy via http-after-response rules
+        -- using the captcha_status and captcha_cookie variables set by the SPOA bouncer
     end
 
     if remediation == "ban" then
@@ -119,7 +137,7 @@ function runtime.Handle(txn)
         }))
     end
 
-    
+
     local hdr = txn.http:req_get_headers()
     if hdr ~= nil and utils.accept_html(hdr) == false then
         reply:set_body("Forbidden")

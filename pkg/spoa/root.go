@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	message_names = []string{"crowdsec-http", "crowdsec-ip"}
+	messageNames = []string{"crowdsec-http", "crowdsec-ip"}
 )
 
 type Spoa struct {
@@ -31,7 +31,6 @@ type Spoa struct {
 	ListenSocket net.Listener
 	Server       *agent.Agent
 	HAWaitGroup  *sync.WaitGroup
-	ctx          context.Context
 	cancel       context.CancelFunc
 	logger       *log.Entry
 	workerClient *worker.WorkerClient
@@ -54,17 +53,13 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 
 	clog.SetLevel(logLevel)
 
-	client, err := worker.NewWorkerClient(socket)
+	client, err := worker.NewWorkerClient(socket, name)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create worker client: %v", err)
+		return nil, fmt.Errorf("failed to create worker client: %w", err)
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Spoa{
 		HAWaitGroup:  &sync.WaitGroup{},
-		ctx:          ctx,
-		cancel:       cancel,
 		logger:       clog.WithField("worker", name),
 		workerClient: client,
 	}
@@ -72,7 +67,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 	if tcpAddr != "" {
 		addr, err := net.Listen("tcp", tcpAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", tcpAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %w", tcpAddr, err)
 		}
 		s.ListenAddr = addr
 	}
@@ -86,7 +81,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		fileInfo, err := os.Stat(unixAddr)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to stat socket %s: %v", unixAddr, err)
+				return nil, fmt.Errorf("failed to stat socket %s: %w", unixAddr, err)
 			}
 		} else {
 			stat, ok := fileInfo.Sys().(*syscall.Stat_t)
@@ -100,7 +95,7 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		// Remove existing socket
 		if err := os.Remove(unixAddr); err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to remove socket %s: %v", unixAddr, err)
+				return nil, fmt.Errorf("failed to remove socket %s: %w", unixAddr, err)
 			}
 		}
 
@@ -110,15 +105,19 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 		// Create new socket
 		addr, err := net.Listen("unix", unixAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %v", unixAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %w", unixAddr, err)
 		}
 
 		// Reset umask
 		syscall.Umask(origUmask)
 
 		// Change socket owner and permissions
-		os.Chown(unixAddr, uid, gid)
-		os.Chmod(unixAddr, 0o660)
+		if err := os.Chown(unixAddr, uid, gid); err != nil {
+			return nil, fmt.Errorf("failed to change owner of socket %s: %w", unixAddr, err)
+		}
+		if err := os.Chmod(unixAddr, 0o660); err != nil {
+			return nil, fmt.Errorf("failed to change permissions of socket %s: %w", unixAddr, err)
+		}
 
 		s.ListenSocket = addr
 	}
@@ -184,7 +183,11 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 	if s.ListenAddr != nil {
 		s.ListenAddr.Close()
 	}
-	// We don't close the unix socket as we want to persist permissions
+
+	// Initially  we didn't close the unix socket as we wanted to persist permissions
+	if s.ListenSocket != nil {
+		s.ListenSocket.Close()
+	}
 
 	go func() {
 		s.cancel()
@@ -247,7 +250,31 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	switch r {
 	case remediation.Allow:
-		// !TODO Check if cookie is sent and session is valid if not valid then issue an unset cookie
+		// If user has a captcha cookie but decision is Allow, generate unset cookie
+		// We don't set captcha_status, so HAProxy knows to clear the cookie
+		cookieB64, _ := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
+		if cookieB64 != nil {
+			ssl, err := readKeyFromMessage[bool](mes, "ssl")
+			if err != nil {
+				log.Error(err)
+			}
+
+			unsetCookie, err := s.workerClient.GetHostUnsetCookie(*hoststring, fmt.Sprint(*ssl))
+			if err != nil {
+				log.WithFields(log.Fields{
+					"host":  *hoststring,
+					"ssl":   ssl,
+					"error": err,
+				}).Error("Failed to generate unset cookie")
+				return // Cannot proceed without unset cookie
+			}
+
+			log.WithFields(log.Fields{
+				"host": *hoststring,
+			}).Debug("Allow decision but captcha cookie present, will clear cookie")
+			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", unsetCookie.String())
+			// Note: We deliberately don't set captcha_status here
+		}
 	case remediation.Ban:
 		//Handle ban
 		host.Ban.InjectKeyValues(&req.Actions)
@@ -261,7 +288,14 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		uuid := ""
 
 		if cookieB64 != nil {
-			uuid, _ = s.workerClient.ValHostCookie(*hoststring, *cookieB64)
+			uuid, err = s.workerClient.ValHostCookie(*hoststring, *cookieB64)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"host":  *hoststring,
+					"error": err,
+				}).Warn("Failed to validate existing cookie")
+				uuid = "" // Reset to generate new cookie
+			}
 		}
 
 		if uuid == "" {
@@ -271,10 +305,27 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				log.Error(err)
 			}
 
-			cookie, _ := s.workerClient.GetHostCookie(*hoststring, fmt.Sprint(*ssl))
+			cookie, err := s.workerClient.GetHostCookie(*hoststring, fmt.Sprint(*ssl))
+			if err != nil {
+				log.WithFields(log.Fields{
+					"host":  *hoststring,
+					"ssl":   ssl,
+					"error": err,
+				}).Error("Failed to generate host cookie")
+				return // Cannot proceed without cookie
+			}
 
-			uuid, _ = s.workerClient.ValHostCookie(*hoststring, cookie.Value)
+			uuid, err = s.workerClient.ValHostCookie(*hoststring, cookie.Value)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"host":   *hoststring,
+					"cookie": cookie.Value,
+					"error":  err,
+				}).Error("Failed to validate new cookie")
+				return // Cannot proceed without valid cookie
+			}
 
+			// Set the captcha cookie - status will be set later based on session state
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
 		}
 
@@ -293,17 +344,42 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			return
 		}
 
-		// if captcha is not valid then update the url in the session
-		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val != captcha.Valid {
+		// Get the current captcha status from the session
+		val, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"host":    *hoststring,
+				"session": uuid,
+				"error":   err,
+			}).Warn("Failed to get captcha status, assuming pending")
+			val = captcha.Pending // Assume pending if we can't get status
+		}
+
+		// Set the captcha status in the transaction for HAProxy
+		req.Actions.SetVar(action.ScopeTransaction, "captcha_status", val)
+		if val != captcha.Valid {
 			// Update the incoming url if it is different from the stored url for the session ignore favicon requests
-			storedUrl, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
+			storedURL, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
 			if err != nil {
-				log.Error(err)
+				log.WithFields(log.Fields{
+					"host":    *hoststring,
+					"session": uuid,
+					"error":   err,
+				}).Warn("Failed to get stored URL, assuming empty")
+				storedURL = "" // Assume empty if we can't get it
 			}
 
-			if err == nil && (storedUrl == "" || url != nil && *url != storedUrl) && !strings.HasSuffix(*url, ".ico") {
+			if (storedURL == "" || url != nil && *url != storedURL) && !strings.HasSuffix(*url, ".ico") {
 				log.WithField("session", uuid).Debugf("updating stored url %s", *url)
-				s.workerClient.SetHostSessionKey(*hoststring, uuid, session.URI, *url)
+				_, err2 := s.workerClient.SetHostSessionKey(*hoststring, uuid, session.URI, *url)
+				if err2 != nil {
+					log.WithFields(log.Fields{
+						"host":    *hoststring,
+						"session": uuid,
+						"url":     *url,
+						"error":   err2,
+					}).Error("Failed to set host session URI")
+				}
 			}
 		}
 
@@ -327,28 +403,73 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 
 		// Check if the request is a captcha validation request
-		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
+		captchaStatus, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"host":    *hoststring,
+				"session": uuid,
+				"error":   err,
+			}).Warn("Failed to get captcha status for validation check")
+			captchaStatus = "" // Assume not pending if we can't get status
+		}
+
+		if captchaStatus == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
 			body, err = readKeyFromMessage[[]byte](mes, "body")
 
 			if err != nil {
 				log.Printf("failed to read body: %v", err)
 				return
 			}
-			if val, _ := s.workerClient.ValHostCaptcha(*hoststring, uuid, string(*body)); val {
-				s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS, captcha.Valid)
+
+			isValid, err := s.workerClient.ValHostCaptcha(*hoststring, uuid, string(*body))
+			if err != nil {
+				log.WithFields(log.Fields{
+					"host":    *hoststring,
+					"session": uuid,
+					"error":   err,
+				}).Error("Failed to validate captcha")
+			} else if isValid {
+				_, err := s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CaptchaStatus, captcha.Valid)
+				if err != nil {
+					log.WithFields(log.Fields{
+						"host":    *hoststring,
+						"session": uuid,
+						"error":   err,
+					}).Error("Failed to set captcha status to valid")
+				}
 			}
 		}
 
 		// if the session has a valid captcha status we allow the request
-		if val, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CAPTCHA_STATUS); val == captcha.Valid {
+		finalStatus, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"host":    *hoststring,
+				"session": uuid,
+				"error":   err,
+			}).Warn("Failed to get final captcha status")
+		} else if finalStatus == captcha.Valid {
 			r = remediation.Allow
-			storedUrl, _ := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
-			// On first valid captcha we redirect to the stored url
-			if storedUrl != "" {
-				log.Debug("redirecting to: ", storedUrl)
-				req.Actions.SetVar(action.ScopeTransaction, "redirect", storedUrl)
+			// The captcha_status was already set above with the actual session status
+			storedURL, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"host":    *hoststring,
+					"session": uuid,
+					"error":   err,
+				}).Warn("Failed to get stored URL for redirect")
+			} else if storedURL != "" {
+				log.Debug("redirecting to: ", storedURL)
+				req.Actions.SetVar(action.ScopeTransaction, "redirect", storedURL)
 				// Delete the URI from the session so we dont redirect loop
-				s.workerClient.DeleteHostSessionKey(*hoststring, uuid, session.URI)
+				_, err := s.workerClient.DeleteHostSessionKey(*hoststring, uuid, session.URI)
+				if err != nil {
+					log.WithFields(log.Fields{
+						"host":    *hoststring,
+						"session": uuid,
+						"error":   err,
+					}).Warn("Failed to delete stored URL after redirect")
+				}
 			}
 		}
 	}
@@ -374,6 +495,8 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 // Handles checking the IP address against the dataset
 func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
+	var r remediation.Remediation
+
 	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
 
 	if err != nil {
@@ -381,15 +504,35 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 		return
 	}
 
-	r := remediation.Allow
 	ipStr := ipType.String()
 
-	r, _ = s.workerClient.GetIP(ipStr)
+	r, err = s.workerClient.GetIP(ipStr)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"ip":    ipStr,
+			"error": err,
+		}).Error("Failed to get IP remediation")
+		r = remediation.Allow // Safe default
+	}
 
 	if r < remediation.Unknown {
-		iso, _ := s.workerClient.GetGeoIso(ipStr)
-		if iso != "" {
-			r, _ = s.workerClient.GetCN(iso)
+		iso, err := s.workerClient.GetGeoIso(ipStr)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"ip":    ipStr,
+				"error": err,
+			}).Warn("Failed to get geo ISO, skipping country check")
+		} else if iso != "" {
+			cnR, err := s.workerClient.GetCN(iso, ipStr)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"ip":           ipStr,
+					"country_code": iso,
+					"error":        err,
+				}).Warn("Failed to get country remediation")
+			} else {
+				r = cnR
+			}
 			req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
 		}
 	}
@@ -402,12 +545,7 @@ func handlerWrapper(s *Spoa) func(req *request.Request) {
 		s.HAWaitGroup.Add(1)
 		defer s.HAWaitGroup.Done()
 
-		if s.ctx.Err() != nil {
-			log.Warn("context is done, skipping request")
-			return
-		}
-
-		for _, messageName := range message_names {
+		for _, messageName := range messageNames {
 			mes, err := req.Messages.GetByName(messageName)
 			if err != nil {
 				continue

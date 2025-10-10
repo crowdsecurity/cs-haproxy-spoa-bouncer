@@ -14,7 +14,7 @@ import (
 	"github.com/crowdsecurity/go-cs-lib/ptr"
 )
 
-var DEFAULT_LOG_FILE = ""
+var DefaultLogFile = ""
 
 type LoggingConfig struct {
 	LogLevel     *log.Level `yaml:"log_level"`
@@ -92,7 +92,7 @@ func (c *LoggingConfig) ConfigureLogger(clog *log.Logger) error {
 
 	log.SetFormatter(&log.TextFormatter{TimestampFormat: time.RFC3339, FullTimestamp: true})
 
-	logger, err := c.LoggerForFile(DEFAULT_LOG_FILE)
+	logger, err := c.LoggerForFile(DefaultLogFile)
 	if err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func (c *LoggingConfig) ConfigureLogger(clog *log.Logger) error {
 
 func (c *LoggingConfig) Setup(fileName string) error {
 	// Not great but we need to set the default log file for the logger
-	DEFAULT_LOG_FILE = fileName
+	DefaultLogFile = fileName
 
 	c.setDefaults()
 
@@ -122,7 +122,7 @@ func (c *LoggingConfig) Setup(fileName string) error {
 		return err
 	}
 
-	if err := c.ConfigureLogger(log.New()); err != nil {
+	if err := c.ConfigureLogger(log.StandardLogger()); err != nil {
 		return err
 	}
 
