@@ -3,15 +3,15 @@ Description=CrowdSec SPOA Bouncer Admin Socket (Optional)
 Documentation=https://docs.crowdsec.net/u/bouncers/haproxy_spoa/
 # This socket is OPTIONAL and disabled by default
 # Enable it to allow root-only management access to the bouncer
+PartOf=crowdsec-spoa-bouncer.service
+Before=crowdsec-spoa-bouncer.service
 
 [Socket]
 ListenStream=/run/crowdsec-spoa/admin.sock
 SocketMode=0600
 SocketUser=root
 SocketGroup=root
-# Activate the main bouncer service when connection arrives
-Service=crowdsec-spoa-bouncer.service
-# Accept connections before service starts
+# FileDescriptorName=admin (optional, for identification)
 Accept=no
 
 [Install]

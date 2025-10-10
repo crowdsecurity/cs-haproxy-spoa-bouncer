@@ -3,6 +3,7 @@ Description=The haproxy spoa bouncer for CrowdSec
 Documentation=https://docs.crowdsec.net/u/bouncers/haproxy_spoa/
 After=syslog.target network.target remote-fs.target nss-lookup.target crowdsec.service
 # Optional: Enable admin socket for root-only management access
+# Wants=crowdsec-spoa-bouncer-admin.socket
 # After=crowdsec-spoa-bouncer-admin.socket
 
 [Service]
