@@ -99,17 +99,17 @@ func (m *Manager) Stop() error {
 	// Context cancellation will stop all workers
 	// Individual workers handle graceful shutdown via their Shutdown methods
 	log.Info("Stopping all SPOA workers")
-	
+
 	for _, worker := range m.workers {
 		func() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			
+
 			if err := worker.Shutdown(shutdownCtx); err != nil {
 				log.Errorf("Failed to shutdown worker: %v", err)
 			}
 		}()
 	}
-	
+
 	return nil
 }

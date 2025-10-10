@@ -1,6 +1,6 @@
 ## Log configuration
 log_mode: file
-log_dir: /var/log/
+log_dir: /var/log/crowdsec-spoa/
 log_level: info
 log_compression: true
 log_max_size: 100
