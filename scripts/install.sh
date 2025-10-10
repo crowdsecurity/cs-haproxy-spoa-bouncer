@@ -27,7 +27,7 @@ gen_apikey() {
 gen_config_file() {
     # shellcheck disable=SC2016
     API_KEY=${API_KEY} envsubst '$API_KEY' <"./config/$CONFIG_FILE" | \
-        install -D -m 0600 /dev/stdin "$CONFIG"
+        install -D -m 0640 -g crowdsec-spoa /dev/stdin "$CONFIG"
 }
 
 install_bouncer() {
@@ -39,9 +39,23 @@ install_bouncer() {
         msg err "$BIN_PATH_INSTALLED is already installed. Exiting"
         exit 1
     fi
+    
+    # Ensure crowdsec-spoa group exists
+    if ! getent group crowdsec-spoa >/dev/null 2>&1; then
+        msg info "Creating crowdsec-spoa group"
+        groupadd --system crowdsec-spoa || addgroup --system crowdsec-spoa
+    fi
+    
+    # Ensure crowdsec-spoa user exists
+    if ! getent passwd crowdsec-spoa >/dev/null 2>&1; then
+        msg info "Creating crowdsec-spoa user"
+        useradd --system --no-create-home --shell /sbin/nologin -g crowdsec-spoa crowdsec-spoa 2>/dev/null || \
+            adduser --system --no-create-home --shell /sbin/nologin --ingroup crowdsec-spoa crowdsec-spoa
+    fi
+    
     msg info "Installing $BOUNCER"
     install -v -m 0755 -D "$BIN_PATH" "$BIN_PATH_INSTALLED"
-    install -D -m 0600 "./config/$CONFIG_FILE" "$CONFIG"
+    install -D -m 0640 -g crowdsec-spoa "./config/$CONFIG_FILE" "$CONFIG"
     # shellcheck disable=SC2016
     CFG=${CONFIG_DIR} BIN=${BIN_PATH_INSTALLED} envsubst '$CFG $BIN' <"./config/$SERVICE" >"$SYSTEMD_PATH_FILE"
     # Install optional admin socket unit (disabled by default)

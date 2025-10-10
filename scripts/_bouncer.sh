@@ -128,7 +128,7 @@ set_config_var_value() {
     before=$(cat "$CONFIG")
     echo "$before" |
         env "$varname=$value" envsubst "\$$varname" |
-        install -m 0600 /dev/stdin "$CONFIG"
+        install -m 0640 -g crowdsec-spoa /dev/stdin "$CONFIG"
 }
 
 set_api_key() {
