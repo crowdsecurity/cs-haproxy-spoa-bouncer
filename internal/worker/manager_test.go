@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"testing"
 	"time"
 
@@ -12,6 +14,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// getFreePort returns a free TCP port for testing
+func getFreePort(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	addr := listener.Addr().(*net.TCPAddr)
+	return fmt.Sprintf("127.0.0.1:%d", addr.Port)
+}
 
 func TestNewManager(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -47,7 +59,7 @@ func TestAddWorker(t *testing.T) {
 	// Create a worker config with TCP listener
 	config := WorkerConfig{
 		Name:     "test-worker-1",
-		TcpAddr:  "127.0.0.1:19001",
+		TcpAddr:  getFreePort(t),
 		UnixAddr: "",
 	}
 
@@ -82,12 +94,12 @@ func TestAddMultipleWorkers(t *testing.T) {
 	configs := []WorkerConfig{
 		{
 			Name:     "worker-1",
-			TcpAddr:  "127.0.0.1:19002",
+			TcpAddr:  getFreePort(t),
 			UnixAddr: "",
 		},
 		{
 			Name:     "worker-2",
-			TcpAddr:  "127.0.0.1:19003",
+			TcpAddr:  getFreePort(t),
 			UnixAddr: "",
 		},
 	}
@@ -156,7 +168,7 @@ func TestManagerStop(t *testing.T) {
 
 	config := WorkerConfig{
 		Name:     "stoppable-worker",
-		TcpAddr:  "127.0.0.1:19004",
+		TcpAddr:  getFreePort(t),
 		UnixAddr: "",
 	}
 
@@ -191,7 +203,7 @@ func TestWorkerWithLogLevel(t *testing.T) {
 	debugLevel := log.DebugLevel
 	config := WorkerConfig{
 		Name:     "debug-worker",
-		TcpAddr:  "127.0.0.1:19005",
+		TcpAddr:  getFreePort(t),
 		UnixAddr: "",
 		LogLevel: &debugLevel,
 	}
