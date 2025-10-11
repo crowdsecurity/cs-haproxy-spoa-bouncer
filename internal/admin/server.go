@@ -41,11 +41,14 @@ type Config struct {
 func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	g, ctx := errgroup.WithContext(ctx)
 
+	// Create admin logger (inherits from standard logger)
+	adminLogger := log.WithField("server", "admin")
+
 	s := &Server{
 		hostManager: cfg.HostManager,
 		dataset:     cfg.Dataset,
 		geoDatabase: cfg.GeoDatabase,
-		logger:      log.New().WithField("server", "admin"),
+		logger:      adminLogger,
 		ctx:         ctx,
 		g:           g,
 	}

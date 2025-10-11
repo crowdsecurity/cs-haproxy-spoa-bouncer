@@ -222,6 +222,8 @@ func Execute() error {
 		return workerManager.Wait()
 	})
 
+	// Admin server will inherit root logger and log level via its fallback
+
 	// Setup admin socket (systemd activation or config-based)
 	adminServer, err := admin.NewServer(ctx, admin.Config{
 		SocketPath:  config.AdminSocket,
