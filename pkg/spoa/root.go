@@ -110,57 +110,43 @@ func New(config *SpoaConfig) (*Spoa, error) {
 	return s, nil
 }
 
-func (s *Spoa) ServeTCP(ctx context.Context) error {
-	if s.ListenAddr == nil {
-		return nil
-	}
-	s.logger.Infof("Serving TCP server on %s", s.ListenAddr.Addr().String())
+func (s *Spoa) Serve(ctx context.Context) error {
+	serverError := make(chan error, 2)
 
-	errorChan := make(chan error, 1)
-
-	go func() {
-		defer close(errorChan)
-		err := s.Server.Serve(s.ListenAddr)
+	startServer := func(listener net.Listener) {
+		err := s.Server.Serve(listener)
 		switch {
 		case errors.Is(err, net.ErrClosed):
 			// Server closed normally during shutdown
 			break
 		case err != nil:
-			errorChan <- err
+			serverError <- err
 		}
-	}()
-
-	select {
-	case err := <-errorChan:
-		return err
-	case <-ctx.Done():
-		return nil
-	}
-}
-
-func (s *Spoa) ServeUnix(ctx context.Context) error {
-	if s.ListenSocket == nil {
-		return nil
 	}
 
-	s.logger.Infof("Serving Unix server on %s", s.ListenSocket.Addr().String())
+	// Launch TCP server if configured
+	if s.ListenAddr != nil {
+		s.logger.Infof("Serving TCP server on %s", s.ListenAddr.Addr().String())
+		go func() {
+			startServer(s.ListenAddr)
+		}()
+	}
 
-	errorChan := make(chan error, 1)
+	// Launch Unix server if configured
+	if s.ListenSocket != nil {
+		s.logger.Infof("Serving Unix server on %s", s.ListenSocket.Addr().String())
+		go func() {
+			startServer(s.ListenSocket)
+		}()
+	}
 
-	go func() {
-		defer close(errorChan)
-		err := s.Server.Serve(s.ListenSocket)
-		switch {
-		case errors.Is(err, net.ErrClosed):
-			// Server closed normally during shutdown
-			break
-		case err != nil:
-			errorChan <- err
-		}
-	}()
+	// If no listeners are configured, return immediately
+	if s.ListenAddr == nil && s.ListenSocket == nil {
+		return nil
+	}
 
 	select {
-	case err := <-errorChan:
+	case err := <-serverError:
 		return err
 	case <-ctx.Done():
 		return nil

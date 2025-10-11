@@ -67,27 +67,13 @@ func (m *Manager) AddWorker(config WorkerConfig) error {
 
 	m.workers = append(m.workers, worker)
 
-	// Launch TCP server in goroutine
-	if config.TcpAddr != "" {
-		m.g.Go(func() error {
-			log.Infof("Starting SPOA worker %s on TCP %s", config.Name, config.TcpAddr)
-			if err := worker.ServeTCP(m.gCtx); err != nil {
-				return fmt.Errorf("worker %s TCP server failed: %w", config.Name, err)
-			}
-			return nil
-		})
-	}
-
-	// Launch Unix server in goroutine
-	if config.UnixAddr != "" {
-		m.g.Go(func() error {
-			log.Infof("Starting SPOA worker %s on Unix socket %s", config.Name, config.UnixAddr)
-			if err := worker.ServeUnix(m.gCtx); err != nil {
-				return fmt.Errorf("worker %s Unix server failed: %w", config.Name, err)
-			}
-			return nil
-		})
-	}
+	// Launch unified server in goroutine (handles both TCP and Unix if configured)
+	m.g.Go(func() error {
+		if err := worker.Serve(m.gCtx); err != nil {
+			return fmt.Errorf("worker %s server failed: %w", config.Name, err)
+		}
+		return nil
+	})
 
 	return nil
 }
