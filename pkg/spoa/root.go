@@ -196,11 +196,11 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	rstring, err := readKeyFromMessage[string](mes, "remediation")
 
 	if err == nil {
-		log.Debug("remediation: ", *rstring)
+		s.logger.Debug("remediation: ", *rstring)
 		r = remediation.FromString(*rstring)
 		// Remediation came from IP check, already counted
 	} else {
-		log.Info("ip remediation was not found in message, defaulting to allow")
+		s.logger.Info("ip remediation was not found in message, defaulting to allow")
 		// No IP check happened (e.g., upstream proxy mode), we need to count metrics
 		shouldCountMetrics = true
 	}
@@ -212,7 +212,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	// defer a function that always add the remediation to the request at end of processing
 	defer func() {
 		if matchedHost == nil && r == remediation.Captcha {
-			log.Warn("remediation is captcha, no matching host was found cannot issue captcha remediation reverting to ban")
+			s.logger.Warn("remediation is captcha, no matching host was found cannot issue captcha remediation reverting to ban")
 			r = remediation.Ban
 		}
 		rString := r.String()
@@ -269,12 +269,12 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		if cookieB64 != nil {
 			ssl, err := readKeyFromMessage[bool](mes, "ssl")
 			if err != nil {
-				log.Error(err)
+				s.logger.Error(err)
 			}
 
 			unsetCookie, err := matchedHost.Captcha.CookieGenerator.GenerateUnsetCookie(ptr.Of(*ssl))
 			if err != nil {
-				log.WithFields(log.Fields{
+				s.logger.WithFields(log.Fields{
 					"host":  *hoststring,
 					"ssl":   ssl,
 					"error": err,
@@ -282,7 +282,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				return // Cannot proceed without unset cookie
 			}
 
-			log.WithFields(log.Fields{
+			s.logger.WithFields(log.Fields{
 				"host": *hoststring,
 			}).Debug("Allow decision but captcha cookie present, will clear cookie")
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", unsetCookie.String())
@@ -303,7 +303,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		if cookieB64 != nil {
 			uuid, err = matchedHost.Captcha.CookieGenerator.ValidateCookie(*cookieB64)
 			if err != nil {
-				log.WithFields(log.Fields{
+				s.logger.WithFields(log.Fields{
 					"host":  *hoststring,
 					"error": err,
 				}).Warn("Failed to validate existing cookie")
@@ -315,13 +315,13 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			ssl, err := readKeyFromMessage[bool](mes, "ssl")
 
 			if err != nil {
-				log.Error(err)
+				s.logger.Error(err)
 			}
 
 			// Create a new session
 			ses, err := matchedHost.Captcha.Sessions.NewRandomSession()
 			if err != nil {
-				log.WithFields(log.Fields{
+				s.logger.WithFields(log.Fields{
 					"host":  *hoststring,
 					"error": err,
 				}).Error("Failed to create new session")
@@ -330,7 +330,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 			cookie, err := matchedHost.Captcha.CookieGenerator.GenerateCookie(ses, ssl)
 			if err != nil {
-				log.WithFields(log.Fields{
+				s.logger.WithFields(log.Fields{
 					"host":  *hoststring,
 					"ssl":   ssl,
 					"error": err,
@@ -349,7 +349,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		if uuid == "" {
 			// We should never hit this but safety net
 			// As a fallback we set the remediation to the fallback remediation
-			log.Error("failed to get uuid from cookie")
+			s.logger.Error("failed to get uuid from cookie")
 			r = remediation.FromString(matchedHost.Captcha.FallbackRemediation)
 			return
 		}
@@ -357,14 +357,14 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		url, err = readKeyFromMessage[string](mes, "url")
 
 		if err != nil {
-			log.Printf("failed to read url: %v", err)
+			s.logger.Errorf("failed to read url: %v", err)
 			return
 		}
 
 		// Get the session
 		ses := matchedHost.Captcha.Sessions.GetSession(uuid)
 		if ses == nil {
-			log.WithFields(log.Fields{
+			s.logger.WithFields(log.Fields{
 				"host":    *hoststring,
 				"session": uuid,
 			}).Warn("Session not found, cannot proceed with captcha")
@@ -388,28 +388,28 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			}
 
 			if (storedURL == "" || url != nil && *url != storedURL) && !strings.HasSuffix(*url, ".ico") {
-				log.WithField("session", uuid).Debugf("updating stored url %s", *url)
+				s.logger.WithField("session", uuid).Debugf("updating stored url %s", *url)
 				ses.Set(session.URI, *url)
 			}
 		}
 
 		method, err = readKeyFromMessage[string](mes, "method")
 		if err != nil {
-			log.Printf("failed to read method: %v", err)
+			s.logger.Errorf("failed to read method: %v", err)
 			return
 		}
 
 		headersType, err := readKeyFromMessage[string](mes, "headers")
 
 		if err != nil {
-			log.Printf("failed to read headers: %v", err)
+			s.logger.Errorf("failed to read headers: %v", err)
 			return
 		}
 
 		headers, err = readHeaders(*headersType)
 
 		if err != nil {
-			log.Printf("failed to parse headers: %v", err)
+			s.logger.Errorf("failed to parse headers: %v", err)
 		}
 
 		// Check if the request is a captcha validation request
@@ -422,14 +422,14 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			body, err = readKeyFromMessage[[]byte](mes, "body")
 
 			if err != nil {
-				log.Printf("failed to read body: %v", err)
+				s.logger.Errorf("failed to read body: %v", err)
 				return
 			}
 
 			// Validate captcha
 			isValid, err := matchedHost.Captcha.Validate(context.Background(), uuid, string(*body))
 			if err != nil {
-				log.WithFields(log.Fields{
+				s.logger.WithFields(log.Fields{
 					"host":    *hoststring,
 					"session": uuid,
 					"error":   err,
@@ -446,7 +446,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			// The captcha_status was already set above with the actual session status
 			storedURL := ses.Get(session.URI)
 			if storedURL != nil && storedURL != "" {
-				log.Debug("redirecting to: ", storedURL)
+				s.logger.Debug("redirecting to: ", storedURL)
 				req.Actions.SetVar(action.ScopeTransaction, "redirect", storedURL)
 				// Delete the URI from the session so we dont redirect loop
 				ses.Delete(session.URI)
@@ -480,7 +480,7 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
 
 	if err != nil {
-		log.Error(err)
+		s.logger.Error(err)
 		return
 	}
 
@@ -498,7 +498,7 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	// Check IP directly against dataset
 	r, origin, err := s.dataset.CheckIP(ipStr)
 	if err != nil {
-		log.WithFields(log.Fields{
+		s.logger.WithFields(log.Fields{
 			"ip":    ipStr,
 			"error": err,
 		}).Error("Failed to get IP remediation")
@@ -511,7 +511,7 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 		if ipAddr != nil {
 			record, err := s.geoDatabase.GetCity(&ipAddr)
 			if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
-				log.WithFields(log.Fields{
+				s.logger.WithFields(log.Fields{
 					"ip":    ipStr,
 					"error": err,
 				}).Warn("Failed to get geo location")
