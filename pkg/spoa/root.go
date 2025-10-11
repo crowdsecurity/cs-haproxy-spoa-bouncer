@@ -120,7 +120,12 @@ func (s *Spoa) ServeTCP(ctx context.Context) error {
 
 	go func() {
 		defer close(errorChan)
-		if err := s.Server.Serve(s.ListenAddr); err != nil {
+		err := s.Server.Serve(s.ListenAddr)
+		switch {
+		case errors.Is(err, net.ErrClosed):
+			// Server closed normally during shutdown
+			break
+		case err != nil:
 			errorChan <- err
 		}
 	}()
@@ -144,7 +149,12 @@ func (s *Spoa) ServeUnix(ctx context.Context) error {
 
 	go func() {
 		defer close(errorChan)
-		if err := s.Server.Serve(s.ListenSocket); err != nil {
+		err := s.Server.Serve(s.ListenSocket)
+		switch {
+		case errors.Is(err, net.ErrClosed):
+			// Server closed normally during shutdown
+			break
+		case err != nil:
 			errorChan <- err
 		}
 	}()
