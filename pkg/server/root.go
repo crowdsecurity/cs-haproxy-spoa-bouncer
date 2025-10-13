@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/gob"
 	"fmt"
 	"net"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/api/messages"
 	apipermission "github.com/crowdsecurity/crowdsec-spoa/internal/api/perms"
@@ -32,12 +35,18 @@ const (
 	AdminSocketPrefix  = "crowdsec-spoa-admin-"
 )
 
+// Server manages unix socket listeners and their lifecycle
+// It contains a context for proper lifecycle management tied to errgroup
+//
+//nolint:containedctx // Server owns its lifecycle and manages listener goroutines via errgroup
 type Server struct {
-	listeners       []*net.Listener             // Listener
+	listeners       []net.Listener              // Listener
 	permission      apipermission.APIPermission // Worker or Admin
 	logger          *log.Entry                  // Logger
 	connChan        chan SocketConn             // Channel to send new connections
 	workerSocketDir string                      // Directory for worker sockets
+	ctx             context.Context             // Context for lifecycle management
+	g               *errgroup.Group             // Error group for listener goroutines
 }
 
 type SocketConn struct {
@@ -48,34 +57,42 @@ type SocketConn struct {
 	WorkerName string                      // Worker name (only set for worker connections)
 }
 
-func NewAdminSocket(connChan chan SocketConn) (*Server, error) {
+func NewAdminSocket(ctx context.Context, connChan chan SocketConn) (*Server, error) {
+	g, ctx := errgroup.WithContext(ctx)
+
 	as := &Server{
 		permission: apipermission.AdminPermission,
 		logger:     log.New().WithField("server", "admin"),
 		connChan:   connChan,
+		ctx:        ctx,
+		g:          g,
 	}
 
 	return as, nil
 }
 
-func NewWorkerSocket(connChan chan SocketConn, dir string) (*Server, error) {
+func NewWorkerSocket(ctx context.Context, connChan chan SocketConn, dir string) (*Server, error) {
+	g, ctx := errgroup.WithContext(ctx)
+
 	ws := &Server{
 		permission:      apipermission.WorkerPermission,
 		logger:          log.New().WithField("server", "worker"),
 		connChan:        connChan,
 		workerSocketDir: dir,
+		ctx:             ctx,
+		g:               g,
 	}
 
 	return ws, nil
 }
 
 // extractWorkerNameFromListener extracts worker name from the listener's address
-func (s *Server) extractWorkerNameFromListener(l *net.Listener) string {
+func (s *Server) extractWorkerNameFromListener(l net.Listener) string {
 	if s.permission != apipermission.WorkerPermission {
 		return ""
 	}
 
-	addr := (*l).Addr()
+	addr := l.Addr()
 	if addr == nil {
 		return ""
 	}
@@ -102,16 +119,26 @@ func (s *Server) extractWorkerNameFromListener(l *net.Listener) string {
 	return ""
 }
 
-func (s *Server) Run(l *net.Listener) error {
+func (s *Server) Run(l net.Listener) error {
 	// Register gob types before creating encoder
 	registerServerGobTypes()
 
 	// Extract worker name for worker connections
 	workerName := s.extractWorkerNameFromListener(l)
 
+	// Close listener when context is canceled
+	go func() {
+		<-s.ctx.Done()
+		l.Close()
+	}()
+
 	for {
-		conn, err := (*l).Accept()
+		conn, err := l.Accept()
 		if err != nil {
+			// Check if error is due to context cancellation
+			if s.ctx.Err() != nil {
+				return s.ctx.Err()
+			}
 			return err
 		}
 
@@ -136,10 +163,12 @@ func (s *Server) NewAdminListener(path string) error {
 		return err
 	}
 
-	s.listeners = append(s.listeners, &l)
+	s.listeners = append(s.listeners, l)
 
-	//TODO: improve the error handling here
-	go s.Run(&l) //nolint
+	// Launch listener in errgroup
+	s.g.Go(func() error {
+		return s.Run(l)
+	})
 
 	return nil
 }
@@ -157,15 +186,25 @@ func (s *Server) NewWorkerListener(name string, gid int) (string, error) {
 		return "", err
 	}
 
-	s.listeners = append(s.listeners, &l)
+	s.listeners = append(s.listeners, l)
 
-	//TODO: improve the error handling here
-	go s.Run(&l) //nolint
+	// Launch listener in errgroup
+	s.g.Go(func() error {
+		return s.Run(l)
+	})
 
 	return socketString, nil
 }
 
 func newUnixSocket(path string) (net.Listener, error) {
+	// Remove stale socket file if it exists
+	// This handles cases where the server crashed and left the socket file behind
+	if _, err := os.Stat(path); err == nil {
+		if err := os.Remove(path); err != nil {
+			return nil, fmt.Errorf("failed to remove stale socket file %s: %w", path, err)
+		}
+	}
+
 	l, err := net.Listen("unix", path)
 	if err != nil {
 		return nil, err
@@ -192,11 +231,8 @@ func configAdminSocket(path string) error {
 	return nil
 }
 
-func (s *Server) Close() error {
-	for _, l := range s.listeners {
-		if err := (*l).Close(); err != nil {
-			return err
-		}
-	}
-	return nil
+// Wait waits for all listener goroutines to finish
+// When the context is canceled, all listeners will be closed and this will return
+func (s *Server) Wait() error {
+	return s.g.Wait()
 }

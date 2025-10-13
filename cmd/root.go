@@ -56,9 +56,9 @@ func HandleSignals(ctx context.Context) error {
 
 func Execute() error {
 	// Parent pflags
-	configPath := pflag.StringP("config", "c", "/etc/crowdsec/bouncer/crowdsec-spoa-bouncer.yaml", "path to crowdsec-spoa-bouncer.yaml")
+	configPath := pflag.StringP("config", "c", "/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml", "path to crowdsec-spoa-bouncer.yaml")
 	verbose := pflag.BoolP("verbose", "v", false, "set verbose mode")
-	bouncerVersion := pflag.Bool("V", false, "display version and exit (deprecated)")
+	bouncerVersion := pflag.BoolP("V", "V", false, "display version and exit (deprecated)")
 	pflag.BoolVar(bouncerVersion, "version", *bouncerVersion, "display version and exit")
 	testConfig := pflag.BoolP("test", "t", false, "test config and exit")
 	showConfig := pflag.BoolP("show-config", "T", false, "show full config (.yaml + .yaml.local) and exit")
@@ -67,6 +67,13 @@ func Execute() error {
 	workerConfigJSON := pflag.String("worker-config", "", "worker configuration as JSON string")
 
 	pflag.Parse()
+
+	// Handle version flags
+	if *bouncerVersion {
+		fmt.Fprint(os.Stdout, version.FullString())
+		return nil
+	}
+
 	if *workerConfigJSON != "" {
 		var w *worker.Worker
 		if err := json.Unmarshal([]byte(*workerConfigJSON), &w); err != nil {
@@ -215,7 +222,7 @@ func Execute() error {
 
 	socketConnChan := make(chan server.SocketConn)
 
-	workerServer, err := server.NewWorkerSocket(socketConnChan, config.WorkerSocketDir)
+	workerServer, err := server.NewWorkerSocket(ctx, socketConnChan, config.WorkerSocketDir)
 
 	if err != nil {
 		return fmt.Errorf("failed to create worker server: %w", err)
@@ -224,7 +231,7 @@ func Execute() error {
 	var adminServer *server.Server
 	if config.AdminSocket != "" {
 		var err error
-		adminServer, err = server.NewAdminSocket(socketConnChan)
+		adminServer, err = server.NewAdminSocket(ctx, socketConnChan)
 
 		if err != nil {
 			return fmt.Errorf("failed to create admin server: %w", err)
@@ -258,11 +265,21 @@ func Execute() error {
 		return apiServer.Run(ctx)
 	})
 
+	// Add worker server to errgroup
+	g.Go(func() error {
+		return workerServer.Wait()
+	})
+
+	// Add admin server to errgroup if configured
+	if adminServer != nil {
+		g.Go(func() error {
+			return adminServer.Wait()
+		})
+	}
+
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
 
 	if err := g.Wait(); err != nil {
-		workerServer.Close()
-		adminServer.Close()
 		switch err.Error() {
 		case "received SIGTERM":
 			log.Info("Received SIGTERM, shutting down")
