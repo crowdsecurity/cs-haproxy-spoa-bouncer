@@ -144,6 +144,6 @@ fi
 %postun
 
 if [ "$1" == "1" ] ; then
-    systemctl restart %{name} || echo "cannot restart service"
+    systemctl restart "$SERVICE" || echo "cannot restart service"
 fi
 
