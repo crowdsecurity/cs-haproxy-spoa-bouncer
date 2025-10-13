@@ -37,11 +37,12 @@ mkdir -p %{buildroot}%{_libdir}/%{name}
 mkdir -p %{buildroot}%{_localstatedir}/lib/%{name}/html
 mkdir -p %{buildroot}%{_docdir}/examples
 install -m 755 -D %{binary_name} %{buildroot}%{_bindir}/%{binary_name}
-install -m 600 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
-install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{name}/_bouncer.sh
+install -m 640 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
+install -m 640 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{name}/_bouncer.sh
 install -m 644 -D config/crowdsec.cfg %{buildroot}/%{_docdir}/%{name}/examples/crowdsec.cfg
 install -m 644 -D config/haproxy.cfg %{buildroot}/%{_docdir}/%{name}/examples/haproxy.cfg
 BIN=%{_bindir}/%{binary_name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{binary_name}.service
+install -m 0644 -D config/%{binary_name}-admin.socket %{buildroot}%{_unitdir}/%{binary_name}-admin.socket
 install -D lua/crowdsec.lua %{buildroot}/usr/lib/%{name}/lua/crowdsec.lua
 install -D lua/utils.lua %{buildroot}/usr/lib/%{name}/lua/utils.lua
 install -D lua/template.lua %{buildroot}/usr/lib/%{name}/lua/template.lua
@@ -56,6 +57,7 @@ rm -rf %{buildroot}
 %{_bindir}/%{binary_name}
 /usr/lib/%{name}/_bouncer.sh
 %{_unitdir}/%{binary_name}.service
+%{_unitdir}/%{binary_name}-admin.socket
 %config(noreplace) /etc/crowdsec/bouncers/%{binary_name}.yaml
 %doc %{_docdir}/%{name}/examples/crowdsec.cfg
 %doc %{_docdir}/%{name}/examples/haproxy.cfg
@@ -94,10 +96,17 @@ if [ "$1" = "1" ]; then
     fi
 fi
 
-# Ensure system user exists
-if ! getent passwd crowdsec-spoa >/dev/null; then
-    adduser --system --no-create-home --shell /sbin/nologin crowdsec-spoa
+# Ensure system user and group exist
+if ! getent group crowdsec-spoa >/dev/null; then
+    groupadd --system crowdsec-spoa
 fi
+
+if ! getent passwd crowdsec-spoa >/dev/null; then
+    adduser --system --no-create-home --shell /sbin/nologin -g crowdsec-spoa crowdsec-spoa
+fi
+
+# Set config file group ownership
+chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
 
 
 if [ -d "/etc/haproxy" ]; then
