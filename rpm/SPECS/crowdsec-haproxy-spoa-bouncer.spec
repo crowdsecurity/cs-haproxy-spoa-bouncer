@@ -104,18 +104,25 @@ if [ -d "/etc/haproxy" ]; then
     cp /usr/share/doc/%{name}/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
 fi
 
-# Handle systemd unit
+# Display installation message
+echo ""
+echo "=========================================="
+echo "CrowdSec HAProxy SPOA Bouncer installed"
+echo "=========================================="
+echo ""
+
 if [ "$START" -eq 0 ]; then
-    echo "No API key was generated. You can generate one on your LAPI server with:"
-    echo "    cscli bouncers add <bouncer_name>"
-    echo "Then add it to: $CONFIG"
-else
-    echo "Not starting the bouncer automatically. Please update your haproxy and start the service manually."
-%if 0%{?fc35}
-    systemctl enable "$SERVICE" >/dev/null 2>&1 || :
-%endif
-    systemctl start "$SERVICE" >/dev/null 2>&1 || :
+    echo "⚠ No API key was generated."
+    echo "  Generate one with: cscli bouncers add <bouncer_name>"
+    echo "  Add it to: $CONFIG"
+    echo ""
 fi
+
+echo "Configuration: $CONFIG"
+echo "Examples: /usr/share/doc/%{name}/examples/"
+echo "Documentation: https://docs.crowdsec.net/u/bouncers/haproxy_spoa"
+echo ""
+echo "Start bouncer: systemctl enable --now $SERVICE"
 
 %changelog
 * Fri Jun 13 2025 Manuel Sabban <manuel@crowdsec.net>
@@ -137,6 +144,6 @@ fi
 %postun
 
 if [ "$1" == "1" ] ; then
-    systemctl restart %{name} || echo "cannot restart service"
+    systemctl restart "$SERVICE" || echo "cannot restart service"
 fi
 
