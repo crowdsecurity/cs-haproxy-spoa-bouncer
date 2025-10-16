@@ -13,22 +13,18 @@ import (
 )
 
 type DataSet struct {
-	PrefixSet *PrefixSet
-	IPSet     *IPSet
-	CNSet     *CNSet
+	CNSet *CNSet
+	// CIDR-based trie implementation using bart library
+	BartUnifiedIPSet *BartUnifiedIPSet
 }
 
 func New() *DataSet {
-	PrefixSet := PrefixSet{}
-	PrefixSet.Init("CIDRSet")
 	CNSet := CNSet{}
 	CNSet.Init("CNSet")
-	IPSet := IPSet{}
-	IPSet.Init("IPSet")
+	BartUnifiedIPSet := NewBartUnifiedIPSet("BartUnifiedIPSet")
 	return &DataSet{
-		PrefixSet: &PrefixSet,
-		CNSet:     &CNSet,
-		IPSet:     &IPSet,
+		CNSet:            &CNSet,
+		BartUnifiedIPSet: BartUnifiedIPSet,
 	}
 }
 
@@ -53,10 +49,7 @@ func (d *DataSet) CheckIP(ipString string) (remediation.Remediation, string, err
 	if err != nil || !ip.IsValid() {
 		return remediation.Allow, "", err
 	}
-	if ipCheck, origin := d.IPSet.Contains(ip); ipCheck > remediation.Unknown {
-		return ipCheck, origin, nil
-	}
-	r, origin := d.PrefixSet.Contains(ip)
+	r, origin := d.BartUnifiedIPSet.Contains(ip)
 	return r, origin, nil
 }
 
@@ -66,38 +59,46 @@ func (d *DataSet) CheckCN(cn string) (remediation.Remediation, string) {
 
 func (d *DataSet) RemoveDecision(decision *models.Decision) error {
 	origin := *decision.Origin
-	if origin == "lists" {
+	if origin == "lists" && decision.Scenario != nil {
 		origin = *decision.Origin + ":" + *decision.Scenario
 	}
-	switch strings.ToLower(*decision.Scope) {
+
+	// Use strings.ToLower for case-insensitive comparison (required for compatibility)
+	scope := strings.ToLower(*decision.Scope)
+
+	switch scope {
 	case "ip":
-		removed, err := d.RemoveIP(*decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		// Parse IP directly to determine type efficiently
+		ip, err := netip.ParseAddr(*decision.Value)
 		if err != nil {
 			return err
 		}
+		removed := d.BartUnifiedIPSet.RemoveIP(ip, remediation.FromString(*decision.Type), decision.ID)
 		if removed {
 			ipType := "ipv4"
-			if strings.Contains(*decision.Value, ":") {
+			if ip.Is6() {
 				ipType = "ipv6"
 			}
 			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Dec()
 		}
 		return nil
 	case "range":
-		removed, err := d.RemoveCIDR(decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		// Parse prefix directly to determine type efficiently
+		prefix, err := netip.ParsePrefix(*decision.Value)
 		if err != nil {
 			return err
 		}
+		removed := d.BartUnifiedIPSet.RemovePrefix(prefix, remediation.FromString(*decision.Type), decision.ID)
 		if removed {
 			ipType := "ipv4"
-			if strings.Contains(*decision.Value, ":") {
+			if prefix.Addr().Is6() {
 				ipType = "ipv6"
 			}
 			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Dec()
 		}
 		return nil
 	case "country":
-		removed, err := d.RemoveCN(*decision.Value, remediation.FromString(*decision.Type), decision.ID)
+		removed, err := d.removeCN(*decision.Value, remediation.FromString(*decision.Type), decision.ID)
 		if err != nil {
 			return err
 		}
@@ -111,50 +112,47 @@ func (d *DataSet) RemoveDecision(decision *models.Decision) error {
 
 func (d *DataSet) AddDecision(decision *models.Decision) error {
 	origin := *decision.Origin
-	if origin == "lists" {
+	if origin == "lists" && decision.Scenario != nil {
 		origin = *decision.Origin + ":" + *decision.Scenario
 	}
-	switch strings.ToLower(*decision.Scope) {
+
+	// Use strings.ToLower for case-insensitive comparison (required for compatibility)
+	scope := strings.ToLower(*decision.Scope)
+
+	switch scope {
 	case "ip":
+		// Parse IP directly to determine type efficiently
+		ip, err := netip.ParseAddr(*decision.Value)
+		if err != nil {
+			return err
+		}
 		ipType := "ipv4"
-		if strings.Contains(*decision.Value, ":") {
+		if ip.Is6() {
 			ipType = "ipv6"
 		}
 		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Inc()
-		return d.AddIP(*decision.Value, origin, remediation.FromString(*decision.Type), decision.ID)
+		return d.BartUnifiedIPSet.AddIP(ip, origin, remediation.FromString(*decision.Type), decision.ID)
 	case "range":
+		// Parse prefix directly to determine type efficiently
+		prefix, err := netip.ParsePrefix(*decision.Value)
+		if err != nil {
+			return err
+		}
 		ipType := "ipv4"
-		if strings.Contains(*decision.Value, ":") {
+		if prefix.Addr().Is6() {
 			ipType = "ipv6"
 		}
 		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
-		return d.AddCIDR(decision.Value, origin, remediation.FromString(*decision.Type), decision.ID)
+		return d.BartUnifiedIPSet.AddPrefix(prefix, origin, remediation.FromString(*decision.Type), decision.ID)
 	case "country":
 		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": "", "scope": "country"}).Inc()
-		return d.AddCN(*decision.Value, origin, remediation.FromString(*decision.Type), decision.ID)
+		return d.addCN(*decision.Value, origin, remediation.FromString(*decision.Type), decision.ID)
 	}
 	return fmt.Errorf("unknown scope %s", *decision.Scope)
 }
 
-func (d *DataSet) AddCIDR(cidr *string, origin string, r remediation.Remediation, id int64) error {
-	prefix, err := netip.ParsePrefix(*cidr)
-	if err != nil {
-		return err
-	}
-	d.PrefixSet.Add(prefix, origin, r, id)
-	return nil
-}
-
-func (d *DataSet) AddIP(ipString string, origin string, r remediation.Remediation, id int64) error {
-	ip, err := netip.ParseAddr(ipString)
-	if err != nil || !ip.IsValid() {
-		return err
-	}
-	d.IPSet.Add(ip, origin, r, id)
-	return nil
-}
-
-func (d *DataSet) AddCN(cn string, origin string, r remediation.Remediation, id int64) error {
+// Helper method for CN operations (still needed for country scope)
+func (d *DataSet) addCN(cn string, origin string, r remediation.Remediation, id int64) error {
 	if cn == "" {
 		return fmt.Errorf("empty CN")
 	}
@@ -162,28 +160,10 @@ func (d *DataSet) AddCN(cn string, origin string, r remediation.Remediation, id 
 	return nil
 }
 
-func (d *DataSet) RemoveCIDR(cidr *string, r remediation.Remediation, id int64) (bool, error) {
-	prefix, err := netip.ParsePrefix(*cidr)
-	if err != nil {
-		return false, err
-	}
-	removed := d.PrefixSet.Remove(prefix, r, id)
-	return removed, nil
-}
-
-func (d *DataSet) RemoveCN(cn string, r remediation.Remediation, id int64) (bool, error) {
+func (d *DataSet) removeCN(cn string, r remediation.Remediation, id int64) (bool, error) {
 	if cn == "" {
 		return false, fmt.Errorf("empty CN")
 	}
 	removed := d.CNSet.Remove(cn, r, id)
-	return removed, nil
-}
-
-func (d *DataSet) RemoveIP(ipString string, r remediation.Remediation, id int64) (bool, error) {
-	ip, err := netip.ParseAddr(ipString)
-	if err != nil || !ip.IsValid() {
-		return false, err
-	}
-	removed := d.IPSet.Remove(ip, r, id)
 	return removed, nil
 }
