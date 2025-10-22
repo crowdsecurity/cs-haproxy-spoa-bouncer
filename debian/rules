@@ -19,7 +19,7 @@ override_dh_auto_install:
 	install -D "$$BOUNCER" -t "debian/$$PKG/usr/bin/"; \
 	install -D "scripts/_bouncer.sh" -t "debian/$$PKG/usr/lib/$$PKG/"; \
 	install -D "config/$$BOUNCER.yaml" "debian/$$PKG/etc/crowdsec/bouncers/$$BOUNCER.yaml"; \
-	BIN="/usr/bin/$$BOUNCER" CFG="/etc/crowdsec/bouncers" envsubst '$$BIN $$CFG' < "config/$$BOUNCER.service" | install -D /dev/stdin "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"; \
+	BIN="/usr/bin/$$BOUNCER" CFG="/etc/crowdsec/bouncers" envsubst '$$BIN $$CFG' < "config/$$BOUNCER.service" > "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"
 	mkdir -p "debian/$$PKG/usr/lib/$$PKG/lua"; \
 	mkdir -p "debian/$$PKG/usr/share/doc/$$PKG/examples"; \
 	install -D "config/crowdsec.cfg" -t "debian/$$PKG/usr/share/doc/$$PKG/examples/"; \
