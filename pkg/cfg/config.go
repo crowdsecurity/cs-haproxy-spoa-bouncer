@@ -13,7 +13,7 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	cslogging "github.com/crowdsecurity/crowdsec-spoa/pkg/logging"
-	"github.com/crowdsecurity/go-cs-lib/yamlpatch"
+	"github.com/crowdsecurity/go-cs-lib/csyaml"
 )
 
 type PrometheusConfig struct {
@@ -39,7 +39,7 @@ type BouncerConfig struct {
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).
 func MergedConfig(configPath string) ([]byte, error) {
-	patcher := yamlpatch.NewPatcher(configPath, ".local")
+	patcher := csyaml.NewPatcher(configPath, ".local")
 
 	data, err := patcher.MergedPatchContent()
 	if err != nil {
