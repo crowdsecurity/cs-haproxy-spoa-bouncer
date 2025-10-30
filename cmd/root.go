@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -11,7 +10,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -19,14 +17,12 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/api"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/admin"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
-	"github.com/crowdsecurity/crowdsec-spoa/pkg/server"
-	"github.com/crowdsecurity/crowdsec-spoa/pkg/spoa"
 	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
 	"github.com/crowdsecurity/go-cs-lib/csdaemon"
 	"github.com/crowdsecurity/go-cs-lib/csstring"
@@ -63,28 +59,12 @@ func Execute() error {
 	testConfig := pflag.BoolP("test", "t", false, "test config and exit")
 	showConfig := pflag.BoolP("show-config", "T", false, "show full config (.yaml + .yaml.local) and exit")
 
-	// Worker pflags
-	workerConfigJSON := pflag.String("worker-config", "", "worker configuration as JSON string")
-
 	pflag.Parse()
 
 	// Handle version flags
 	if *bouncerVersion {
 		fmt.Fprint(os.Stdout, version.FullString())
 		return nil
-	}
-
-	if *workerConfigJSON != "" {
-		var w *worker.Worker
-		if err := json.Unmarshal([]byte(*workerConfigJSON), &w); err != nil {
-			return fmt.Errorf("failed to parse worker config JSON: %w", err)
-		}
-
-		if w.TcpAddr == "" && w.UnixAddr == "" {
-			return fmt.Errorf("worker must have one listener address")
-		}
-		return WorkerExecute(w)
-
 	}
 
 	if configPath == nil || *configPath == "" {
@@ -158,7 +138,7 @@ func Execute() error {
 		return metricsProvider.Run(ctx)
 	})
 
-	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests, metrics.TotalWorkerAPIConnectionErrors, metrics.TotalWorkerAPIConnectionEvents)
+	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests)
 
 	if config.PrometheusConfig.Enabled {
 		go func() {
@@ -220,60 +200,45 @@ func Execute() error {
 		}
 	}
 
-	socketConnChan := make(chan server.SocketConn)
+	// Create worker manager for goroutine-based workers
+	workerLogger := log.WithField("component", "worker")
+	workerManager := worker.NewManager(ctx, dataSet, HostManager, &config.Geo, workerLogger)
 
-	workerServer, err := server.NewWorkerSocket(ctx, socketConnChan, config.WorkerSocketDir)
+	// Add all workers as goroutines
+	for _, w := range config.Workers {
+		workerConfig := worker.WorkerConfig{
+			Name:     w.Name,
+			LogLevel: w.LogLevel,
+			TcpAddr:  w.TcpAddr,
+			UnixAddr: w.UnixAddr,
+		}
+		if err := workerManager.AddWorker(workerConfig); err != nil {
+			return fmt.Errorf("failed to add worker %s: %w", w.Name, err)
+		}
+	}
 
+	// Wait for all workers in errgroup
+	g.Go(func() error {
+		return workerManager.Wait()
+	})
+
+	// Admin server will inherit root logger and log level via its fallback
+
+	// Setup admin socket (systemd activation or config-based)
+	adminServer, err := admin.NewServer(ctx, admin.Config{
+		SocketPath:  config.AdminSocket,
+		HostManager: HostManager,
+		Dataset:     dataSet,
+		GeoDatabase: &config.Geo,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create worker server: %w", err)
+		return fmt.Errorf("failed to create admin server: %w", err)
 	}
 
-	var adminServer *server.Server
-	if config.AdminSocket != "" {
-		var err error
-		adminServer, err = server.NewAdminSocket(ctx, socketConnChan)
-
-		if err != nil {
-			return fmt.Errorf("failed to create admin server: %w", err)
-		}
-
-		err = adminServer.NewAdminListener(config.AdminSocket)
-		if err != nil {
-			return fmt.Errorf("failed to create admin listener: %w", err)
-		}
-	}
-
-	workerManager := worker.NewManager(workerServer, config.WorkerUid, config.WorkerGid)
-
-	g.Go(func() error {
-		return workerManager.Run(ctx)
-	})
-
-	apiServer := api.NewAPI(api.APIConfig{
-		WorkerManager: workerManager,
-		HostManager:   HostManager,
-		Dataset:       dataSet,
-		GeoDatabase:   &config.Geo,
-		SocketChan:    socketConnChan,
-	})
-
-	for _, worker := range config.Workers {
-		workerManager.CreateChan <- worker
-	}
-
-	g.Go(func() error {
-		return apiServer.Run(ctx)
-	})
-
-	// Add worker server to errgroup
-	g.Go(func() error {
-		return workerServer.Wait()
-	})
-
-	// Add admin server to errgroup if configured
-	if adminServer != nil {
+	// Start admin server if it has listeners
+	if adminServer.HasListeners() {
 		g.Go(func() error {
-			return adminServer.Wait()
+			return adminServer.Run()
 		})
 	}
 
@@ -288,53 +253,6 @@ func Execute() error {
 		default:
 			return err
 		}
-	}
-
-	return nil
-}
-
-func WorkerExecute(w *worker.Worker) error {
-
-	g, ctx := errgroup.WithContext(context.Background())
-
-	g.Go(func() error {
-		return HandleSignals(ctx)
-	})
-
-	spoad, err := spoa.New(w.TcpAddr, w.UnixAddr)
-
-	if err != nil {
-		return fmt.Errorf("failed to create SPOA: %w", err)
-	}
-
-	g.Go(func() error {
-		if err := spoad.ServeTCP(ctx); err != nil {
-			return fmt.Errorf("failed to serve TCP: %w", err)
-		}
-		return nil
-	})
-
-	g.Go(func() error {
-		if err := spoad.ServeUnix(ctx); err != nil {
-			return fmt.Errorf("failed to serve Unix: %w", err)
-		}
-		return nil
-	})
-
-	if err := g.Wait(); err != nil {
-		switch err.Error() {
-		case "received SIGTERM":
-		case "received interrupt":
-		default:
-			return err
-		}
-	}
-
-	cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := spoad.Shutdown(cancelCtx); err != nil {
-		return fmt.Errorf("failed to shutdown server: %w", err)
 	}
 
 	return nil

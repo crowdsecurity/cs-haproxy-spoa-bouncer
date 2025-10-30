@@ -2,23 +2,27 @@ package spoa
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"syscall"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
+	"github.com/crowdsecurity/go-cs-lib/ptr"
 	"github.com/negasus/haproxy-spoe-go/action"
 	"github.com/negasus/haproxy-spoe-go/agent"
 	"github.com/negasus/haproxy-spoe-go/message"
 	"github.com/negasus/haproxy-spoe-go/request"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -31,93 +35,72 @@ type Spoa struct {
 	ListenSocket net.Listener
 	Server       *agent.Agent
 	HAWaitGroup  *sync.WaitGroup
-	cancel       context.CancelFunc
 	logger       *log.Entry
-	workerClient *worker.WorkerClient
+	// Direct access to shared data (no IPC needed)
+	dataset     *dataset.DataSet
+	hostManager *host.Manager
+	geoDatabase *geo.GeoDatabase
 }
 
-func New(tcpAddr, unixAddr string) (*Spoa, error) {
-	clog := log.New()
-	socket, ok := os.LookupEnv("WORKERSOCKET")
+type SpoaConfig struct {
+	TcpAddr     string
+	UnixAddr    string
+	Name        string
+	LogLevel    *log.Level
+	Dataset     *dataset.DataSet
+	HostManager *host.Manager
+	GeoDatabase *geo.GeoDatabase
+	Logger      *log.Entry // Parent logger to inherit from
+}
 
-	if !ok {
-		return nil, fmt.Errorf("failed to get socket from environment")
+func New(config *SpoaConfig) (*Spoa, error) {
+	// Use provided logger or fallback to standard logger
+	var workerLogger *log.Entry
+	if config.Logger != nil {
+		workerLogger = config.Logger.WithField("worker", config.Name)
+	} else {
+		workerLogger = log.WithField("worker", config.Name)
 	}
 
-	name, _ := os.LookupEnv("WORKERNAME") // worker name set by parent process
-	logLevel, err := log.ParseLevel(os.Getenv("LOG_LEVEL"))
-
-	if err != nil {
-		logLevel = clog.Level
-	}
-
-	clog.SetLevel(logLevel)
-
-	client, err := worker.NewWorkerClient(socket, name)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create worker client: %w", err)
+	// Apply log level if specified (for compatibility)
+	if config.LogLevel != nil {
+		workerLogger.Logger.SetLevel(*config.LogLevel)
 	}
 
 	s := &Spoa{
-		HAWaitGroup:  &sync.WaitGroup{},
-		logger:       clog.WithField("worker", name),
-		workerClient: client,
+		HAWaitGroup: &sync.WaitGroup{},
+		logger:      workerLogger,
+		dataset:     config.Dataset,
+		hostManager: config.HostManager,
+		geoDatabase: config.GeoDatabase,
 	}
 
-	if tcpAddr != "" {
-		addr, err := net.Listen("tcp", tcpAddr)
+	if config.TcpAddr != "" {
+		addr, err := net.Listen("tcp", config.TcpAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %w", tcpAddr, err)
+			return nil, fmt.Errorf("failed to listen on %s: %w", config.TcpAddr, err)
 		}
 		s.ListenAddr = addr
 	}
 
-	if unixAddr != "" {
-		// Get current process uid/gid usually worker node
-		uid := os.Getuid()
-		gid := os.Getgid()
+	if config.UnixAddr != "" {
+		// Remove existing socket if present
+		_ = syscall.Unlink(config.UnixAddr)
 
-		// Get existing socket stat
-		fileInfo, err := os.Stat(unixAddr)
-		if err != nil {
-			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to stat socket %s: %w", unixAddr, err)
-			}
-		} else {
-			stat, ok := fileInfo.Sys().(*syscall.Stat_t)
-			if !ok {
-				return nil, fmt.Errorf("failed to get socket stat")
-			}
-			// Set gid to existing socket
-			gid = int(stat.Gid)
-		}
-
-		// Remove existing socket
-		if err := os.Remove(unixAddr); err != nil {
-			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to remove socket %s: %w", unixAddr, err)
-			}
-		}
-
-		// Set umask to 0o777
-		origUmask := syscall.Umask(0o777)
+		// Set umask to 0o117 (result: 0o660 permissions)
+		// Socket inherits group ownership from parent directory if setgid bit is set
+		// To set this: chmod g+s /run/crowdsec-spoa && chgrp haproxy /run/crowdsec-spoa
+		origUmask := syscall.Umask(0o117)
 
 		// Create new socket
-		addr, err := net.Listen("unix", unixAddr)
+		addr, err := net.Listen("unix", config.UnixAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to listen on %s: %w", unixAddr, err)
+			syscall.Umask(origUmask)
+			return nil, fmt.Errorf("failed to listen on %s: %w", config.UnixAddr, err)
 		}
 
 		// Reset umask
 		syscall.Umask(origUmask)
-
-		// Change socket owner and permissions
-		if err := os.Chown(unixAddr, uid, gid); err != nil {
-			return nil, fmt.Errorf("failed to change owner of socket %s: %w", unixAddr, err)
-		}
-		if err := os.Chmod(unixAddr, 0o660); err != nil {
-			return nil, fmt.Errorf("failed to change permissions of socket %s: %w", unixAddr, err)
-		}
 
 		s.ListenSocket = addr
 	}
@@ -127,47 +110,42 @@ func New(tcpAddr, unixAddr string) (*Spoa, error) {
 	return s, nil
 }
 
-func (s *Spoa) ServeTCP(ctx context.Context) error {
-	if s.ListenAddr == nil {
+func (s *Spoa) Serve(ctx context.Context) error {
+	serverError := make(chan error, 2)
+
+	startServer := func(listener net.Listener) {
+		err := s.Server.Serve(listener)
+		switch {
+		case errors.Is(err, net.ErrClosed):
+			// Server closed normally during shutdown
+		case err != nil:
+			serverError <- err
+		}
+	}
+
+	// Launch TCP server if configured
+	if s.ListenAddr != nil {
+		s.logger.Infof("Serving TCP server on %s", s.ListenAddr.Addr().String())
+		go func() {
+			startServer(s.ListenAddr)
+		}()
+	}
+
+	// Launch Unix server if configured
+	if s.ListenSocket != nil {
+		s.logger.Infof("Serving Unix server on %s", s.ListenSocket.Addr().String())
+		go func() {
+			startServer(s.ListenSocket)
+		}()
+	}
+
+	// If no listeners are configured, return immediately
+	if s.ListenAddr == nil && s.ListenSocket == nil {
 		return nil
 	}
-	s.logger.Infof("Serving TCP server on %s", s.ListenAddr.Addr().String())
-
-	errorChan := make(chan error, 1)
-
-	go func() {
-		defer close(errorChan)
-		if err := s.Server.Serve(s.ListenAddr); err != nil {
-			errorChan <- err
-		}
-	}()
 
 	select {
-	case err := <-errorChan:
-		return err
-	case <-ctx.Done():
-		return nil
-	}
-}
-
-func (s *Spoa) ServeUnix(ctx context.Context) error {
-	if s.ListenSocket == nil {
-		return nil
-	}
-
-	s.logger.Infof("Serving Unix server on %s", s.ListenSocket.Addr().String())
-
-	errorChan := make(chan error, 1)
-
-	go func() {
-		defer close(errorChan)
-		if err := s.Server.Serve(s.ListenAddr); err != nil {
-			errorChan <- err
-		}
-	}()
-
-	select {
-	case err := <-errorChan:
+	case err := <-serverError:
 		return err
 	case <-ctx.Done():
 		return nil
@@ -190,7 +168,6 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 	}
 
 	go func() {
-		s.cancel()
 		s.HAWaitGroup.Wait()
 		close(doneChan)
 	}()
@@ -206,43 +183,73 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 // Handles checking the http request which has 2 stages
 // First stage is to check the host header and determine if the remediation from handleIpRequest is still valid
 // Second stage is to check if AppSec is enabled and then forward to the component if needed
+//
+//nolint:revive // function-length: complex HTTP request handler to be split with AppSec work
 func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	r := remediation.Allow
+	var origin string
+	shouldCountMetrics := false
 
 	rstring, err := readKeyFromMessage[string](mes, "remediation")
 
 	if err == nil {
-		log.Debug("remediation: ", *rstring)
+		s.logger.Debug("remediation: ", *rstring)
 		r = remediation.FromString(*rstring)
+		// Remediation came from IP check, already counted
 	} else {
-		// IP remediation not found - fallback to checking IP directly
-		// This handles cases where crowdsec-ip message didn't fire (e.g., on-client-session not triggered)
-		log.Debug("ip remediation was not found in message, checking IP directly")
-		s.checkIPRemediation(req, mes, &r)
+		s.logger.Info("ip remediation was not found in message, defaulting to allow")
+		// No IP check happened (e.g., upstream proxy mode), we need to count metrics
+		shouldCountMetrics = true
 	}
 
 	hoststring, err := readKeyFromMessage[string](mes, "host")
 
-	var host *host.Host
+	var matchedHost *host.Host
 
 	// defer a function that always add the remediation to the request at end of processing
 	defer func() {
-		if host == nil && r == remediation.Captcha {
-			log.Warn("remediation is captcha, no matching host was found cannot issue captcha remediation reverting to ban")
+		if matchedHost == nil && r == remediation.Captcha {
+			s.logger.Warn("remediation is captcha, no matching host was found cannot issue captcha remediation reverting to ban")
 			r = remediation.Ban
 		}
 		rString := r.String()
 		req.Actions.SetVar(action.ScopeTransaction, "remediation", rString)
+
+		// Count metrics if this is the only handler (upstream proxy mode)
+		if shouldCountMetrics {
+			// Get IP from message for metrics
+			ipStr := ""
+			if srcIP, err := readKeyFromMessage[net.IP](mes, "src-ip"); err == nil {
+				ipStr = srcIP.String()
+			}
+
+			ipTypeLabel := "ipv4"
+			if strings.Contains(ipStr, ":") {
+				ipTypeLabel = "ipv6"
+			}
+
+			// Count processed request
+			metrics.TotalProcessedRequests.With(prometheus.Labels{"ip_type": ipTypeLabel}).Inc()
+
+			// Count blocked request if remediation applied
+			if r > remediation.Unknown {
+				metrics.TotalBlockedRequests.With(prometheus.Labels{
+					"ip_type":     ipTypeLabel,
+					"origin":      origin,
+					"remediation": r.String(),
+				}).Inc()
+			}
+		}
 	}()
 
 	if err != nil {
 		return
 	}
 
-	host, err = s.workerClient.GetHost(*hoststring)
+	matchedHost = s.hostManager.MatchFirstHost(*hoststring)
 
 	// if the host is not found we cannot alter the remediation or do appsec checks
-	if host == nil || err != nil {
+	if matchedHost == nil {
 		return
 	}
 
@@ -259,12 +266,12 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		if cookieB64 != nil {
 			ssl, err := readKeyFromMessage[bool](mes, "ssl")
 			if err != nil {
-				log.Error(err)
+				s.logger.Error(err)
 			}
 
-			unsetCookie, err := s.workerClient.GetHostUnsetCookie(*hoststring, fmt.Sprint(*ssl))
+			unsetCookie, err := matchedHost.Captcha.CookieGenerator.GenerateUnsetCookie(ptr.Of(*ssl))
 			if err != nil {
-				log.WithFields(log.Fields{
+				s.logger.WithFields(log.Fields{
 					"host":  *hoststring,
 					"ssl":   ssl,
 					"error": err,
@@ -272,7 +279,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				return // Cannot proceed without unset cookie
 			}
 
-			log.WithFields(log.Fields{
+			s.logger.WithFields(log.Fields{
 				"host": *hoststring,
 			}).Debug("Allow decision but captcha cookie present, will clear cookie")
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", unsetCookie.String())
@@ -280,10 +287,10 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 	case remediation.Ban:
 		//Handle ban
-		host.Ban.InjectKeyValues(&req.Actions)
+		matchedHost.Ban.InjectKeyValues(&req.Actions)
 	case remediation.Captcha:
-		if err := host.Captcha.InjectKeyValues(&req.Actions); err != nil {
-			r = remediation.FromString(host.Captcha.FallbackRemediation)
+		if err := matchedHost.Captcha.InjectKeyValues(&req.Actions); err != nil {
+			r = remediation.FromString(matchedHost.Captcha.FallbackRemediation)
 			return
 		}
 
@@ -291,9 +298,9 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		uuid := ""
 
 		if cookieB64 != nil {
-			uuid, err = s.workerClient.ValHostCookie(*hoststring, *cookieB64)
+			uuid, err = matchedHost.Captcha.CookieGenerator.ValidateCookie(*cookieB64)
 			if err != nil {
-				log.WithFields(log.Fields{
+				s.logger.WithFields(log.Fields{
 					"host":  *hoststring,
 					"error": err,
 				}).Warn("Failed to validate existing cookie")
@@ -305,12 +312,22 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			ssl, err := readKeyFromMessage[bool](mes, "ssl")
 
 			if err != nil {
-				log.Error(err)
+				s.logger.Error(err)
 			}
 
-			cookie, err := s.workerClient.GetHostCookie(*hoststring, fmt.Sprint(*ssl))
+			// Create a new session
+			ses, err := matchedHost.Captcha.Sessions.NewRandomSession()
 			if err != nil {
-				log.WithFields(log.Fields{
+				s.logger.WithFields(log.Fields{
+					"host":  *hoststring,
+					"error": err,
+				}).Error("Failed to create new session")
+				return // Cannot proceed without session
+			}
+
+			cookie, err := matchedHost.Captcha.CookieGenerator.GenerateCookie(ses, ssl)
+			if err != nil {
+				s.logger.WithFields(log.Fields{
 					"host":  *hoststring,
 					"ssl":   ssl,
 					"error": err,
@@ -318,15 +335,9 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				return // Cannot proceed without cookie
 			}
 
-			uuid, err = s.workerClient.ValHostCookie(*hoststring, cookie.Value)
-			if err != nil {
-				log.WithFields(log.Fields{
-					"host":   *hoststring,
-					"cookie": cookie.Value,
-					"error":  err,
-				}).Error("Failed to validate new cookie")
-				return // Cannot proceed without valid cookie
-			}
+			// Set initial captcha status to pending
+			ses.Set(session.CaptchaStatus, captcha.Pending)
+			uuid = ses.UUID
 
 			// Set the captcha cookie - status will be set later based on session state
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
@@ -335,150 +346,113 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		if uuid == "" {
 			// We should never hit this but safety net
 			// As a fallback we set the remediation to the fallback remediation
-			log.Error("failed to get uuid from cookie")
-			r = remediation.FromString(host.Captcha.FallbackRemediation)
+			s.logger.Error("failed to get uuid from cookie")
+			r = remediation.FromString(matchedHost.Captcha.FallbackRemediation)
 			return
 		}
 
 		url, err = readKeyFromMessage[string](mes, "url")
 
 		if err != nil {
-			log.Printf("failed to read url: %v", err)
+			s.logger.Errorf("failed to read url: %v", err)
+			return
+		}
+
+		// Get the session
+		ses := matchedHost.Captcha.Sessions.GetSession(uuid)
+		if ses == nil {
+			s.logger.WithFields(log.Fields{
+				"host":    *hoststring,
+				"session": uuid,
+			}).Warn("Session not found, cannot proceed with captcha")
+			r = remediation.FromString(matchedHost.Captcha.FallbackRemediation)
 			return
 		}
 
 		// Get the current captcha status from the session
-		val, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"host":    *hoststring,
-				"session": uuid,
-				"error":   err,
-			}).Warn("Failed to get captcha status, assuming pending")
-			val = captcha.Pending // Assume pending if we can't get status
+		val := ses.Get(session.CaptchaStatus)
+		if val == nil {
+			val = captcha.Pending // Assume pending if not set
 		}
 
 		// Set the captcha status in the transaction for HAProxy
 		req.Actions.SetVar(action.ScopeTransaction, "captcha_status", val)
 		if val != captcha.Valid {
 			// Update the incoming url if it is different from the stored url for the session ignore favicon requests
-			storedURL, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
-			if err != nil {
-				log.WithFields(log.Fields{
-					"host":    *hoststring,
-					"session": uuid,
-					"error":   err,
-				}).Warn("Failed to get stored URL, assuming empty")
-				storedURL = "" // Assume empty if we can't get it
+			storedURL := ses.Get(session.URI)
+			if storedURL == nil {
+				storedURL = ""
 			}
 
 			if (storedURL == "" || url != nil && *url != storedURL) && !strings.HasSuffix(*url, ".ico") {
-				log.WithField("session", uuid).Debugf("updating stored url %s", *url)
-				_, err2 := s.workerClient.SetHostSessionKey(*hoststring, uuid, session.URI, *url)
-				if err2 != nil {
-					log.WithFields(log.Fields{
-						"host":    *hoststring,
-						"session": uuid,
-						"url":     *url,
-						"error":   err2,
-					}).Error("Failed to set host session URI")
-				}
+				s.logger.WithField("session", uuid).Debugf("updating stored url %s", *url)
+				ses.Set(session.URI, *url)
 			}
 		}
 
 		method, err = readKeyFromMessage[string](mes, "method")
 		if err != nil {
-			log.Printf("failed to read method: %v", err)
+			s.logger.Errorf("failed to read method: %v", err)
 			return
 		}
 
 		headersType, err := readKeyFromMessage[string](mes, "headers")
 
 		if err != nil {
-			log.Printf("failed to read headers: %v", err)
+			s.logger.Errorf("failed to read headers: %v", err)
 			return
 		}
 
 		headers, err = readHeaders(*headersType)
 
 		if err != nil {
-			log.Printf("failed to parse headers: %v", err)
+			s.logger.Errorf("failed to parse headers: %v", err)
 		}
 
 		// Check if the request is a captcha validation request
-		captchaStatus, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"host":    *hoststring,
-				"session": uuid,
-				"error":   err,
-			}).Warn("Failed to get captcha status for validation check")
-			captchaStatus = "" // Assume not pending if we can't get status
+		captchaStatus := ses.Get(session.CaptchaStatus)
+		if captchaStatus == nil {
+			captchaStatus = "" // Assume not pending if not set
 		}
 
 		if captchaStatus == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
 			body, err = readKeyFromMessage[[]byte](mes, "body")
 
 			if err != nil {
-				log.Printf("failed to read body: %v", err)
+				s.logger.Errorf("failed to read body: %v", err)
 				return
 			}
 
-			isValid, err := s.workerClient.ValHostCaptcha(*hoststring, uuid, string(*body))
+			// Validate captcha
+			isValid, err := matchedHost.Captcha.Validate(context.Background(), uuid, string(*body))
 			if err != nil {
-				log.WithFields(log.Fields{
+				s.logger.WithFields(log.Fields{
 					"host":    *hoststring,
 					"session": uuid,
 					"error":   err,
 				}).Error("Failed to validate captcha")
 			} else if isValid {
-				_, err := s.workerClient.SetHostSessionKey(*hoststring, uuid, session.CaptchaStatus, captcha.Valid)
-				if err != nil {
-					log.WithFields(log.Fields{
-						"host":    *hoststring,
-						"session": uuid,
-						"error":   err,
-					}).Error("Failed to set captcha status to valid")
-				}
+				ses.Set(session.CaptchaStatus, captcha.Valid)
 			}
 		}
 
 		// if the session has a valid captcha status we allow the request
-		finalStatus, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.CaptchaStatus)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"host":    *hoststring,
-				"session": uuid,
-				"error":   err,
-			}).Warn("Failed to get final captcha status")
-		} else if finalStatus == captcha.Valid {
+		finalStatus := ses.Get(session.CaptchaStatus)
+		if finalStatus == captcha.Valid {
 			r = remediation.Allow
 			// The captcha_status was already set above with the actual session status
-			storedURL, err := s.workerClient.GetHostSessionKey(*hoststring, uuid, session.URI)
-			if err != nil {
-				log.WithFields(log.Fields{
-					"host":    *hoststring,
-					"session": uuid,
-					"error":   err,
-				}).Warn("Failed to get stored URL for redirect")
-			} else if storedURL != "" {
-				log.Debug("redirecting to: ", storedURL)
+			storedURL := ses.Get(session.URI)
+			if storedURL != nil && storedURL != "" {
+				s.logger.Debug("redirecting to: ", storedURL)
 				req.Actions.SetVar(action.ScopeTransaction, "redirect", storedURL)
 				// Delete the URI from the session so we dont redirect loop
-				_, err := s.workerClient.DeleteHostSessionKey(*hoststring, uuid, session.URI)
-				if err != nil {
-					log.WithFields(log.Fields{
-						"host":    *hoststring,
-						"session": uuid,
-						"error":   err,
-					}).Warn("Failed to delete stored URL after redirect")
-				}
+				ses.Delete(session.URI)
 			}
 		}
 	}
 
 	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
-	if r > remediation.Unknown && !host.AppSec.AlwaysSend {
+	if r > remediation.Unknown && !matchedHost.AppSec.AlwaysSend {
 		return
 	}
 	// !TODO APPSEC STUFF
@@ -496,72 +470,72 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	// request.Header = headers
 }
 
-// getIPRemediation performs IP and geo/country remediation checks
-// Returns the final remediation after checking IP, geo, and country
-func (s *Spoa) getIPRemediation(req *request.Request, ipStr string) remediation.Remediation {
-	r, err := s.workerClient.GetIP(ipStr)
+// Handles checking the IP address against the dataset
+func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
+	var r remediation.Remediation
+
+	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
+
 	if err != nil {
-		log.WithFields(log.Fields{
+		s.logger.Error(err)
+		return
+	}
+
+	ipStr := ipType.String()
+
+	// Determine IP type for metrics
+	ipTypeLabel := "ipv4"
+	if strings.Contains(ipStr, ":") {
+		ipTypeLabel = "ipv6"
+	}
+
+	// Count processed requests
+	metrics.TotalProcessedRequests.With(prometheus.Labels{"ip_type": ipTypeLabel}).Inc()
+
+	// Check IP directly against dataset
+	r, origin, err := s.dataset.CheckIP(ipStr)
+	if err != nil {
+		s.logger.WithFields(log.Fields{
 			"ip":    ipStr,
 			"error": err,
 		}).Error("Failed to get IP remediation")
-		return remediation.Allow // Safe default
+		r = remediation.Allow // Safe default
 	}
 
-	if r < remediation.Unknown {
-		iso, err := s.workerClient.GetGeoIso(ipStr)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"ip":    ipStr,
-				"error": err,
-			}).Warn("Failed to get geo ISO, skipping country check")
-		} else if iso != "" {
-			cnR, err := s.workerClient.GetCN(iso, ipStr)
-			if err != nil {
-				log.WithFields(log.Fields{
-					"ip":           ipStr,
-					"country_code": iso,
-					"error":        err,
-				}).Warn("Failed to get country remediation")
-			} else {
-				r = cnR
+	// If no IP-specific remediation, check country-based
+	if r < remediation.Unknown && s.geoDatabase.IsValid() {
+		ipAddr := net.ParseIP(ipStr)
+		if ipAddr != nil {
+			record, err := s.geoDatabase.GetCity(&ipAddr)
+			if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
+				s.logger.WithFields(log.Fields{
+					"ip":    ipStr,
+					"error": err,
+				}).Warn("Failed to get geo location")
+			} else if record != nil {
+				iso := geo.GetIsoCodeFromRecord(record)
+				if iso != "" {
+					cnR, cnOrigin := s.dataset.CheckCN(iso)
+					if cnR > remediation.Unknown {
+						r = cnR
+						origin = cnOrigin
+					}
+					req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
+				}
 			}
-			req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
 		}
 	}
 
-	return r
-}
-
-// Handles checking the IP address against the dataset
-func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
-	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
-	if err != nil {
-		log.Error(err)
-		return
+	// Count blocked requests
+	if r > remediation.Unknown {
+		metrics.TotalBlockedRequests.With(prometheus.Labels{
+			"ip_type":     ipTypeLabel,
+			"origin":      origin,
+			"remediation": r.String(),
+		}).Inc()
 	}
 
-	ipStr := ipType.String()
-	r := s.getIPRemediation(req, ipStr)
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
-}
-
-// checkIPRemediation extracts IP from the message and checks remediation
-// Used as fallback when crowdsec-ip message didn't set remediation variable
-func (s *Spoa) checkIPRemediation(req *request.Request, mes *message.Message, r *remediation.Remediation) {
-	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
-	if err != nil {
-		log.WithError(err).Debug("failed to extract src-ip from message for fallback check")
-		return
-	}
-
-	ipStr := ipType.String()
-	*r = s.getIPRemediation(req, ipStr)
-
-	log.WithFields(log.Fields{
-		"ip":          ipStr,
-		"remediation": r.String(),
-	}).Debug("IP remediation checked via fallback")
 }
 
 func handlerWrapper(s *Spoa) func(req *request.Request) {
