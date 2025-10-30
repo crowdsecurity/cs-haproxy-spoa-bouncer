@@ -45,7 +45,6 @@ type Spoa struct {
 type SpoaConfig struct {
 	TcpAddr     string
 	UnixAddr    string
-	LogLevel    *log.Level
 	Dataset     *dataset.DataSet
 	HostManager *host.Manager
 	GeoDatabase *geo.GeoDatabase
@@ -61,10 +60,7 @@ func New(config *SpoaConfig) (*Spoa, error) {
 		workerLogger = log.WithField("component", "spoa")
 	}
 
-	// Apply log level if specified (for compatibility)
-	if config.LogLevel != nil {
-		workerLogger.Logger.SetLevel(*config.LogLevel)
-	}
+    // No worker-specific log level; inherits from parent logger
 
 	s := &Spoa{
 		HAWaitGroup: &sync.WaitGroup{},
