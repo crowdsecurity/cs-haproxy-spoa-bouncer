@@ -19,8 +19,7 @@ override_dh_auto_install:
 	install -D "$$BOUNCER" -t "debian/$$PKG/usr/bin/"; \
 	install -D "scripts/_bouncer.sh" -t "debian/$$PKG/usr/lib/$$PKG/"; \
 	install -D "config/$$BOUNCER.yaml" "debian/$$PKG/etc/crowdsec/bouncers/$$BOUNCER.yaml"; \
-	BIN="/usr/bin/$$BOUNCER" CFG="/etc/crowdsec/bouncers" envsubst '$$BIN $$CFG' < "config/$$BOUNCER.service" | install -D /dev/stdin "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"; \
-	install -D "config/$$BOUNCER-admin.socket" "debian/$$PKG/lib/systemd/system/$$BOUNCER-admin.socket"; \
+	BIN="/usr/bin/$$BOUNCER" CFG="/etc/crowdsec/bouncers" envsubst '$$BIN $$CFG' < "config/$$BOUNCER.service" > "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"
 	mkdir -p "debian/$$PKG/usr/lib/$$PKG/lua"; \
 	mkdir -p "debian/$$PKG/usr/share/doc/$$PKG/examples"; \
 	install -D "config/crowdsec.cfg" -t "debian/$$PKG/usr/share/doc/$$PKG/examples/"; \
@@ -36,7 +35,6 @@ execute_after_dh_fixperms:
 	@BOUNCER=crowdsec-spoa-bouncer; \
 	PKG="crowdsec-haproxy-spoa-bouncer"; \
 	chmod 0755 "debian/$$PKG/usr/bin/$$BOUNCER"; \
-	chmod 0640 "debian/$$PKG/usr/lib/$$PKG/_bouncer.sh"; \
-	chmod 0640 "debian/$$PKG/etc/crowdsec/bouncers/$$BOUNCER.yaml"; \
-	chmod 0644 "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"; \
-	chmod 0644 "debian/$$PKG/lib/systemd/system/$$BOUNCER-admin.socket"
+	chmod 0600 "debian/$$PKG/usr/lib/$$PKG/_bouncer.sh"; \
+	chmod 0600 "debian/$$PKG/etc/crowdsec/bouncers/$$BOUNCER.yaml"; \
+	chmod 0644 "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"

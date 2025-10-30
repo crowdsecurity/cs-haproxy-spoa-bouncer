@@ -195,7 +195,11 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		r = remediation.FromString(*rstring)
 		// Remediation came from IP check, already counted
 	} else {
-		s.logger.Info("ip remediation was not found in message, defaulting to allow")
+		// IP remediation not found - fallback to checking IP directly
+		// This handles cases where crowdsec-ip message didn't fire (e.g., on-client-session not triggered)
+		// Also handles upstream proxy mode where no IP check happened
+		s.logger.Debug("ip remediation was not found in message, checking IP directly")
+		s.checkIPRemediation(req, mes, &r)
 		// No IP check happened (e.g., upstream proxy mode), we need to count metrics
 		shouldCountMetrics = true
 	}
@@ -468,28 +472,10 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	// request.Header = headers
 }
 
-// Handles checking the IP address against the dataset
-func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
-	var r remediation.Remediation
-
-	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
-
-	if err != nil {
-		s.logger.Error(err)
-		return
-	}
-
-	ipStr := ipType.String()
-
-	// Determine IP type for metrics
-	ipTypeLabel := "ipv4"
-	if strings.Contains(ipStr, ":") {
-		ipTypeLabel = "ipv6"
-	}
-
-	// Count processed requests
-	metrics.TotalProcessedRequests.With(prometheus.Labels{"ip_type": ipTypeLabel}).Inc()
-
+// getIPRemediation performs IP and geo/country remediation checks
+// Returns the final remediation after checking IP, geo, and country
+func (s *Spoa) getIPRemediation(req *request.Request, ipStr string) (remediation.Remediation, string) {
+	var origin string
 	// Check IP directly against dataset
 	r, origin, err := s.dataset.CheckIP(ipStr)
 	if err != nil {
@@ -497,7 +483,7 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 			"ip":    ipStr,
 			"error": err,
 		}).Error("Failed to get IP remediation")
-		r = remediation.Allow // Safe default
+		return remediation.Allow, "" // Safe default
 	}
 
 	// If no IP-specific remediation, check country-based
@@ -524,6 +510,31 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 		}
 	}
 
+	return r, origin
+}
+
+// Handles checking the IP address against the dataset
+func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
+	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
+	if err != nil {
+		s.logger.Error(err)
+		return
+	}
+
+	ipStr := ipType.String()
+
+	// Determine IP type for metrics
+	ipTypeLabel := "ipv4"
+	if strings.Contains(ipStr, ":") {
+		ipTypeLabel = "ipv6"
+	}
+
+	// Count processed requests
+	metrics.TotalProcessedRequests.With(prometheus.Labels{"ip_type": ipTypeLabel}).Inc()
+
+	// Check IP directly against dataset
+	r, origin := s.getIPRemediation(req, ipStr)
+
 	// Count blocked requests
 	if r > remediation.Unknown {
 		metrics.TotalBlockedRequests.With(prometheus.Labels{
@@ -534,6 +545,24 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	}
 
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
+}
+
+// checkIPRemediation extracts IP from the message and checks remediation
+// Used as fallback when crowdsec-ip message didn't set remediation variable
+func (s *Spoa) checkIPRemediation(req *request.Request, mes *message.Message, r *remediation.Remediation) {
+	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
+	if err != nil {
+		s.logger.WithError(err).Debug("failed to extract src-ip from message for fallback check")
+		return
+	}
+
+	ipStr := ipType.String()
+	*r, _ = s.getIPRemediation(req, ipStr)
+
+	s.logger.WithFields(log.Fields{
+		"ip":          ipStr,
+		"remediation": r.String(),
+	}).Debug("IP remediation checked via fallback")
 }
 
 func handlerWrapper(s *Spoa) func(req *request.Request) {
