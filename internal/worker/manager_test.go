@@ -21,8 +21,9 @@ func getFreePort(t *testing.T) string {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer listener.Close()
-	addr := listener.Addr().(*net.TCPAddr)
-	return fmt.Sprintf("127.0.0.1:%d", addr.Port)
+    tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+    require.True(t, ok, "listener.Addr should be *net.TCPAddr")
+    return fmt.Sprintf("127.0.0.1:%d", tcpAddr.Port)
 }
 
 func TestNewManager(t *testing.T) {

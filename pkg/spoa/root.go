@@ -118,7 +118,6 @@ func (s *Spoa) Serve(ctx context.Context) error {
 		switch {
 		case errors.Is(err, net.ErrClosed):
 			// Server closed normally during shutdown
-			break
 		case err != nil:
 			serverError <- err
 		}
@@ -184,6 +183,8 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 // Handles checking the http request which has 2 stages
 // First stage is to check the host header and determine if the remediation from handleIpRequest is still valid
 // Second stage is to check if AppSec is enabled and then forward to the component if needed
+//
+//nolint:revive // function-length: complex HTTP request handler to be split with AppSec work
 func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	r := remediation.Allow
 	var origin string
