@@ -26,8 +26,7 @@ gen_apikey() {
 
 gen_config_file() {
     # shellcheck disable=SC2016
-    API_KEY=${API_KEY} envsubst '$API_KEY' <"./config/$CONFIG_FILE" | \
-        install -D -m 0640 -g crowdsec-spoa /dev/stdin "$CONFIG"
+    (umask 177 && API_KEY="$API_KEY" envsubst '$API_KEY' <"./config/$CONFIG_FILE" > "$CONFIG")
 }
 
 install_bouncer() {
@@ -39,30 +38,11 @@ install_bouncer() {
         msg err "$BIN_PATH_INSTALLED is already installed. Exiting"
         exit 1
     fi
-    
-    # Ensure crowdsec-spoa group exists
-    if ! getent group crowdsec-spoa >/dev/null 2>&1; then
-        msg info "Creating crowdsec-spoa group"
-        groupadd --system crowdsec-spoa || addgroup --system crowdsec-spoa
-    fi
-    
-    # Ensure crowdsec-spoa user exists
-    if ! getent passwd crowdsec-spoa >/dev/null 2>&1; then
-        msg info "Creating crowdsec-spoa user"
-        useradd --system --no-create-home --shell /sbin/nologin -g crowdsec-spoa crowdsec-spoa 2>/dev/null || \
-            adduser --system --no-create-home --shell /sbin/nologin --ingroup crowdsec-spoa crowdsec-spoa
-    fi
-    
     msg info "Installing $BOUNCER"
     install -v -m 0755 -D "$BIN_PATH" "$BIN_PATH_INSTALLED"
-    install -D -m 0640 -g crowdsec-spoa "./config/$CONFIG_FILE" "$CONFIG"
+    mkdir -p "$(dirname "$CONFIG")"
     # shellcheck disable=SC2016
     CFG=${CONFIG_DIR} BIN=${BIN_PATH_INSTALLED} envsubst '$CFG $BIN' <"./config/$SERVICE" >"$SYSTEMD_PATH_FILE"
-    # Install optional admin socket unit (disabled by default)
-    if [ -f "./config/$ADMIN_SOCKET" ]; then
-        msg info "Installing optional admin socket unit (disabled by default)"
-        install -D -m 0644 "./config/$ADMIN_SOCKET" "$SYSTEMD_ADMIN_SOCKET_FILE"
-    fi
     systemctl daemon-reload
     gen_apikey
     gen_config_file
@@ -87,13 +67,7 @@ fi
 
 echo "Configuration: $CONFIG"
 echo "Example configs: /usr/share/crowdsec/config/ (or ./config/ in source)"
-echo "Documentation: https://docs.crowdsec.net/u/bouncers/haproxy_spoa/"
+echo "Documentation: https://docs.crowdsec.net/u/bouncers/haproxy_spoa"
 echo ""
 echo "Start bouncer: systemctl enable --now $SERVICE"
-echo ""
-echo "Optional admin socket (disabled by default):"
-echo "  1. Uncomment 'admin_socket' in $CONFIG"
-echo "  2. Enable socket: systemctl enable $ADMIN_SOCKET"
-echo "  3. Restart service: systemctl restart $SERVICE"
-echo "  (Socket will be created and passed to the service on restart)"
 exit 0

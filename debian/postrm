@@ -2,7 +2,7 @@
 
 set -eu
 
-BOUNCER="crowdsec-haproxy-spoa-bouncer"
+BOUNCER="crowdsec-spoa-bouncer"
 CONFIG="/etc/crowdsec/bouncers/$BOUNCER.yaml"
 
 if [ "$1" = "purge" ]; then

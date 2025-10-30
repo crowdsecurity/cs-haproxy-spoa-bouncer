@@ -16,14 +16,14 @@ BOUNCER_PREFIX=$(echo "$BOUNCER" | sed 's/crowdsec-/cs-/g')
 # some environment variables with the functions. It's a matter of
 # readability balance between shorter vs cleaner code.
 
-if [ ! -t 0 ]; then
+if [ -n "${NO_COLOR-}" ] || [ ! -t 1 ]; then
     # terminal is not interactive; no colors
     FG_RED=""
     FG_GREEN=""
     FG_YELLOW=""
     FG_CYAN=""
     RESET=""
-elif tput sgr0 >/dev/null 2>&1; then
+elif [ -n "${TERM-}" ] && tput sgr0 >/dev/null 2>&1; then
     # terminfo
     FG_RED=$(tput setaf 1)
     FG_GREEN=$(tput setaf 2)
@@ -60,14 +60,12 @@ require() {
 # shellcheck disable=SC2034
 {
     SERVICE="$BOUNCER.service"
-    ADMIN_SOCKET="$BOUNCER-admin.socket"
     BIN_PATH_INSTALLED="/usr/bin/$BOUNCER"
     BIN_PATH="./$BOUNCER"
     CONFIG_DIR="/etc/crowdsec/bouncers"
     CONFIG_FILE="$BOUNCER.yaml"
     CONFIG="$CONFIG_DIR/$CONFIG_FILE"
     SYSTEMD_PATH_FILE="/etc/systemd/system/$SERVICE"
-    SYSTEMD_ADMIN_SOCKET_FILE="/etc/systemd/system/$ADMIN_SOCKET"
 }
 
 assert_root() {
@@ -126,9 +124,8 @@ set_config_var_value() {
     fi
 
     before=$(cat "$CONFIG")
-    echo "$before" |
-        env "$varname=$value" envsubst "\$$varname" |
-        install -m 0640 -g crowdsec-spoa /dev/stdin "$CONFIG"
+    (umask 177 && echo "$before" | \
+        env "$varname=$value" envsubst "\$$varname" >"$CONFIG")
 }
 
 set_api_key() {
