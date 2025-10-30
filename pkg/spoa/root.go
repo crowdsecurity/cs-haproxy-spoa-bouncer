@@ -117,7 +117,6 @@ func (s *Spoa) Serve(ctx context.Context) error {
 		switch {
 		case errors.Is(err, net.ErrClosed):
 			// Server closed normally during shutdown
-			break
 		case err != nil:
 			serverError <- err
 		}
@@ -178,6 +177,14 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 	case <-doneChan:
 		return nil
 	}
+}
+
+// HTTPRequestData holds parsed HTTP request data for reuse across handlers
+type HTTPRequestData struct {
+	URL     *string
+	Method  *string
+	Body    *[]byte
+	Headers http.Header
 }
 
 // Handles checking the http request which has 2 stages
@@ -255,10 +262,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		return
 	}
 
-	var url *string
-	var method *string
-	var body *[]byte
-	var headers http.Header
+	var httpData HTTPRequestData
 
 	switch r {
 	case remediation.Allow:
@@ -274,7 +278,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			unsetCookie, err := matchedHost.Captcha.CookieGenerator.GenerateUnsetCookie(ptr.Of(*ssl))
 			if err != nil {
 				s.logger.WithFields(log.Fields{
-					"host":  *hoststring,
+					"host":  matchedHost.Host,
 					"ssl":   ssl,
 					"error": err,
 				}).Error("Failed to generate unset cookie")
@@ -282,174 +286,24 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			}
 
 			s.logger.WithFields(log.Fields{
-				"host": *hoststring,
+				"host": matchedHost.Host,
 			}).Debug("Allow decision but captcha cookie present, will clear cookie")
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", unsetCookie.String())
 			// Note: We deliberately don't set captcha_status here
 		}
+		// Parse HTTP data for AppSec processing
+		httpData = parseHTTPData(mes)
 	case remediation.Ban:
 		//Handle ban
 		matchedHost.Ban.InjectKeyValues(&req.Actions)
+		// Parse HTTP data for AppSec processing
+		httpData = parseHTTPData(mes)
 	case remediation.Captcha:
-		if err := matchedHost.Captcha.InjectKeyValues(&req.Actions); err != nil {
-			r = remediation.FromString(matchedHost.Captcha.FallbackRemediation)
+		r, httpData = s.handleCaptchaRemediation(req, mes, matchedHost)
+		// If remediation changed to fallback, return early
+		// If it became Allow, continue for AppSec processing
+		if r != remediation.Captcha && r != remediation.Allow {
 			return
-		}
-
-		cookieB64, _ := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
-		uuid := ""
-
-		if cookieB64 != nil {
-			uuid, err = matchedHost.Captcha.CookieGenerator.ValidateCookie(*cookieB64)
-			if err != nil {
-				s.logger.WithFields(log.Fields{
-					"host":  *hoststring,
-					"error": err,
-				}).Warn("Failed to validate existing cookie")
-				uuid = "" // Reset to generate new cookie
-			}
-		}
-
-		if uuid == "" {
-			ssl, err := readKeyFromMessage[bool](mes, "ssl")
-
-			if err != nil {
-				s.logger.Error(err)
-			}
-
-			// Create a new session
-			ses, err := matchedHost.Captcha.Sessions.NewRandomSession()
-			if err != nil {
-				s.logger.WithFields(log.Fields{
-					"host":  *hoststring,
-					"error": err,
-				}).Error("Failed to create new session")
-				return // Cannot proceed without session
-			}
-
-			cookie, err := matchedHost.Captcha.CookieGenerator.GenerateCookie(ses, ssl)
-			if err != nil {
-				s.logger.WithFields(log.Fields{
-					"host":  *hoststring,
-					"ssl":   ssl,
-					"error": err,
-				}).Error("Failed to generate host cookie")
-				return // Cannot proceed without cookie
-			}
-
-			// Set initial captcha status to pending
-			ses.Set(session.CaptchaStatus, captcha.Pending)
-			uuid = ses.UUID
-
-			// Set the captcha cookie - status will be set later based on session state
-			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
-		}
-
-		if uuid == "" {
-			// We should never hit this but safety net
-			// As a fallback we set the remediation to the fallback remediation
-			s.logger.Error("failed to get uuid from cookie")
-			r = remediation.FromString(matchedHost.Captcha.FallbackRemediation)
-			return
-		}
-
-		url, err = readKeyFromMessage[string](mes, "url")
-
-		if err != nil {
-			s.logger.Errorf("failed to read url: %v", err)
-			return
-		}
-
-		// Get the session
-		ses := matchedHost.Captcha.Sessions.GetSession(uuid)
-		if ses == nil {
-			s.logger.WithFields(log.Fields{
-				"host":    *hoststring,
-				"session": uuid,
-			}).Warn("Session not found, cannot proceed with captcha")
-			r = remediation.FromString(matchedHost.Captcha.FallbackRemediation)
-			return
-		}
-
-		// Get the current captcha status from the session
-		val := ses.Get(session.CaptchaStatus)
-		if val == nil {
-			val = captcha.Pending // Assume pending if not set
-		}
-
-		// Set the captcha status in the transaction for HAProxy
-		req.Actions.SetVar(action.ScopeTransaction, "captcha_status", val)
-		if val != captcha.Valid {
-			// Update the incoming url if it is different from the stored url for the session ignore favicon requests
-			storedURL := ses.Get(session.URI)
-			if storedURL == nil {
-				storedURL = ""
-			}
-
-			if (storedURL == "" || url != nil && *url != storedURL) && !strings.HasSuffix(*url, ".ico") {
-				s.logger.WithField("session", uuid).Debugf("updating stored url %s", *url)
-				ses.Set(session.URI, *url)
-			}
-		}
-
-		method, err = readKeyFromMessage[string](mes, "method")
-		if err != nil {
-			s.logger.Errorf("failed to read method: %v", err)
-			return
-		}
-
-		headersType, err := readKeyFromMessage[string](mes, "headers")
-
-		if err != nil {
-			s.logger.Errorf("failed to read headers: %v", err)
-			return
-		}
-
-		headers, err = readHeaders(*headersType)
-
-		if err != nil {
-			s.logger.Errorf("failed to parse headers: %v", err)
-		}
-
-		// Check if the request is a captcha validation request
-		captchaStatus := ses.Get(session.CaptchaStatus)
-		if captchaStatus == nil {
-			captchaStatus = "" // Assume not pending if not set
-		}
-
-		if captchaStatus == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
-			body, err = readKeyFromMessage[[]byte](mes, "body")
-
-			if err != nil {
-				s.logger.Errorf("failed to read body: %v", err)
-				return
-			}
-
-			// Validate captcha
-			isValid, err := matchedHost.Captcha.Validate(context.Background(), uuid, string(*body))
-			if err != nil {
-				s.logger.WithFields(log.Fields{
-					"host":    *hoststring,
-					"session": uuid,
-					"error":   err,
-				}).Error("Failed to validate captcha")
-			} else if isValid {
-				ses.Set(session.CaptchaStatus, captcha.Valid)
-			}
-		}
-
-		// if the session has a valid captcha status we allow the request
-		finalStatus := ses.Get(session.CaptchaStatus)
-		if finalStatus == captcha.Valid {
-			r = remediation.Allow
-			// The captcha_status was already set above with the actual session status
-			storedURL := ses.Get(session.URI)
-			if storedURL != nil && storedURL != "" {
-				s.logger.Debug("redirecting to: ", storedURL)
-				req.Actions.SetVar(action.ScopeTransaction, "redirect", storedURL)
-				// Delete the URI from the session so we dont redirect loop
-				ses.Delete(session.URI)
-			}
 		}
 	}
 
@@ -457,19 +311,216 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	if r > remediation.Unknown && !matchedHost.AppSec.AlwaysSend {
 		return
 	}
-	// !TODO APPSEC STUFF
+	// !TODO APPSEC STUFF - httpData contains parsed URL, Method, Body, Headers for reuse
+	_ = httpData // Reserved for AppSec implementation
 
-	// headers, err := readHeaders(*headersType)
-	// if err != nil {
-	// 	log.Printf("failed to parse headers: %v", err)
-	// }
-
-	// request, err := http.NewRequest(method, url, strings.NewReader(body))
+	// request, err := http.NewRequest(httpData.Method, httpData.URL, strings.NewReader(httpData.Body))
 	// if err != nil {
 	// 	log.Printf("failed to create request: %v", err)
 	// 	return
 	// }
-	// request.Header = headers
+	// request.Header = httpData.Headers
+}
+
+// parseHTTPData extracts HTTP request data from the message for reuse in AppSec processing
+//
+//nolint:unparam // httpData will be used when AppSec is implemented
+func parseHTTPData(mes *message.Message) HTTPRequestData {
+	var httpData HTTPRequestData
+
+	url, err := readKeyFromMessage[string](mes, "url")
+	if err == nil {
+		httpData.URL = url
+	}
+
+	method, err := readKeyFromMessage[string](mes, "method")
+	if err == nil {
+		httpData.Method = method
+	}
+
+	headersType, err := readKeyFromMessage[string](mes, "headers")
+	if err == nil {
+		headers, err := readHeaders(*headersType)
+		if err == nil {
+			httpData.Headers = headers
+		}
+	}
+
+	body, err := readKeyFromMessage[[]byte](mes, "body")
+	if err == nil {
+		httpData.Body = body
+	}
+
+	return httpData
+}
+
+// handleCaptchaRemediation handles all captcha-related logic including cookie validation,
+// session management, captcha validation, and status updates.
+// Returns the remediation and parsed HTTP request data for reuse in AppSec processing.
+func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Message, matchedHost *host.Host) (remediation.Remediation, HTTPRequestData) {
+	if err := matchedHost.Captcha.InjectKeyValues(&req.Actions); err != nil {
+		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
+	}
+
+	cookieB64, _ := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
+	uuid := ""
+
+	if cookieB64 != nil {
+		var err error
+		uuid, err = matchedHost.Captcha.CookieGenerator.ValidateCookie(*cookieB64)
+		if err != nil {
+			s.logger.WithFields(log.Fields{
+				"host":  matchedHost.Host,
+				"error": err,
+			}).Warn("Failed to validate existing cookie")
+			uuid = "" // Reset to generate new cookie
+		}
+	}
+
+	if uuid == "" {
+		ssl, err := readKeyFromMessage[bool](mes, "ssl")
+		if err != nil {
+			s.logger.Error(err)
+		}
+
+		// Create a new session
+		ses, err := matchedHost.Captcha.Sessions.NewRandomSession()
+		if err != nil {
+			s.logger.WithFields(log.Fields{
+				"host":  matchedHost.Host,
+				"error": err,
+			}).Error("Failed to create new session")
+			return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
+		}
+
+		cookie, err := matchedHost.Captcha.CookieGenerator.GenerateCookie(ses, ssl)
+		if err != nil {
+			s.logger.WithFields(log.Fields{
+				"host":  matchedHost.Host,
+				"ssl":   ssl,
+				"error": err,
+			}).Error("Failed to generate host cookie")
+			return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
+		}
+
+		// Set initial captcha status to pending
+		ses.Set(session.CaptchaStatus, captcha.Pending)
+		uuid = ses.UUID
+
+		// Set the captcha cookie - status will be set later based on session state
+		req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
+	}
+
+	if uuid == "" {
+		// We should never hit this but safety net
+		// As a fallback we set the remediation to the fallback remediation
+		s.logger.Error("failed to get uuid from cookie")
+		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
+	}
+
+	url, err := readKeyFromMessage[string](mes, "url")
+	if err != nil {
+		s.logger.Errorf("failed to read url: %v", err)
+		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
+	}
+
+	// Get the session
+	ses := matchedHost.Captcha.Sessions.GetSession(uuid)
+	if ses == nil {
+		s.logger.WithFields(log.Fields{
+			"host":    matchedHost.Host,
+			"session": uuid,
+		}).Warn("Session not found, cannot proceed with captcha")
+		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
+	}
+
+	// Get the current captcha status from the session
+	val := ses.Get(session.CaptchaStatus)
+	if val == nil {
+		val = captcha.Pending // Assume pending if not set
+	}
+
+	// Set the captcha status in the transaction for HAProxy
+	req.Actions.SetVar(action.ScopeTransaction, "captcha_status", val)
+	if val != captcha.Valid {
+		// Update the incoming url if it is different from the stored url for the session ignore favicon requests
+		storedURL := ses.Get(session.URI)
+		if storedURL == nil {
+			storedURL = ""
+		}
+
+		if (storedURL == "" || url != nil && *url != storedURL) && !strings.HasSuffix(*url, ".ico") {
+			s.logger.WithField("session", uuid).Debugf("updating stored url %s", *url)
+			ses.Set(session.URI, *url)
+		}
+	}
+
+	method, err := readKeyFromMessage[string](mes, "method")
+	if err != nil {
+		s.logger.Errorf("failed to read method: %v", err)
+		return remediation.Captcha, HTTPRequestData{URL: url} // Return partial data
+	}
+
+	headersType, err := readKeyFromMessage[string](mes, "headers")
+	if err != nil {
+		s.logger.Errorf("failed to read headers: %v", err)
+		return remediation.Captcha, HTTPRequestData{URL: url, Method: method} // Return partial data
+	}
+
+	headers, err := readHeaders(*headersType)
+	if err != nil {
+		s.logger.Errorf("failed to parse headers: %v", err)
+	}
+
+	httpData := HTTPRequestData{
+		URL:     url,
+		Method:  method,
+		Headers: headers,
+	}
+
+	// Check if the request is a captcha validation request
+	captchaStatus := ses.Get(session.CaptchaStatus)
+	if captchaStatus == nil {
+		captchaStatus = "" // Assume not pending if not set
+	}
+
+	if captchaStatus == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
+		body, err := readKeyFromMessage[[]byte](mes, "body")
+		if err != nil {
+			s.logger.Errorf("failed to read body: %v", err)
+			return remediation.Captcha, httpData // Return data without body
+		}
+
+		httpData.Body = body
+
+		// Validate captcha
+		isValid, err := matchedHost.Captcha.Validate(context.Background(), uuid, string(*body))
+		if err != nil {
+			s.logger.WithFields(log.Fields{
+				"host":    matchedHost.Host,
+				"session": uuid,
+				"error":   err,
+			}).Error("Failed to validate captcha")
+		} else if isValid {
+			ses.Set(session.CaptchaStatus, captcha.Valid)
+		}
+	}
+
+	// if the session has a valid captcha status we allow the request
+	finalStatus := ses.Get(session.CaptchaStatus)
+	if finalStatus == captcha.Valid {
+		// The captcha_status was already set above with the actual session status
+		storedURL := ses.Get(session.URI)
+		if storedURL != nil && storedURL != "" {
+			s.logger.Debug("redirecting to: ", storedURL)
+			req.Actions.SetVar(action.ScopeTransaction, "redirect", storedURL)
+			// Delete the URI from the session so we dont redirect loop
+			ses.Delete(session.URI)
+		}
+		return remediation.Allow, httpData
+	}
+
+	return remediation.Captcha, httpData
 }
 
 // getIPRemediation performs IP and geo/country remediation checks
