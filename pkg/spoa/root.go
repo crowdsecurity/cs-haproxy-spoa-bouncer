@@ -45,7 +45,6 @@ type Spoa struct {
 type SpoaConfig struct {
 	TcpAddr     string
 	UnixAddr    string
-	Name        string
 	LogLevel    *log.Level
 	Dataset     *dataset.DataSet
 	HostManager *host.Manager
@@ -57,9 +56,9 @@ func New(config *SpoaConfig) (*Spoa, error) {
 	// Use provided logger or fallback to standard logger
 	var workerLogger *log.Entry
 	if config.Logger != nil {
-		workerLogger = config.Logger.WithField("worker", config.Name)
+		workerLogger = config.Logger
 	} else {
-		workerLogger = log.WithField("worker", config.Name)
+		workerLogger = log.WithField("component", "spoa")
 	}
 
 	// Apply log level if specified (for compatibility)

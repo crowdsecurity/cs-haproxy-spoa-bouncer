@@ -7,7 +7,6 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	cslogging "github.com/crowdsecurity/crowdsec-spoa/pkg/logging"
 	"github.com/crowdsecurity/go-cs-lib/yamlpatch"
@@ -24,7 +23,8 @@ type BouncerConfig struct {
 	Hosts            []*host.Host            `yaml:"hosts"`
 	HostsDir         string                  `yaml:"hosts_dir"`
 	Geo              geo.GeoDatabase         `yaml:",inline"`
-	Workers          []*worker.WorkerConfig  `yaml:"workers"`
+	ListenTCP        string                  `yaml:"listen_tcp"`
+	ListenUnix       string                  `yaml:"listen_unix"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
 	AdminSocket      string                  `yaml:"admin_socket"`
 }

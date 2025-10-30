@@ -13,12 +13,10 @@ api_url: http://127.0.0.1:8080/
 api_key: ${API_KEY}
 insecure_skip_verify: false
 
-## SPOA configuration
-# Workers run as goroutines within the main process
-workers:
-  - name: spoa1
-    listen_addr: 0.0.0.0:9000
-    listen_socket: /run/crowdsec-spoa/spoa-1.sock
+## SPOA listener configuration
+# Configure TCP and/or Unix socket listeners
+listen_tcp: 0.0.0.0:9000
+listen_unix: /run/crowdsec-spoa/spoa.sock
 #asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
 #city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
 

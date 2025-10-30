@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -18,11 +19,11 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/admin"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/spoa"
 	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
 	"github.com/crowdsecurity/go-cs-lib/csdaemon"
 	"github.com/crowdsecurity/go-cs-lib/csstring"
@@ -200,26 +201,30 @@ func Execute() error {
 		}
 	}
 
-	// Create worker manager for goroutine-based workers
-	workerLogger := log.WithField("component", "worker")
-	workerManager := worker.NewManager(ctx, dataSet, HostManager, &config.Geo, workerLogger)
+	// Create single SPOA listener - ultra-simplified architecture
+	spoaLogger := log.WithField("component", "spoa")
 
-	// Add all workers as goroutines
-	for _, w := range config.Workers {
-		workerConfig := worker.WorkerConfig{
-			Name:     w.Name,
-			LogLevel: w.LogLevel,
-			TcpAddr:  w.TcpAddr,
-			UnixAddr: w.UnixAddr,
-		}
-		if err := workerManager.AddWorker(workerConfig); err != nil {
-			return fmt.Errorf("failed to add worker %s: %w", w.Name, err)
-		}
+	// Create single SPOA directly with minimal configuration
+	spoaConfig := &spoa.SpoaConfig{
+		TcpAddr:     config.ListenTCP,
+		UnixAddr:    config.ListenUnix,
+		Dataset:     dataSet,
+		HostManager: HostManager,
+		GeoDatabase: &config.Geo,
+		Logger:      spoaLogger,
 	}
 
-	// Wait for all workers in errgroup
+	singleSpoa, err := spoa.New(spoaConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create SPOA listener: %w", err)
+	}
+
+	// Launch single SPOA server directly
 	g.Go(func() error {
-		return workerManager.Wait()
+		if err := singleSpoa.Serve(ctx); err != nil {
+			return fmt.Errorf("SPOA server failed: %w", err)
+		}
+		return nil
 	})
 
 	// Admin server will inherit root logger and log level via its fallback
@@ -244,15 +249,33 @@ func Execute() error {
 
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
 
-	if err := g.Wait(); err != nil {
+	err = g.Wait()
+
+	// Determine if this was an expected shutdown signal
+	isExpectedShutdown := false
+	if err != nil {
 		switch err.Error() {
 		case "received SIGTERM":
 			log.Info("Received SIGTERM, shutting down")
+			isExpectedShutdown = true
 		case "received interrupt":
 			log.Info("Received interrupt, shutting down")
-		default:
-			return err
+			isExpectedShutdown = true
 		}
+	}
+
+	// Shutdown SPOA server gracefully after all goroutines finish
+	log.Info("Shutting down SPOA listener")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if shutdownErr := singleSpoa.Shutdown(shutdownCtx); shutdownErr != nil {
+		log.Errorf("Failed to shutdown SPOA: %v", shutdownErr)
+	}
+
+	// Return error only if it was unexpected
+	if err != nil && !isExpectedShutdown {
+		return err
 	}
 
 	return nil
