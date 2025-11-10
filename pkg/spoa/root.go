@@ -17,7 +17,6 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
-	"github.com/crowdsecurity/go-cs-lib/ptr"
 	"github.com/negasus/haproxy-spoe-go/action"
 	"github.com/negasus/haproxy-spoe-go/agent"
 	"github.com/negasus/haproxy-spoe-go/message"
@@ -60,7 +59,7 @@ func New(config *SpoaConfig) (*Spoa, error) {
 		workerLogger = log.WithField("component", "spoa")
 	}
 
-    // No worker-specific log level; inherits from parent logger
+	// No worker-specific log level; inherits from parent logger
 
 	s := &Spoa{
 		HAWaitGroup: &sync.WaitGroup{},
@@ -201,7 +200,10 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		// IP remediation not found - fallback to checking IP directly
 		// This handles cases where crowdsec-ip message didn't fire (e.g., on-client-session not triggered)
 		// Also handles upstream proxy mode where no IP check happened
-		s.logger.Debug("ip remediation was not found in message, checking IP directly")
+		s.logger.WithFields(log.Fields{
+			"error": err,
+			"key":   "remediation",
+		}).Debug("remediation key not found in message (expected from crowdsec-ip message), checking IP directly as fallback")
 		s.checkIPRemediation(req, mes, &r)
 		// No IP check happened (e.g., upstream proxy mode), we need to count metrics
 		shouldCountMetrics = true
@@ -226,6 +228,11 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			ipStr := ""
 			if srcIP, err := readKeyFromMessage[net.IP](mes, "src-ip"); err == nil {
 				ipStr = srcIP.String()
+			} else {
+				s.logger.WithFields(log.Fields{
+					"error": err,
+					"key":   "src-ip",
+				}).Warn("failed to read src-ip from message for metrics, using empty IP string")
 			}
 
 			ipTypeLabel := "ipv4"
@@ -248,6 +255,10 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	}()
 
 	if err != nil {
+		s.logger.WithFields(log.Fields{
+			"error": err,
+			"key":   "host",
+		}).Warn("failed to read host header from message, cannot match host configuration - ensure HAProxy is sending the 'host' variable in crowdsec-http message")
 		return
 	}
 
@@ -264,14 +275,23 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	case remediation.Allow:
 		// If user has a captcha cookie but decision is Allow, generate unset cookie
 		// We don't set captcha_status, so HAProxy knows to clear the cookie
-		cookieB64, _ := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
+		cookieB64, err := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
+		if err != nil {
+			s.logger.WithFields(log.Fields{
+				"error": err,
+				"key":   "crowdsec_captcha_cookie",
+			}).Debug("failed to read captcha cookie from message (cookie may not be present, which is expected)")
+		}
 		if cookieB64 != nil {
 			ssl, err := readKeyFromMessage[bool](mes, "ssl")
 			if err != nil {
-				s.logger.Error(err)
+				s.logger.WithFields(log.Fields{
+					"error": err,
+					"key":   "ssl",
+				}).Warn("failed to read ssl flag from message, cookie secure flag will default to false - ensure HAProxy is sending the 'ssl_fc' variable as 'ssl' in crowdsec-http message")
 			}
 
-			unsetCookie, err := matchedHost.Captcha.CookieGenerator.GenerateUnsetCookie(ptr.Of(*ssl))
+			unsetCookie, err := matchedHost.Captcha.CookieGenerator.GenerateUnsetCookie(ssl)
 			if err != nil {
 				s.logger.WithFields(log.Fields{
 					"host":  matchedHost.Host,
@@ -327,11 +347,21 @@ func parseHTTPData(mes *message.Message) HTTPRequestData {
 	url, err := readKeyFromMessage[string](mes, "url")
 	if err == nil {
 		httpData.URL = url
+	} else {
+		log.WithFields(log.Fields{
+			"error": err,
+			"key":   "url",
+		}).Debug("failed to read url from message for AppSec processing - ensure HAProxy is sending the 'url' variable in crowdsec-http message")
 	}
 
 	method, err := readKeyFromMessage[string](mes, "method")
 	if err == nil {
 		httpData.Method = method
+	} else {
+		log.WithFields(log.Fields{
+			"error": err,
+			"key":   "method",
+		}).Debug("failed to read method from message for AppSec processing - ensure HAProxy is sending the 'method' variable in crowdsec-http message")
 	}
 
 	headersType, err := readKeyFromMessage[string](mes, "headers")
@@ -339,12 +369,27 @@ func parseHTTPData(mes *message.Message) HTTPRequestData {
 		headers, err := readHeaders(*headersType)
 		if err == nil {
 			httpData.Headers = headers
+		} else {
+			log.WithFields(log.Fields{
+				"error": err,
+				"key":   "headers",
+			}).Debug("failed to parse headers from message for AppSec processing")
 		}
+	} else {
+		log.WithFields(log.Fields{
+			"error": err,
+			"key":   "headers",
+		}).Debug("failed to read headers from message for AppSec processing - ensure HAProxy is sending the 'headers' variable in crowdsec-http message")
 	}
 
 	body, err := readKeyFromMessage[[]byte](mes, "body")
 	if err == nil {
 		httpData.Body = body
+	} else {
+		log.WithFields(log.Fields{
+			"error": err,
+			"key":   "body",
+		}).Debug("failed to read body from message for AppSec processing - ensure HAProxy is sending the 'body' variable in crowdsec-http message")
 	}
 
 	return httpData
@@ -358,8 +403,15 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
 	}
 
-	cookieB64, _ := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
+	cookieB64, err := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
+	if err != nil {
+		s.logger.WithFields(log.Fields{
+			"error": err,
+			"key":   "crowdsec_captcha_cookie",
+		}).Debug("failed to read captcha cookie from message (cookie may not be present, which is expected for new sessions)")
+	}
 	uuid := ""
+	var ses *session.Session
 
 	if cookieB64 != nil {
 		var err error
@@ -376,11 +428,14 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 	if uuid == "" {
 		ssl, err := readKeyFromMessage[bool](mes, "ssl")
 		if err != nil {
-			s.logger.Error(err)
+			s.logger.WithFields(log.Fields{
+				"error": err,
+				"key":   "ssl",
+			}).Warn("failed to read ssl flag from message, cookie secure flag will default to false - ensure HAProxy is sending the 'ssl_fc' variable as 'ssl' in crowdsec-http message")
 		}
 
 		// Create a new session
-		ses, err := matchedHost.Captcha.Sessions.NewRandomSession()
+		ses, err = matchedHost.Captcha.Sessions.NewRandomSession()
 		if err != nil {
 			s.logger.WithFields(log.Fields{
 				"host":  matchedHost.Host,
@@ -416,36 +471,43 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 
 	url, err := readKeyFromMessage[string](mes, "url")
 	if err != nil {
-		s.logger.Errorf("failed to read url: %v", err)
-		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
-	}
-
-	// Get the session
-	ses := matchedHost.Captcha.Sessions.GetSession(uuid)
-	if ses == nil {
 		s.logger.WithFields(log.Fields{
-			"host":    matchedHost.Host,
-			"session": uuid,
-		}).Warn("Session not found, cannot proceed with captcha")
+			"error": err,
+			"key":   "url",
+			"host":  matchedHost.Host,
+		}).Error("failed to read url from message, cannot proceed with captcha remediation - ensure HAProxy is sending the 'url' variable in crowdsec-http message")
 		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
 	}
 
-	// Get the current captcha status from the session
-	val := ses.Get(session.CaptchaStatus)
-	if val == nil {
-		val = captcha.Pending // Assume pending if not set
+	// Get the session only if we didn't just create it (i.e., we have an existing cookie)
+	if ses == nil {
+		ses = matchedHost.Captcha.Sessions.GetSession(uuid)
+		if ses == nil {
+			s.logger.WithFields(log.Fields{
+				"host":    matchedHost.Host,
+				"session": uuid,
+			}).Warn("Session not found, cannot proceed with captcha")
+			return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
+		}
+	}
+
+	// Get the current captcha status from the session (cache it to avoid redundant fetches)
+	captchaStatus := ses.Get(session.CaptchaStatus)
+	if captchaStatus == nil {
+		captchaStatus = captcha.Pending // Assume pending if not set
 	}
 
 	// Set the captcha status in the transaction for HAProxy
-	req.Actions.SetVar(action.ScopeTransaction, "captcha_status", val)
-	if val != captcha.Valid {
+	req.Actions.SetVar(action.ScopeTransaction, "captcha_status", captchaStatus)
+	if captchaStatus != captcha.Valid {
 		// Update the incoming url if it is different from the stored url for the session ignore favicon requests
 		storedURL := ses.Get(session.URI)
 		if storedURL == nil {
 			storedURL = ""
 		}
 
-		if (storedURL == "" || url != nil && *url != storedURL) && !strings.HasSuffix(*url, ".ico") {
+		// Check url is not nil before dereferencing
+		if url != nil && (storedURL == "" || *url != storedURL) && !strings.HasSuffix(*url, ".ico") {
 			s.logger.WithField("session", uuid).Debugf("updating stored url %s", *url)
 			ses.Set(session.URI, *url)
 		}
@@ -453,13 +515,21 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 
 	method, err := readKeyFromMessage[string](mes, "method")
 	if err != nil {
-		s.logger.Errorf("failed to read method: %v", err)
+		s.logger.WithFields(log.Fields{
+			"error": err,
+			"key":   "method",
+			"host":  matchedHost.Host,
+		}).Error("failed to read method from message, cannot validate captcha form submission - ensure HAProxy is sending the 'method' variable in crowdsec-http message")
 		return remediation.Captcha, HTTPRequestData{URL: url} // Return partial data
 	}
 
 	headersType, err := readKeyFromMessage[string](mes, "headers")
 	if err != nil {
-		s.logger.Errorf("failed to read headers: %v", err)
+		s.logger.WithFields(log.Fields{
+			"error": err,
+			"key":   "headers",
+			"host":  matchedHost.Host,
+		}).Error("failed to read headers from message, cannot validate captcha form submission - ensure HAProxy is sending the 'headers' variable in crowdsec-http message")
 		return remediation.Captcha, HTTPRequestData{URL: url, Method: method} // Return partial data
 	}
 
@@ -475,15 +545,15 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 	}
 
 	// Check if the request is a captcha validation request
-	captchaStatus := ses.Get(session.CaptchaStatus)
-	if captchaStatus == nil {
-		captchaStatus = "" // Assume not pending if not set
-	}
-
 	if captchaStatus == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
 		body, err := readKeyFromMessage[[]byte](mes, "body")
 		if err != nil {
-			s.logger.Errorf("failed to read body: %v", err)
+			s.logger.WithFields(log.Fields{
+				"error":   err,
+				"key":     "body",
+				"host":    matchedHost.Host,
+				"session": uuid,
+			}).Error("failed to read body from message, cannot validate captcha response - ensure HAProxy is sending the 'body' variable in crowdsec-http message for POST requests")
 			return remediation.Captcha, httpData // Return data without body
 		}
 
@@ -499,13 +569,12 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 			}).Error("Failed to validate captcha")
 		} else if isValid {
 			ses.Set(session.CaptchaStatus, captcha.Valid)
+			captchaStatus = captcha.Valid // Update cached value
 		}
 	}
 
 	// if the session has a valid captcha status we allow the request
-	finalStatus := ses.Get(session.CaptchaStatus)
-	if finalStatus == captcha.Valid {
-		// The captcha_status was already set above with the actual session status
+	if captchaStatus == captcha.Valid {
 		storedURL := ses.Get(session.URI)
 		if storedURL != nil && storedURL != "" {
 			s.logger.Debug("redirecting to: ", storedURL)
@@ -564,7 +633,10 @@ func (s *Spoa) getIPRemediation(req *request.Request, ipStr string) (remediation
 func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
 	if err != nil {
-		s.logger.Error(err)
+		s.logger.WithFields(log.Fields{
+			"error": err,
+			"key":   "src-ip",
+		}).Error("failed to read src-ip from message, cannot check IP remediation - ensure HAProxy is sending the 'src' variable as 'src-ip' in crowdsec-ip message")
 		return
 	}
 
@@ -599,7 +671,10 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 func (s *Spoa) checkIPRemediation(req *request.Request, mes *message.Message, r *remediation.Remediation) {
 	ipType, err := readKeyFromMessage[net.IP](mes, "src-ip")
 	if err != nil {
-		s.logger.WithError(err).Debug("failed to extract src-ip from message for fallback check")
+		s.logger.WithFields(log.Fields{
+			"error": err,
+			"key":   "src-ip",
+		}).Debug("failed to extract src-ip from message for fallback IP check - ensure HAProxy is sending the 'src' variable as 'src-ip' in crowdsec-http message")
 		return
 	}
 
