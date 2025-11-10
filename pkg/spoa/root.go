@@ -52,6 +52,14 @@ type SpoaConfig struct {
 }
 
 func New(config *SpoaConfig) (*Spoa, error) {
+	if config == nil {
+		return nil, fmt.Errorf("spoa configuration is nil")
+	}
+
+	if config.TcpAddr == "" && config.UnixAddr == "" {
+		return nil, fmt.Errorf("at least one listener must be configured: set listen_tcp or listen_unix")
+	}
+
 	// Use provided logger or fallback to standard logger
 	var workerLogger *log.Entry
 	if config.Logger != nil {

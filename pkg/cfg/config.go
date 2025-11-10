@@ -58,5 +58,21 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 		return nil, fmt.Errorf("failed to setup logging: %w", err)
 	}
 
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+
 	return config, nil
+}
+
+func (c *BouncerConfig) Validate() error {
+	if c == nil {
+		return fmt.Errorf("configuration is nil")
+	}
+
+	if c.ListenTCP == "" && c.ListenUnix == "" {
+		return fmt.Errorf("configuration requires at least one listener: set listen_tcp or listen_unix")
+	}
+
+	return nil
 }
