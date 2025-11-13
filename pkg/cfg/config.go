@@ -26,7 +26,6 @@ type BouncerConfig struct {
 	ListenTCP        string                  `yaml:"listen_tcp"`
 	ListenUnix       string                  `yaml:"listen_unix"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
-	AdminSocket      string                  `yaml:"admin_socket"`
 }
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).
