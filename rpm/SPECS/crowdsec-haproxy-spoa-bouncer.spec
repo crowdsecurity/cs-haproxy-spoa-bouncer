@@ -37,7 +37,7 @@ mkdir -p %{buildroot}%{_libdir}/%{name}
 mkdir -p %{buildroot}%{_localstatedir}/lib/%{name}/html
 mkdir -p %{buildroot}%{_docdir}/examples
 install -m 755 -D %{binary_name} %{buildroot}%{_bindir}/%{binary_name}
-install -m 600 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
+install -m 640 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
 install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{name}/_bouncer.sh
 install -m 644 -D config/crowdsec.cfg %{buildroot}/%{_docdir}/%{name}/examples/crowdsec.cfg
 install -m 644 -D config/haproxy.cfg %{buildroot}/%{_docdir}/%{name}/examples/haproxy.cfg
@@ -100,6 +100,10 @@ if ! getent passwd crowdsec-spoa >/dev/null; then
     adduser --system --no-create-home --shell /sbin/nologin crowdsec-spoa
 fi
 
+# Set config file group ownership (matches Debian postinst)
+if [ -f "$CONFIG" ]; then
+    chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
+fi
 
 if [ -d "/etc/haproxy" ]; then
     cp /usr/share/doc/%{name}/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg

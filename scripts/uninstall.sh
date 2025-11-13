@@ -14,7 +14,10 @@ uninstall() {
     rm -f "$CONFIG"
     rm -f "$SYSTEMD_PATH_FILE"
     rm -f "$BIN_PATH_INSTALLED"
-    rm -f "/var/log/$BOUNCER.log"
+    # Clean up log files
+    rm -f "/var/log/$BOUNCER.log"*  # Legacy location
+    rm -rf "/var/log/crowdsec-spoa"  # New location
+    systemctl daemon-reload || true
 }
 
 uninstall

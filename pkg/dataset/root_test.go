@@ -163,7 +163,9 @@ func TestDataSet(t *testing.T) {
 			var origin string
 			switch tt.toCheck.Scope {
 			case "IP":
-				r, origin, err = dataSet.CheckIP(tt.toCheck.Value)
+				addr, parseErr := netip.ParseAddr(tt.toCheck.Value)
+				require.NoError(t, parseErr)
+				r, origin, err = dataSet.CheckIP(addr)
 			case "Country":
 				r, origin = dataSet.CheckCN(tt.toCheck.Value)
 			default:

@@ -3,14 +3,10 @@ package cfg
 import (
 	"fmt"
 	"io"
-	"os/user"
-	"strconv"
-	"strings"
 
 	"gopkg.in/yaml.v2"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	cslogging "github.com/crowdsecurity/crowdsec-spoa/pkg/logging"
 	"github.com/crowdsecurity/go-cs-lib/csyaml"
@@ -27,14 +23,9 @@ type BouncerConfig struct {
 	Hosts            []*host.Host            `yaml:"hosts"`
 	HostsDir         string                  `yaml:"hosts_dir"`
 	Geo              geo.GeoDatabase         `yaml:",inline"`
-	Workers          []*worker.Worker        `yaml:"workers"`
-	WorkerUser       string                  `yaml:"worker_user"`
-	WorkerGroup      string                  `yaml:"worker_group"`
+	ListenTCP        string                  `yaml:"listen_tcp"`
+	ListenUnix       string                  `yaml:"listen_unix"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
-	AdminSocket      string                  `yaml:"admin_socket"`
-	WorkerSocketDir  string                  `yaml:"worker_socket"`
-	WorkerUid        int                     `yaml:"-"`
-	WorkerGid        int                     `yaml:"-"`
 }
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).
@@ -66,33 +57,21 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 		return nil, fmt.Errorf("failed to setup logging: %w", err)
 	}
 
-	u, err := user.Lookup(config.WorkerUser)
-	if err != nil {
-		return nil, fmt.Errorf("failed to lookup user %s: %w", config.WorkerUser, err)
-	}
-
-	config.WorkerUid, err = strconv.Atoi(u.Uid)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert uid %s: %w", u.Uid, err)
-	}
-
-	g, err := user.LookupGroup(config.WorkerGroup)
-	if err != nil {
-		return nil, fmt.Errorf("failed to lookup group %s: %w", config.WorkerGroup, err)
-	}
-
-	config.WorkerGid, err = strconv.Atoi(g.Gid)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert gid %s: %w", g.Gid, err)
-	}
-
-	if config.WorkerSocketDir == "" {
-		config.WorkerSocketDir = "/run/"
-	}
-
-	if !strings.HasSuffix(config.WorkerSocketDir, "/") {
-		config.WorkerSocketDir = config.WorkerSocketDir + "/"
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 
 	return config, nil
+}
+
+func (c *BouncerConfig) Validate() error {
+	if c == nil {
+		return fmt.Errorf("configuration is nil")
+	}
+
+	if c.ListenTCP == "" && c.ListenUnix == "" {
+		return fmt.Errorf("configuration requires at least one listener: set listen_tcp or listen_unix")
+	}
+
+	return nil
 }

@@ -22,6 +22,11 @@ if ! getent passwd crowdsec-spoa >/dev/null; then
     adduser crowdsec-spoa --system --group --comment "crowdsec haproxy spoa bouncer"
 fi
 
+# Set config file group ownership
+if [ -f "$CONFIG" ]; then
+    chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
+fi
+
 if [ -d "/etc/haproxy" ]; then
     cp /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
 fi
