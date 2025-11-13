@@ -14,6 +14,10 @@ COPY --from=build /go/src/cs-spoa-bouncer/crowdsec-spoa-bouncer /usr/local/bin/c
 COPY --from=build /go/src/cs-spoa-bouncer/config/crowdsec-spoa-bouncer.yaml /etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml
 COPY --from=build /go/src/cs-spoa-bouncer/docker/docker_start.sh /docker_start.sh
 
+# Set permissions for config file and binary
+RUN chmod 644 /etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml && \
+    chmod 755 /usr/local/bin/crowdsec-spoa-bouncer
+
 ## Add socat
 RUN apk add --no-cache socat
 ## Add the same haproxy user as the official haproxy image
@@ -37,5 +41,7 @@ VOLUME [ "/usr/local/crowdsec/lua/haproxy/", "/var/lib/crowdsec/lua/haproxy/temp
 
 RUN chmod +x /docker_start.sh
 
+# Run as user
+USER crowdsec-spoa
 
 ENTRYPOINT ["/docker_start.sh"]
