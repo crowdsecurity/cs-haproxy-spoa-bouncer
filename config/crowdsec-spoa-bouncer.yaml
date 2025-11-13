@@ -20,17 +20,6 @@ listen_unix: /run/crowdsec-spoa/spoa.sock
 #asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
 #city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
 
-# Admin socket (optional) - Enables root-only management access
-# 
-# For Docker: Uncomment the line below to enable admin socket
-# For systemd: Do NOT uncomment - use the socket unit instead:
-#   1. systemctl stop crowdsec-spoa-bouncer.service
-#   2. systemctl enable --now crowdsec-spoa-bouncer-admin.socket
-#   3. systemctl start crowdsec-spoa-bouncer.service
-#
-#admin_socket: /run/crowdsec-spoa/admin.sock
-
-
 prometheus:
   enabled: false
   listen_addr: 127.0.0.1

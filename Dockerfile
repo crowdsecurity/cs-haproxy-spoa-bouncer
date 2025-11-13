@@ -37,8 +37,5 @@ VOLUME [ "/usr/local/crowdsec/lua/haproxy/", "/var/lib/crowdsec/lua/haproxy/temp
 
 RUN chmod +x /docker_start.sh
 
-# Note: Container runs as root. In container environments, the security boundary
-# is the container itself. On host systems, use systemd service which runs as crowdsec-spoa.
-# The admin socket requires root access for SO_PEERCRED verification.
 
 ENTRYPOINT ["/docker_start.sh"]

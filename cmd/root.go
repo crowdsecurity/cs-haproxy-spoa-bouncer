@@ -18,7 +18,6 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/admin"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
@@ -226,26 +225,6 @@ func Execute() error {
 		}
 		return nil
 	})
-
-	// Admin server will inherit root logger and log level via its fallback
-
-	// Setup admin socket (systemd activation or config-based)
-	adminServer, err := admin.NewServer(ctx, admin.Config{
-		SocketPath:  config.AdminSocket,
-		HostManager: HostManager,
-		Dataset:     dataSet,
-		GeoDatabase: &config.Geo,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create admin server: %w", err)
-	}
-
-	// Start admin server if it has listeners
-	if adminServer.HasListeners() {
-		g.Go(func() error {
-			return adminServer.Run()
-		})
-	}
 
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
 
