@@ -92,7 +92,8 @@ func New(config *SpoaConfig) (*Spoa, error) {
 
 		// Set umask to 0o117 (result: 0o660 permissions)
 		// Socket inherits group ownership from parent directory if setgid bit is set
-		// To set this: chmod g+s /run/crowdsec-spoa && chgrp haproxy /run/crowdsec-spoa
+		// When using systemd: RuntimeDirectoryMode=2750 already sets the setgid bit
+		// For manual/Docker setups: chmod g+s /run/crowdsec-spoa && chgrp haproxy /run/crowdsec-spoa
 		origUmask := syscall.Umask(0o117)
 
 		// Create new socket
