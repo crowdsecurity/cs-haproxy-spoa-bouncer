@@ -18,8 +18,6 @@ COPY --from=build /go/src/cs-spoa-bouncer/docker/docker_start.sh /docker_start.s
 RUN chmod 644 /etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml && \
     chmod 755 /usr/local/bin/crowdsec-spoa-bouncer
 
-## Add socat
-RUN apk add --no-cache socat
 ## Add the same haproxy user as the official haproxy image
 RUN addgroup -g 99 -S haproxy && adduser -S -D -H -u 99 -h /var/lib/haproxy -s /sbin/nologin -G haproxy -g haproxy haproxy
 ## Add worker user
