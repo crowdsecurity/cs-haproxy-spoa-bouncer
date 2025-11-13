@@ -23,7 +23,9 @@ if ! getent passwd crowdsec-spoa >/dev/null; then
 fi
 
 # Set config file group ownership
-chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
+if [ -f "$CONFIG" ]; then
+    chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
+fi
 
 if [ -d "/etc/haproxy" ]; then
     cp /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
