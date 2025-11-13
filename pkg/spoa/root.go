@@ -208,9 +208,13 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			"error": err,
 			"key":   "remediation",
 		}).Debug("remediation key not found in message (expected from crowdsec-ip message), checking IP directly as fallback")
-		s.checkIPRemediation(req, mes, &r)
-		// No IP check happened (e.g., upstream proxy mode), we need to count metrics
-		shouldCountMetrics = true
+		// Get IP from message for both remediation and origin (needed for metrics)
+		ipAddrPtr, ipErr := readKeyFromMessage[netip.Addr](mes, "src-ip")
+		if ipErr == nil && ipAddrPtr != nil {
+			r, origin = s.getIPRemediation(req, *ipAddrPtr)
+			// Only count metrics if we successfully got IP and checked remediation
+			shouldCountMetrics = true
+		}
 	}
 
 	if rstring != nil {
@@ -666,27 +670,6 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	}
 
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
-}
-
-// checkIPRemediation extracts IP from the message and checks remediation
-// Used as fallback when crowdsec-ip message didn't set remediation variable
-func (s *Spoa) checkIPRemediation(req *request.Request, mes *message.Message, r *remediation.Remediation) {
-	ipAddrPtr, err := readKeyFromMessage[netip.Addr](mes, "src-ip")
-	if err != nil {
-		s.logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "src-ip",
-		}).Debug("failed to extract src-ip from message for fallback IP check - ensure HAProxy is sending the 'src' variable as 'src-ip' in crowdsec-http message")
-		return
-	}
-
-	ipAddr := *ipAddrPtr
-	*r, _ = s.getIPRemediation(req, ipAddr)
-
-	s.logger.WithFields(log.Fields{
-		"ip":          ipAddr.String(),
-		"remediation": r.String(),
-	}).Debug("IP remediation checked via fallback")
 }
 
 func handlerWrapper(s *Spoa) func(req *request.Request) {
