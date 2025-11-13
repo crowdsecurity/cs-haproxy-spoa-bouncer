@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
@@ -21,7 +22,12 @@ func (s *Server) handleAdminGetIP(args []string) *APIResponse {
 
 	log.Infof("Checking IP %s", args[0])
 
-	r, _, err := s.dataset.CheckIP(args[0])
+	ipAddr, err := netip.ParseAddr(args[0])
+	if err != nil {
+		return NewAPIError(ErrCodeInvalidIP, "Invalid IP address", err.Error())
+	}
+
+	r, _, err := s.dataset.CheckIP(ipAddr)
 	if err != nil {
 		return NewAPIError(ErrCodeInvalidIP, "IP check failed", err.Error())
 	}

@@ -7,7 +7,6 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/worker"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	cslogging "github.com/crowdsecurity/crowdsec-spoa/pkg/logging"
 	"github.com/crowdsecurity/go-cs-lib/csyaml"
@@ -24,7 +23,8 @@ type BouncerConfig struct {
 	Hosts            []*host.Host            `yaml:"hosts"`
 	HostsDir         string                  `yaml:"hosts_dir"`
 	Geo              geo.GeoDatabase         `yaml:",inline"`
-	Workers          []*worker.WorkerConfig  `yaml:"workers"`
+	ListenTCP        string                  `yaml:"listen_tcp"`
+	ListenUnix       string                  `yaml:"listen_unix"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
 	AdminSocket      string                  `yaml:"admin_socket"`
 }
@@ -58,5 +58,21 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 		return nil, fmt.Errorf("failed to setup logging: %w", err)
 	}
 
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+
 	return config, nil
+}
+
+func (c *BouncerConfig) Validate() error {
+	if c == nil {
+		return fmt.Errorf("configuration is nil")
+	}
+
+	if c.ListenTCP == "" && c.ListenUnix == "" {
+		return fmt.Errorf("configuration requires at least one listener: set listen_tcp or listen_unix")
+	}
+
+	return nil
 }
