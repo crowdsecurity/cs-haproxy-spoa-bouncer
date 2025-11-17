@@ -22,8 +22,11 @@ if ! getent passwd crowdsec-spoa >/dev/null; then
     adduser crowdsec-spoa --system --group --comment "crowdsec haproxy spoa bouncer"
 fi
 
-# Set config file group ownership
+# Set config file group ownership and permissions
+# Always set permissions to ensure file is readable by crowdsec-spoa group
+# This is especially important on upgrades where old packages may have had incorrect permissions
 if [ -f "$CONFIG" ]; then
+    chmod 640 "$CONFIG" 2>/dev/null || true
     chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
 fi
 
