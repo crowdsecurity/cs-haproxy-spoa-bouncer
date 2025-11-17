@@ -23,15 +23,11 @@ if ! getent passwd crowdsec-spoa >/dev/null; then
 fi
 
 # Set config file group ownership and permissions
+# Always set permissions to ensure file is readable by crowdsec-spoa group
+# This is especially important on upgrades where old packages may have had incorrect permissions
 if [ -f "$CONFIG" ]; then
+    chmod 640 "$CONFIG" 2>/dev/null || true
     chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
-    # Fix permissions on upgrade - ensure config file is readable by crowdsec-spoa group
-    # $2 is set only on upgrades (contains old version)
-    if [ -n "$2" ]; then
-        # This is an upgrade - fix permissions to ensure the file is readable
-        chmod 640 "$CONFIG" 2>/dev/null || true
-        chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
-    fi
 fi
 
 if [ -d "/etc/haproxy" ]; then
