@@ -23,14 +23,14 @@ override_dh_auto_install:
 	BIN="/usr/bin/$$BOUNCER" CFG="/etc/crowdsec/bouncers" envsubst '$$BIN $$CFG' < "config/$$BOUNCER.service" > "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"
 	mkdir -p "debian/$$PKG/usr/lib/$$PKG/lua"; \
 	mkdir -p "debian/$$PKG/usr/share/doc/$$PKG/examples"; \
-	install -D "config/crowdsec.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/crowdsec.cfg"; \
-	install -D "config/haproxy.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/haproxy.cfg"; \
-	install -D "lua/crowdsec.lua" "debian/$$PKG/usr/lib/$$PKG/lua/crowdsec.lua"; \
-	install -D "lua/utils.lua" "debian/$$PKG/usr/lib/$$PKG/lua/utils.lua"; \
-	install -D "lua/template.lua" "debian/$$PKG/usr/lib/$$PKG/lua/template.lua"; \
+	install -m 644 -D "config/crowdsec.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/crowdsec.cfg"; \
+	install -m 644 -D "config/haproxy.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/haproxy.cfg"; \
+	install -m 644 -D "lua/crowdsec.lua" "debian/$$PKG/usr/lib/$$PKG/lua/crowdsec.lua"; \
+	install -m 644 -D "lua/utils.lua" "debian/$$PKG/usr/lib/$$PKG/lua/utils.lua"; \
+	install -m 644 -D "lua/template.lua" "debian/$$PKG/usr/lib/$$PKG/lua/template.lua"; \
 	mkdir -p "debian/$$PKG/var/lib/$$PKG/html"; \
-	install -D "templates/ban.html" "debian/$$PKG/var/lib/$$PKG/html/ban.html"; \
-	install -D "templates/captcha.html" "debian/$$PKG/var/lib/$$PKG/html/captcha.html"; \
+	install -m 644 -D "templates/ban.html" "debian/$$PKG/var/lib/$$PKG/html/ban.html"; \
+	install -m 644 -D "templates/captcha.html" "debian/$$PKG/var/lib/$$PKG/html/captcha.html"; \
 
 execute_after_dh_fixperms:
 	@BOUNCER=crowdsec-spoa-bouncer; \
