@@ -116,11 +116,8 @@ func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
 	// HAProxy configuration should use del-header before set-header to ensure user values are ignored
 	remediation := r.Header.Get("X-Crowdsec-Remediation")
 	if remediation == "" {
-		s.logger.WithFields(log.Fields{
-			"remote_addr": r.RemoteAddr,
-			"headers":     r.Header,
-		}).Warn("X-CrowdSec-Remediation header not found, returning 400")
-		http.Error(w, "Bad Request: Missing X-CrowdSec-Remediation header", http.StatusBadRequest)
+		s.logger.Warn("X-Crowdsec-Remediation header not found, returning 400")
+		http.Error(w, "Bad Request: Missing X-Crowdsec-Remediation header", http.StatusBadRequest)
 		return
 	}
 
