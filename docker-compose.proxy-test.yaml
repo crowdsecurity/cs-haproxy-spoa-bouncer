@@ -8,8 +8,8 @@ services:
       - crowdsec
     volumes:
       - sockets:/run/
-      - templates:/var/lib/crowdsec/lua/haproxy/templates/
-      - lua:/usr/local/crowdsec/lua/haproxy/
+      - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
+      - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
       - geodb:/var/lib/crowdsec/data/
       - ./config/crowdsec-spoa-bouncer.yaml.local:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml.local
     networks:
@@ -35,7 +35,7 @@ services:
       - ./config/haproxy-upstreamproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
       - ./config/crowdsec-upstreamproxy.cfg:/etc/haproxy/crowdsec.cfg
       - sockets:/run/
-      - templates:/var/lib/crowdsec/lua/haproxy/templates/
+      - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
       - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
     # HAProxy is now only accessible via nginx (not exposed directly)
     depends_on:
