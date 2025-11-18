@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+PKG="crowdsec-haproxy-spoa-bouncer"
+STATE_DIR="/var/lib/${PKG}"
+
+# preinst is called with 'upgrade' <old-version> when upgrading
+if [ "$1" = "upgrade" ] && [ -n "$2" ]; then
+    mkdir -p "$STATE_DIR"
+    echo "$2" > "$STATE_DIR/old-version"
+fi
+
+exit 0

@@ -34,6 +34,74 @@ if [ -d "/etc/haproxy" ]; then
     cp /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
 fi
 
+# --- selective restart logic starts here ---
+PKG="crowdsec-haproxy-spoa-bouncer"
+STATE_DIR="/var/lib/${PKG}"
+OLD=""
+NEW=""
+
+# read old version if preinst saved it
+if [ -f "${STATE_DIR}/old-version" ]; then
+    OLD=$(cat "${STATE_DIR}/old-version" 2>/dev/null || true)
+    rm -f "${STATE_DIR}/old-version" 2>/dev/null || true
+fi
+
+# read new (installed) version
+NEW=$(dpkg-query -W -f='${Version}' "$DPKG_MAINTSCRIPT_PACKAGE" 2>/dev/null || true)
+
+# helper: extract upstream (strip epoch and debian revision), then major/minor/patch
+extract_upstream() {
+    v="$1"
+    # strip epoch (N:), strip debian revision (-rev)
+    v="${v#*:}"
+    v="${v%%-*}"
+    echo "$v"
+}
+
+get_major_minor_patch() {
+    v="$(extract_upstream "$1")"
+    IFS='.' read -r maj min pat _ <<EOF
+$v
+EOF
+    maj=${maj:-0}
+    min=${min:-0}
+    pat=${pat:-0}
+    printf "%s %s %s" "$maj" "$min" "$pat"
+}
+
+should_try_restart=false
+
+if [ -n "$OLD" ] && [ -n "$NEW" ]; then
+    read -r old_maj old_min old_pat _ <<EOF
+$(get_major_minor_patch "$OLD")
+EOF
+    read -r new_maj new_min new_pat _ <<EOF
+$(get_major_minor_patch "$NEW")
+EOF
+
+    if [ "$old_maj" = "$new_maj" ] && [ "$old_min" = "$new_min" ]; then
+        # only patch changed -> safe to try-restart automatically
+        should_try_restart=true
+    else
+        # major or minor changed -> do not auto-restart; inform operator
+        echo ""
+        echo "Note: package was upgraded from $OLD to $NEW. major/minor changed -> no automatic restart."
+        echo "Please review release notes and restart the service manually if appropriate:"
+        echo "  systemctl restart $SERVICE"
+        echo ""
+    fi
+fi
+
+if [ "$should_try_restart" = "true" ]; then
+    # prefer a graceful reload when supported, do not make the upgrade fail if restart fails
+    if systemctl -q reload-or-restart "$SERVICE" 2>/dev/null; then
+        echo "$SERVICE reloaded or restarted (patch upgrade)."
+    else
+        systemctl try-restart --quiet "$SERVICE" || echo "warning: $SERVICE failed to restart automatically"
+    fi
+fi
+# --- selective restart logic ends here ---
+
 echo ""
 echo "=========================================="
 echo "CrowdSec HAProxy SPOA Bouncer installed"
