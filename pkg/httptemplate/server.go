@@ -183,8 +183,8 @@ func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
 	// Set headers
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 
-	// For HEAD requests, always return 403 for ban and captcha remediations
-	if r.Method == http.MethodHead {
+	// For HEAD requests or .ico file requests, always return 403 for ban and captcha remediations
+	if r.Method == http.MethodHead || strings.HasSuffix(strings.ToLower(r.URL.Path), ".ico") {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
