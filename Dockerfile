@@ -26,16 +26,17 @@ RUN addgroup -S crowdsec-spoa && adduser -S -D -H -s /sbin/nologin -g crowdsec-s
 ## Create a socket for the spoa to inherit crowdsec-spoa:haproxy user from official haproxy image
 RUN mkdir -p /run/crowdsec-spoa/ && chown crowdsec-spoa:haproxy /run/crowdsec-spoa/ && chmod 770 /run/crowdsec-spoa/
 
-## Copy templates
-RUN mkdir -p /var/lib/crowdsec/lua/haproxy/templates/
-COPY --from=build /go/src/cs-spoa-bouncer/templates/* /var/lib/crowdsec/lua/haproxy/templates/
+## Copy Lua files (matching Debian/RPM paths)
+RUN mkdir -p /usr/lib/crowdsec-haproxy-spoa-bouncer/lua
+COPY --from=build /go/src/cs-spoa-bouncer/lua/* /usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
 
-RUN mkdir -p /usr/local/crowdsec/lua/haproxy/
-COPY --from=build /go/src/cs-spoa-bouncer/lua/* /usr/local/crowdsec/lua/haproxy/
+## Copy templates (matching Debian/RPM paths)
+RUN mkdir -p /var/lib/crowdsec-haproxy-spoa-bouncer/html
+COPY --from=build /go/src/cs-spoa-bouncer/templates/* /var/lib/crowdsec-haproxy-spoa-bouncer/html/
 
-RUN chown -R root:haproxy /var/lib/crowdsec/lua/haproxy /usr/local/crowdsec/lua/haproxy
+RUN chown -R root:haproxy /usr/lib/crowdsec-haproxy-spoa-bouncer/lua /var/lib/crowdsec-haproxy-spoa-bouncer/html
 
-VOLUME [ "/usr/local/crowdsec/lua/haproxy/", "/var/lib/crowdsec/lua/haproxy/templates/" ]
+VOLUME [ "/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/", "/var/lib/crowdsec-haproxy-spoa-bouncer/html/" ]
 
 RUN chmod +x /docker_start.sh
 
