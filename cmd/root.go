@@ -21,6 +21,7 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/httptemplate"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/spoa"
 	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
@@ -194,6 +195,24 @@ func Execute() error {
 		}
 	}
 
+	// Create and start HTTP template server if enabled (after HostManager is created)
+	var httpTemplateServer *httptemplate.Server
+	if config.HTTPTemplateServer.Enabled {
+		httpTemplateLogger := log.WithField("component", "http_template_server")
+		var err error
+		httpTemplateServer, err = httptemplate.NewServer(&config.HTTPTemplateServer, HostManager, httpTemplateLogger)
+		if err != nil {
+			return fmt.Errorf("failed to create HTTP template server: %w", err)
+		}
+
+		g.Go(func() error {
+			if err := httpTemplateServer.Serve(ctx); err != nil {
+				return fmt.Errorf("HTTP template server failed: %w", err)
+			}
+			return nil
+		})
+	}
+
 	if config.HostsDir != "" {
 		if err := HostManager.LoadFromDirectory(config.HostsDir); err != nil {
 			return fmt.Errorf("failed to load hosts from directory: %w", err)
@@ -250,6 +269,14 @@ func Execute() error {
 
 	if shutdownErr := singleSpoa.Shutdown(shutdownCtx); shutdownErr != nil {
 		log.Errorf("Failed to shutdown SPOA: %v", shutdownErr)
+	}
+
+	// Shutdown HTTP template server if it was started
+	if httpTemplateServer != nil {
+		log.Info("Shutting down HTTP template server")
+		if shutdownErr := httpTemplateServer.Shutdown(shutdownCtx); shutdownErr != nil {
+			log.Errorf("Failed to shutdown HTTP template server: %v", shutdownErr)
+		}
 	}
 
 	// Return error only if it was unexpected

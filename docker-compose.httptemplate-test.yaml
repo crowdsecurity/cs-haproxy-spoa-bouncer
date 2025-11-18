@@ -1,7 +1,6 @@
 services:
   spoa:
     image: crowdsecurity/crowdsec-spoa:latest
-    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile
@@ -9,8 +8,6 @@ services:
       - crowdsec
     volumes:
       - sockets:/run/
-      - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
-      - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
       - geodb:/var/lib/crowdsec/data/
       - ./config/crowdsec-spoa-bouncer.yaml.local:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml.local
     networks:
@@ -21,7 +18,6 @@ services:
         limits:
           cpus: "4.0"
           memory: 250M
-        
 
   whoami:
     image: traefik/whoami:latest
@@ -32,13 +28,10 @@ services:
 
   haproxy:
     image: haproxy:2.9.7-alpine
-    restart: unless-stopped
     volumes:
-      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
+      - ./config/haproxy-httptemplate.cfg:/usr/local/etc/haproxy/haproxy.cfg
       - ./config/crowdsec.cfg:/etc/haproxy/crowdsec.cfg
       - sockets:/run/
-      - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
-      - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
     ports:
       - "9090:9090"
     depends_on:
@@ -50,7 +43,6 @@ services:
   
   crowdsec:
     image: crowdsecurity/crowdsec:latest
-    restart: unless-stopped
     environment:
       - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
       - DISABLE_ONLINE_API=true
@@ -61,11 +53,7 @@ services:
       - crowdsec
 
 volumes:
-  lua:
-    driver: local
   sockets:
-    driver: local
-  templates:
     driver: local
   geodb:
     driver: local
@@ -77,3 +65,4 @@ networks:
       driver: default
       config:
         - subnet: "10.5.5.0/24"
+

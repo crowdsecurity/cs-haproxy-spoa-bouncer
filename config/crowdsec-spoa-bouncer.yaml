@@ -24,3 +24,19 @@ prometheus:
   enabled: false
   listen_addr: 127.0.0.1
   listen_port: 60601
+
+## HTTP Template Server (Experimental)
+# This feature allows HAProxy to use an HTTP backend instead of Lua scripts for template rendering
+# When enabled, HAProxy can be configured to proxy requests to this server instead of using Lua
+# Uses Go native templates (.tmpl files) instead of Lua-style templates
+http_template_server:
+  enabled: false
+  listen_addr: 127.0.0.1
+  listen_port: 8081
+  # Optional: Custom template paths (defaults to .tmpl files in standard locations if not specified)
+  # ban_template_path: /var/lib/crowdsec-haproxy-spoa-bouncer/html/ban.tmpl
+  # captcha_template_path: /var/lib/crowdsec-haproxy-spoa-bouncer/html/captcha.tmpl
+  tls:
+    enabled: false
+    # cert_file: /path/to/cert.pem
+    # key_file: /path/to/key.pem

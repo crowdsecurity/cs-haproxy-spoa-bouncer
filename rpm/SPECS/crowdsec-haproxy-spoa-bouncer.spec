@@ -48,6 +48,8 @@ install -m 644 -D lua/utils.lua %{buildroot}/usr/lib/%{name}/lua/utils.lua
 install -m 644 -D lua/template.lua %{buildroot}/usr/lib/%{name}/lua/template.lua
 install -m 644 -D templates/ban.html %{buildroot}%{_localstatedir}/lib/%{name}/html/ban.html
 install -m 644 -D templates/captcha.html %{buildroot}%{_localstatedir}/lib/%{name}/html/captcha.html
+install -m 644 -D templates/ban.tmpl %{buildroot}%{_localstatedir}/lib/%{name}/html/ban.tmpl
+install -m 644 -D templates/captcha.tmpl %{buildroot}%{_localstatedir}/lib/%{name}/html/captcha.tmpl
 
 %clean
 rm -rf %{buildroot}
@@ -65,6 +67,8 @@ rm -rf %{buildroot}
 /usr/lib/%{name}/lua/template.lua
 %{_localstatedir}/lib/%{name}/html/ban.html
 %{_localstatedir}/lib/%{name}/html/captcha.html
+%{_localstatedir}/lib/%{name}/html/ban.tmpl
+%{_localstatedir}/lib/%{name}/html/captcha.tmpl
 
 %post
 # Reload systemd units
