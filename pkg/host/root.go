@@ -99,6 +99,7 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 }
 
 func (h *Manager) Run(ctx context.Context) {
+
 	for {
 		select {
 		case instruction := <-h.Chan:
@@ -179,6 +180,7 @@ func (h *Manager) sort() {
 func (h *Manager) removeHost(host *Host) {
 	for i, th := range h.Hosts {
 		if th == host {
+			// Cancel captcha context (but sessions persist in global manager)
 			host.Captcha.Cancel()
 			if i == len(h.Hosts)-1 {
 				h.Hosts = h.Hosts[:i]
@@ -238,6 +240,7 @@ func (h *Manager) addHost(ctx context.Context, host *Host) {
 		"has_ban":     true, // Ban is always available
 	})
 
+	// Initialize captcha (no longer needs sessions - SPOA handles that)
 	if err := host.Captcha.Init(host.logger, ctx); err != nil {
 		host.logger.Error(err)
 	}

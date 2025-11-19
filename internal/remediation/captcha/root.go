@@ -13,7 +13,6 @@ import (
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/cookie"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
 	"github.com/negasus/haproxy-spoe-go/action"
 	log "github.com/sirupsen/logrus"
 )
@@ -35,7 +34,6 @@ type Captcha struct {
 	FallbackRemediation string                 `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
 	Timeout             int                    `yaml:"timeout"`              // HTTP client timeout in seconds (default: 5)
 	CookieGenerator     cookie.CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies from sessions
-	Sessions            session.Sessions       `yaml:",inline"`              // sessions that are being traced for captcha
 	logger              *log.Entry             `yaml:"-"`
 	client              *http.Client           `yaml:"-"`
 	Cancel              context.CancelFunc     `yaml:"-"`
@@ -44,8 +42,8 @@ type Captcha struct {
 func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
 	c.InitLogger(logger)
 
-	var cancelCtx context.Context
-	cancelCtx, c.Cancel = context.WithCancel(ctx)
+	// Create cancel context for this captcha instance (used for cleanup)
+	_, c.Cancel = context.WithCancel(ctx)
 
 	// Clone the default transport to preserve proxy settings and other defaults
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -76,7 +74,7 @@ func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
 		return err
 	}
 
-	c.Sessions.Init(c.logger, cancelCtx)
+	// Initialize cookie generator (sessions are managed by SPOA, not captcha)
 	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie", c.SecretKey)
 
 	return nil

@@ -37,18 +37,20 @@ type Spoa struct {
 	HAWaitGroup  *sync.WaitGroup
 	logger       *log.Entry
 	// Direct access to shared data (no IPC needed)
-	dataset     *dataset.DataSet
-	hostManager *host.Manager
-	geoDatabase *geo.GeoDatabase
+	dataset        *dataset.DataSet
+	hostManager    *host.Manager
+	geoDatabase    *geo.GeoDatabase
+	globalSessions *session.Sessions // Global session manager for all hosts
 }
 
 type SpoaConfig struct {
-	TcpAddr     string
-	UnixAddr    string
-	Dataset     *dataset.DataSet
-	HostManager *host.Manager
-	GeoDatabase *geo.GeoDatabase
-	Logger      *log.Entry // Parent logger to inherit from
+	TcpAddr        string
+	UnixAddr       string
+	Dataset        *dataset.DataSet
+	HostManager    *host.Manager
+	GeoDatabase    *geo.GeoDatabase
+	GlobalSessions *session.Sessions // Global session manager for all hosts
+	Logger         *log.Entry        // Parent logger to inherit from
 }
 
 func New(config *SpoaConfig) (*Spoa, error) {
@@ -71,11 +73,12 @@ func New(config *SpoaConfig) (*Spoa, error) {
 	// No worker-specific log level; inherits from parent logger
 
 	s := &Spoa{
-		HAWaitGroup: &sync.WaitGroup{},
-		logger:      workerLogger,
-		dataset:     config.Dataset,
-		hostManager: config.HostManager,
-		geoDatabase: config.GeoDatabase,
+		HAWaitGroup:    &sync.WaitGroup{},
+		logger:         workerLogger,
+		dataset:        config.Dataset,
+		hostManager:    config.HostManager,
+		geoDatabase:    config.GeoDatabase,
+		globalSessions: config.GlobalSessions,
 	}
 
 	if config.TcpAddr != "" {
@@ -441,8 +444,8 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 			}).Warn("failed to read ssl flag from message, cookie secure flag will default to false - ensure HAProxy is sending the 'ssl_fc' variable as 'ssl' in crowdsec-http message")
 		}
 
-		// Create a new session
-		ses, err = matchedHost.Captcha.Sessions.NewRandomSession()
+		// Create a new session using global session manager
+		ses, err = s.globalSessions.NewRandomSession()
 		if err != nil {
 			s.logger.WithFields(log.Fields{
 				"host":  matchedHost.Host,
@@ -488,7 +491,7 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 
 	// Get the session only if we didn't just create it (i.e., we have an existing cookie)
 	if ses == nil {
-		ses = matchedHost.Captcha.Sessions.GetSession(uuid)
+		ses = s.globalSessions.GetSession(uuid)
 		if ses == nil {
 			s.logger.WithFields(log.Fields{
 				"host":    matchedHost.Host,
