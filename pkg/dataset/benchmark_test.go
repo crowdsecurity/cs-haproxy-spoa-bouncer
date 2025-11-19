@@ -13,7 +13,7 @@ import (
 // generateTestIPs generates a set of test IP addresses
 func generateTestIPs(count int) []netip.Addr {
 	ips := make([]netip.Addr, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		// Generate random IPv4 addresses
 		ip := netip.AddrFrom4([4]byte{
 			byte(rand.Intn(256)),
@@ -29,7 +29,7 @@ func generateTestIPs(count int) []netip.Addr {
 // generateTestPrefixes generates a set of test CIDR prefixes
 func generateTestPrefixes(count int) []netip.Prefix {
 	prefixes := make([]netip.Prefix, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		// Generate random IPv4 prefixes with various lengths
 		ip := netip.AddrFrom4([4]byte{
 			byte(rand.Intn(256)),
@@ -49,7 +49,7 @@ func generateTestDecisions(ipCount, prefixCount int) models.GetDecisionsResponse
 	decisions := make(models.GetDecisionsResponse, 0, ipCount+prefixCount)
 
 	// Add IP decisions
-	for i := 0; i < ipCount; i++ {
+	for i := range ipCount {
 		ip := generateTestIPs(1)[0]
 		decisions = append(decisions, &models.Decision{
 			Scope:  ptr.Of("ip"),
@@ -61,7 +61,7 @@ func generateTestDecisions(ipCount, prefixCount int) models.GetDecisionsResponse
 	}
 
 	// Add prefix decisions
-	for i := 0; i < prefixCount; i++ {
+	for i := range prefixCount {
 		prefix := generateTestPrefixes(1)[0]
 		decisions = append(decisions, &models.Decision{
 			Scope:  ptr.Of("range"),
@@ -83,7 +83,7 @@ func BenchmarkAddRemove(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		// Add decisions
 		dataset.Add(decisions)
 
@@ -99,7 +99,7 @@ func BenchmarkAddOnly(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		dataset := New() // Fresh dataset each iteration
 		dataset.Add(decisions)
 	}
@@ -116,7 +116,7 @@ func BenchmarkRemoveOnly(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		// Create a copy of decisions for each iteration
 		decisionsCopy := make(models.GetDecisionsResponse, len(decisions))
 		copy(decisionsCopy, decisions)
@@ -146,7 +146,7 @@ func BenchmarkDifferentSizes(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				dataset.Add(decisions)
 				dataset.Remove(decisions)
 			}
@@ -259,7 +259,7 @@ func BenchmarkBartLookup(b *testing.B) {
 	testIP := netip.MustParseAddr("192.168.1.1")
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _, _ = dataset.CheckIP(testIP)
 	}
 }
@@ -279,7 +279,7 @@ func BenchmarkBartAdd(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		dataset.Add(decisions)
 		dataset.Remove(decisions)
 	}
@@ -303,7 +303,7 @@ func BenchmarkBartRemove(b *testing.B) {
 	dataset.Add(decisions)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		dataset.Remove(decisions)
 		dataset.Add(decisions)
 	}
