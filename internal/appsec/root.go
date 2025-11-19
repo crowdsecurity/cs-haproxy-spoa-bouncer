@@ -1,8 +1,6 @@
 package appsec
 
 import (
-	"context"
-
 	log "github.com/sirupsen/logrus"
 )
 
@@ -11,7 +9,7 @@ type AppSec struct {
 	logger     *log.Entry `yaml:"-"`
 }
 
-func (a *AppSec) Init(logger *log.Entry, ctx context.Context) error {
+func (a *AppSec) Init(logger *log.Entry) error {
 	a.InitLogger(logger)
 	return nil
 }

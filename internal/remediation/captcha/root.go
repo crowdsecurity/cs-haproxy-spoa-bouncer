@@ -36,14 +36,10 @@ type Captcha struct {
 	CookieGenerator     cookie.CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies from sessions
 	logger              *log.Entry             `yaml:"-"`
 	client              *http.Client           `yaml:"-"`
-	Cancel              context.CancelFunc     `yaml:"-"`
 }
 
-func (c *Captcha) Init(logger *log.Entry, ctx context.Context) error {
+func (c *Captcha) Init(logger *log.Entry) error {
 	c.InitLogger(logger)
-
-	// Create cancel context for this captcha instance (used for cleanup)
-	_, c.Cancel = context.WithCancel(ctx)
 
 	// Clone the default transport to preserve proxy settings and other defaults
 	transport := http.DefaultTransport.(*http.Transport).Clone()
