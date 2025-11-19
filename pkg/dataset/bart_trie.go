@@ -135,9 +135,9 @@ func (t *BartTrie) Contains(ip netip.Addr) (remediation.Remediation, string) {
 		return remediation.Allow, ""
 	}
 
-	remediation, origin := data.GetRemediationAndOrigin()
+	remediationResult, origin := data.GetRemediationAndOrigin()
 	if valueLog != nil {
-		valueLog.Tracef("bart result: %s (data: %+v)", remediation.String(), data)
+		valueLog.Tracef("bart result: %s (data: %+v)", remediationResult.String(), data)
 	}
-	return remediation, origin
+	return remediationResult, origin
 }
