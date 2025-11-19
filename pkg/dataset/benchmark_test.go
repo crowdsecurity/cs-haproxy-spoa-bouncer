@@ -166,7 +166,7 @@ func TestCorrectness(t *testing.T) {
 
 	// Test that the implementation works correctly
 	for _, testIP := range testIPs {
-		result, origin, err := dataset.CheckIP(testIP.String())
+		result, origin, err := dataset.CheckIP(testIP)
 
 		if err != nil {
 			t.Errorf("Error for IP %s: %v", testIP.String(), err)
@@ -205,25 +205,29 @@ func TestLongestPrefixMatch(t *testing.T) {
 	}
 
 	// Test that we get the most specific match (Allow should win over Ban)
-	result, _, _ := dataset.CheckIP("192.168.1.1")
+	ip1 := netip.MustParseAddr("192.168.1.1")
+	result, _, _ := dataset.CheckIP(ip1)
 	if result != remediation.Allow {
 		t.Errorf("Expected Allow for 192.168.1.1, got %v", result)
 	}
 
 	// Test that we get the next most specific match (Captcha should win over Ban)
-	result, _, _ = dataset.CheckIP("192.168.1.2")
+	ip2 := netip.MustParseAddr("192.168.1.2")
+	result, _, _ = dataset.CheckIP(ip2)
 	if result != remediation.Captcha {
 		t.Errorf("Expected Captcha for 192.168.1.2, got %v", result)
 	}
 
 	// Test that we get the broadest match
-	result, _, _ = dataset.CheckIP("192.168.2.1")
+	ip3 := netip.MustParseAddr("192.168.2.1")
+	result, _, _ = dataset.CheckIP(ip3)
 	if result != remediation.Ban {
 		t.Errorf("Expected Ban for 192.168.2.1, got %v", result)
 	}
 
 	// Test that we get no match
-	result, _, _ = dataset.CheckIP("10.0.0.1")
+	ip4 := netip.MustParseAddr("10.0.0.1")
+	result, _, _ = dataset.CheckIP(ip4)
 	if result != remediation.Allow {
 		t.Errorf("Expected Allow for 10.0.0.1, got %v", result)
 	}
@@ -252,7 +256,7 @@ func BenchmarkBartLookup(b *testing.B) {
 	}
 	dataset.Add(decisions)
 
-	testIP := "192.168.1.1"
+	testIP := netip.MustParseAddr("192.168.1.1")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"net/netip"
 	"testing"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
