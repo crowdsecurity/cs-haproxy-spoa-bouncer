@@ -1,4 +1,4 @@
-ARG GOVERSION=1.24
+ARG GOVERSION=1.25
 
 FROM golang:${GOVERSION}-alpine AS build
 
@@ -14,8 +14,10 @@ COPY --from=build /go/src/cs-spoa-bouncer/crowdsec-spoa-bouncer /usr/local/bin/c
 COPY --from=build /go/src/cs-spoa-bouncer/config/crowdsec-spoa-bouncer.yaml /etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml
 COPY --from=build /go/src/cs-spoa-bouncer/docker/docker_start.sh /docker_start.sh
 
-## Add socat
-RUN apk add --no-cache socat
+# Set permissions for config file and binary
+RUN chmod 644 /etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml && \
+    chmod 755 /usr/local/bin/crowdsec-spoa-bouncer
+
 ## Add the same haproxy user as the official haproxy image
 RUN addgroup -g 99 -S haproxy && adduser -S -D -H -u 99 -h /var/lib/haproxy -s /sbin/nologin -G haproxy -g haproxy haproxy
 ## Add worker user
@@ -24,17 +26,21 @@ RUN addgroup -S crowdsec-spoa && adduser -S -D -H -s /sbin/nologin -g crowdsec-s
 ## Create a socket for the spoa to inherit crowdsec-spoa:haproxy user from official haproxy image
 RUN mkdir -p /run/crowdsec-spoa/ && chown crowdsec-spoa:haproxy /run/crowdsec-spoa/ && chmod 770 /run/crowdsec-spoa/
 
-## Copy templates
-RUN mkdir -p /var/lib/crowdsec/lua/haproxy/templates/
-COPY --from=build /go/src/cs-spoa-bouncer/templates/* /var/lib/crowdsec/lua/haproxy/templates/
+## Copy Lua files (matching Debian/RPM paths)
+RUN mkdir -p /usr/lib/crowdsec-haproxy-spoa-bouncer/lua
+COPY --from=build /go/src/cs-spoa-bouncer/lua/* /usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
 
-RUN mkdir -p /usr/local/crowdsec/lua/haproxy/
-COPY --from=build /go/src/cs-spoa-bouncer/lua/* /usr/local/crowdsec/lua/haproxy/
+## Copy templates (matching Debian/RPM paths)
+RUN mkdir -p /var/lib/crowdsec-haproxy-spoa-bouncer/html
+COPY --from=build /go/src/cs-spoa-bouncer/templates/* /var/lib/crowdsec-haproxy-spoa-bouncer/html/
 
-RUN chown -R root:haproxy /var/lib/crowdsec/lua/haproxy /usr/local/crowdsec/lua/haproxy
+RUN chown -R root:haproxy /usr/lib/crowdsec-haproxy-spoa-bouncer/lua /var/lib/crowdsec-haproxy-spoa-bouncer/html
 
-VOLUME [ "/usr/local/crowdsec/lua/haproxy/", "/var/lib/crowdsec/lua/haproxy/templates/" ]
+VOLUME [ "/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/", "/var/lib/crowdsec-haproxy-spoa-bouncer/html/" ]
 
 RUN chmod +x /docker_start.sh
+
+# Run as user
+USER crowdsec-spoa
 
 ENTRYPOINT ["/docker_start.sh"]

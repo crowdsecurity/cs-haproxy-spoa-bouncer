@@ -1,7 +1,6 @@
 services:
   spoa:
     image: crowdsecurity/crowdsec-spoa:latest
-    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile
@@ -32,25 +31,34 @@ services:
 
   haproxy:
     image: haproxy:2.9.7-alpine
-    restart: unless-stopped
     volumes:
-      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
-      - ./config/crowdsec.cfg:/etc/haproxy/crowdsec.cfg
+      - ./config/haproxy-upstreamproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
+      - ./config/crowdsec-upstreamproxy.cfg:/etc/haproxy/crowdsec.cfg
       - sockets:/run/
       - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
       - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
-    ports:
-      - "9090:9090"
+    # HAProxy is now only accessible via nginx (not exposed directly)
     depends_on:
       - crowdsec
       - spoa
       - whoami
     networks:
       - crowdsec
+
+  # Nginx acting as upstream proxy (like Cloudflare)
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./config/nginx-proxy.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - haproxy
+    networks:
+      - crowdsec
   
   crowdsec:
     image: crowdsecurity/crowdsec:latest
-    restart: unless-stopped
     environment:
       - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
       - DISABLE_ONLINE_API=true
@@ -77,3 +85,4 @@ networks:
       driver: default
       config:
         - subnet: "10.5.5.0/24"
+

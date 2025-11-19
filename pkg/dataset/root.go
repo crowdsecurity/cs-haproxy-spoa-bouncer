@@ -44,10 +44,9 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	}
 }
 
-func (d *DataSet) CheckIP(ipString string) (remediation.Remediation, string, error) {
-	ip, err := netip.ParseAddr(ipString)
-	if err != nil || !ip.IsValid() {
-		return remediation.Allow, "", err
+func (d *DataSet) CheckIP(ip netip.Addr) (remediation.Remediation, string, error) {
+	if !ip.IsValid() {
+		return remediation.Allow, "", fmt.Errorf("invalid IP address")
 	}
 	r, origin := d.BartUnifiedIPSet.Contains(ip)
 	return r, origin, nil

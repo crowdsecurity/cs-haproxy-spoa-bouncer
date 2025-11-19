@@ -33,20 +33,21 @@ BUILD_VERSION=%{local_version} make
 %install
 rm -rf %{buildroot}
 mkdir -p %{buildroot}%{_bindir}
-mkdir -p %{buildroot}%{_libdir}/%{name}
+mkdir -p %{buildroot}%{_libdir}/%{name}/lua
 mkdir -p %{buildroot}%{_localstatedir}/lib/%{name}/html
-mkdir -p %{buildroot}%{_docdir}/examples
+mkdir -p %{buildroot}%{_docdir}/%{name}/examples
 install -m 755 -D %{binary_name} %{buildroot}%{_bindir}/%{binary_name}
-install -m 600 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
+install -m 640 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
 install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{name}/_bouncer.sh
 install -m 644 -D config/crowdsec.cfg %{buildroot}/%{_docdir}/%{name}/examples/crowdsec.cfg
 install -m 644 -D config/haproxy.cfg %{buildroot}/%{_docdir}/%{name}/examples/haproxy.cfg
-BIN=%{_bindir}/%{binary_name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service | install -m 0644 -D /dev/stdin %{buildroot}%{_unitdir}/%{binary_name}.service
-install -D lua/crowdsec.lua %{buildroot}/usr/lib/%{name}/lua/crowdsec.lua
-install -D lua/utils.lua %{buildroot}/usr/lib/%{name}/lua/utils.lua
-install -D lua/template.lua %{buildroot}/usr/lib/%{name}/lua/template.lua
-install -D templates/ban.html %{buildroot}%{_localstatedir}/lib/%{name}/html/ban.html
-install -D templates/captcha.html %{buildroot}%{_localstatedir}/lib/%{name}/html/captcha.html
+mkdir -p %{buildroot}%{_unitdir}
+BIN=%{_bindir}/%{binary_name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service > %{buildroot}%{_unitdir}/%{binary_name}.service
+install -m 644 -D lua/crowdsec.lua %{buildroot}/usr/lib/%{name}/lua/crowdsec.lua
+install -m 644 -D lua/utils.lua %{buildroot}/usr/lib/%{name}/lua/utils.lua
+install -m 644 -D lua/template.lua %{buildroot}/usr/lib/%{name}/lua/template.lua
+install -m 644 -D templates/ban.html %{buildroot}%{_localstatedir}/lib/%{name}/html/ban.html
+install -m 644 -D templates/captcha.html %{buildroot}%{_localstatedir}/lib/%{name}/html/captcha.html
 
 %clean
 rm -rf %{buildroot}
@@ -99,23 +100,34 @@ if ! getent passwd crowdsec-spoa >/dev/null; then
     adduser --system --no-create-home --shell /sbin/nologin crowdsec-spoa
 fi
 
+# Set config file group ownership (matches Debian postinst)
+if [ -f "$CONFIG" ]; then
+    chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
+fi
 
 if [ -d "/etc/haproxy" ]; then
     cp /usr/share/doc/%{name}/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
 fi
 
-# Handle systemd unit
+# Display installation message
+echo ""
+echo "=========================================="
+echo "CrowdSec HAProxy SPOA Bouncer installed"
+echo "=========================================="
+echo ""
+
 if [ "$START" -eq 0 ]; then
-    echo "No API key was generated. You can generate one on your LAPI server with:"
-    echo "    cscli bouncers add <bouncer_name>"
-    echo "Then add it to: $CONFIG"
-else
-    echo "Not starting the bouncer automatically. Please update your haproxy and start the service manually."
-%if 0%{?fc35}
-    systemctl enable "$SERVICE" >/dev/null 2>&1 || :
-%endif
-    systemctl start "$SERVICE" >/dev/null 2>&1 || :
+    echo "⚠ No API key was generated."
+    echo "  Generate one with: cscli bouncers add <bouncer_name>"
+    echo "  Add it to: $CONFIG"
+    echo ""
 fi
+
+echo "Configuration: $CONFIG"
+echo "Examples: /usr/share/doc/%{name}/examples/"
+echo "Documentation: https://docs.crowdsec.net/u/bouncers/haproxy_spoa"
+echo ""
+echo "Start bouncer: systemctl enable --now $SERVICE"
 
 %changelog
 * Fri Jun 13 2025 Manuel Sabban <manuel@crowdsec.net>
@@ -137,6 +149,6 @@ fi
 %postun
 
 if [ "$1" == "1" ] ; then
-    systemctl restart %{name} || echo "cannot restart service"
+    systemctl restart "$SERVICE" || echo "cannot restart service"
 fi
 
