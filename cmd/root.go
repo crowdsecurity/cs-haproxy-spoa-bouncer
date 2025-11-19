@@ -161,6 +161,9 @@ func Execute() error {
 	// Create a base logger for the host manager
 	hostManagerLogger := log.WithField("component", "host_manager")
 	HostManager := host.NewManager(hostManagerLogger)
+	
+	// Set global AppSec configuration (uses same API key as LAPI)
+	HostManager.SetGlobalAppSecConfig(config.AppSecURL, config.APIKey)
 
 	g.Go(func() error {
 		HostManager.Run(ctx)

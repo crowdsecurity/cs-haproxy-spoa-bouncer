@@ -11,6 +11,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
@@ -337,20 +338,68 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	if r > remediation.Unknown && !matchedHost.AppSec.AlwaysSend {
 		return
 	}
-	// !TODO APPSEC STUFF - httpData contains parsed URL, Method, Body, Headers for reuse
-	_ = httpData // Reserved for AppSec implementation
 
-	// request, err := http.NewRequest(httpData.Method, httpData.URL, strings.NewReader(httpData.Body))
-	// if err != nil {
-	// 	log.Printf("failed to create request: %v", err)
-	// 	return
-	// }
-	// request.Header = httpData.Headers
+	// AppSec validation - reuse httpData already parsed above
+	srcIPPtr, err := readKeyFromMessage[netip.Addr](mes, "src-ip")
+	if err != nil {
+		s.logger.WithError(err).Warn("AppSec validation failed: failed to read src-ip")
+		return
+	}
+	srcIP := ""
+	if srcIPPtr != nil {
+		srcIP = srcIPPtr.String()
+	}
+
+	// Get optional fields
+	userAgent, _ := readKeyFromMessage[string](mes, "user-agent")
+	version, _ := readKeyFromMessage[string](mes, "version")
+
+	// Build AppSec request from already-parsed httpData
+	appSecReq := &appsec.AppSecRequest{
+		Host:      *hoststring,
+		Method:    "",
+		URL:       "",
+		RemoteIP:  srcIP,
+		UserAgent: "",
+		Version:   "",
+		Headers:   httpData.Headers,
+		Body:      nil,
+	}
+
+	if httpData.Method != nil {
+		appSecReq.Method = *httpData.Method
+	}
+	if httpData.URL != nil {
+		appSecReq.URL = *httpData.URL
+	}
+	if userAgent != nil {
+		appSecReq.UserAgent = *userAgent
+	}
+	if version != nil {
+		appSecReq.Version = *version
+	}
+	if httpData.Body != nil {
+		appSecReq.Body = *httpData.Body
+	}
+
+	// Validate with AppSec - update r directly (defer will handle setting it)
+	appSecRemediation, err := matchedHost.AppSec.ValidateRequest(context.Background(), appSecReq)
+	if err != nil {
+		s.logger.WithError(err).Warn("AppSec validation failed, using original remediation")
+		return
+	}
+
+	// If AppSec returns a more restrictive remediation, use it (defer will set it)
+	if appSecRemediation > r {
+		r = appSecRemediation
+		// If AppSec returns ban, inject ban values
+		if r == remediation.Ban {
+			matchedHost.Ban.InjectKeyValues(&req.Actions)
+		}
+	}
 }
 
 // parseHTTPData extracts HTTP request data from the message for reuse in AppSec processing
-//
-//nolint:unparam // httpData will be used when AppSec is implemented
 func parseHTTPData(logger *log.Entry, mes *message.Message) HTTPRequestData {
 	var httpData HTTPRequestData
 

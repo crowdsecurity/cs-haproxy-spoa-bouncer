@@ -26,6 +26,8 @@ type BouncerConfig struct {
 	ListenTCP        string                  `yaml:"listen_tcp"`
 	ListenUnix       string                  `yaml:"listen_unix"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
+	APIKey           string                  `yaml:"api_key"`           // LAPI API key (also used for AppSec)
+	AppSecURL        string                  `yaml:"appsec_url,omitempty"` // Global AppSec URL
 }
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).
