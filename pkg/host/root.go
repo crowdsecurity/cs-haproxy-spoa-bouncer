@@ -1,7 +1,6 @@
 package host
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,7 +30,6 @@ type Manager struct {
 	Logger   *log.Entry
 	cache    map[string]*Host
 	hostsDir string
-	ctx      context.Context // Base service context for goroutines (not reload context)
 	sync.RWMutex
 }
 
@@ -86,12 +84,6 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 	return nil
 }
 
-// SetContext sets the base service context for host goroutines (captcha, appsec).
-// This should be called once during initialization with the main service context.
-func (h *Manager) SetContext(ctx context.Context) {
-	h.ctx = ctx
-}
-
 // SetHosts sets hosts from both config and directory, merging them (config takes precedence).
 func (h *Manager) SetHosts(configHosts []*Host, hostsDir string) error {
 	allHosts := make(map[string]*Host)
@@ -135,7 +127,6 @@ func (h *Manager) SetHosts(configHosts []*Host, hostsDir string) error {
 // Reload reloads hosts from the configured hosts directory and/or main config file.
 // It builds the desired state from both sources (config takes precedence) and syncs to it.
 // Uses bulk replace for efficiency when there are many hosts.
-// Note: Uses the base service context (set via SetContext), not a reload-specific context.
 func (h *Manager) Reload(configHosts []*Host) error {
 	h.Logger.Info("Reloading host configuration")
 
@@ -253,7 +244,6 @@ func (h *Manager) createHostLogger(host *Host) *log.Entry {
 
 // replaceHosts replaces the entire host list with a new set of hosts.
 // This is used for bulk updates to avoid many individual add/remove operations.
-// Uses the base service context (h.ctx) so goroutines are tied to service lifecycle, not reload.
 // Preserves existing Host objects when host string matches to maintain sessions/state.
 func (h *Manager) replaceHosts(newHosts []*Host) {
 	// Build map of existing hosts by host string

@@ -166,7 +166,6 @@ func Execute() error {
 	// Create a base logger for the host manager
 	hostManagerLogger := log.WithField("component", "host_manager")
 	HostManager := host.NewManager(hostManagerLogger)
-	HostManager.SetContext(ctx) // Set base service context for goroutines
 
 	// Create and initialize global session manager (single GC goroutine for all hosts)
 	globalSessions := &session.Sessions{
