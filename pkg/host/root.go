@@ -75,44 +75,67 @@ func NewManager(l *log.Entry) *Manager {
 
 func (h *Manager) MatchFirstHost(toMatch string) *Host {
 	h.RLock()
-	defer h.RUnlock()
-
-	if len(h.Hosts) == 0 {
-		return nil
-	}
-
+	// Fast path: check cache first
 	if host, ok := h.cache[toMatch]; ok {
+		h.RUnlock()
 		host.logger.WithField("requested_host", toMatch).Debug("matched host from cache")
 		return host
 	}
 
+	// Check if we have any hosts
+	if len(h.Hosts) == 0 {
+		h.RUnlock()
+		h.Logger.WithField("requested_host", toMatch).Debug("no matching host found")
+		return nil
+	}
+
+	// Search for matching host
+	var matchedHost *Host
 	for _, host := range h.Hosts {
 		matched, err := filepath.Match(host.Host, toMatch)
 		if matched && err == nil {
-			host.logger.WithField("requested_host", toMatch).Debug("matched host pattern")
-			h.cache[toMatch] = host
-			return host
+			matchedHost = host
+			break
 		}
 	}
-	h.Logger.WithField("requested_host", toMatch).Debug("no matching host found")
-	return nil
+	h.RUnlock()
+
+	if matchedHost == nil {
+		h.Logger.WithField("requested_host", toMatch).Debug("no matching host found")
+		return nil
+	}
+
+	// Cache the result (need write lock for this)
+	h.Lock()
+	h.cache[toMatch] = matchedHost
+	h.Unlock()
+
+	matchedHost.logger.WithField("requested_host", toMatch).Debug("matched host pattern")
+	return matchedHost
 }
 
-// SetHosts sets hosts from both config and directory, merging them (config takes precedence).
-func (h *Manager) SetHosts(configHosts []*Host, hostsDir string) error {
+// loadHostsFromSources loads hosts from both directory and config, merging them.
+// Config hosts take precedence over directory hosts.
+// Returns a slice of hosts and an error if directory loading fails (config errors are ignored during reload).
+func (h *Manager) loadHostsFromSources(configHosts []*Host, hostsDir string, continueOnError bool) ([]*Host, error) {
 	allHosts := make(map[string]*Host)
 
 	// First, load from directory if provided
 	if hostsDir != "" {
+		// Store hostsDir for future reloads
 		h.hostsDir = hostsDir
 		files, err := filepath.Glob(filepath.Join(hostsDir, "*.yaml"))
 		if err != nil {
-			return err
+			return nil, fmt.Errorf("failed to glob host files: %w", err)
 		}
 		for _, file := range files {
 			host, err := LoadHostFromFile(file)
 			if err != nil {
-				return err
+				if continueOnError {
+					h.Logger.WithError(err).WithField("file", file).Error("Failed to load host file")
+					continue
+				}
+				return nil, err
 			}
 			allHosts[host.Host] = host
 		}
@@ -123,10 +146,20 @@ func (h *Manager) SetHosts(configHosts []*Host, hostsDir string) error {
 		allHosts[host.Host] = host
 	}
 
-	// Convert to slice
+	// Convert map to slice
 	hostsSlice := make([]*Host, 0, len(allHosts))
 	for _, host := range allHosts {
 		hostsSlice = append(hostsSlice, host)
+	}
+
+	return hostsSlice, nil
+}
+
+// SetHosts sets hosts from both config and directory, merging them (config takes precedence).
+func (h *Manager) SetHosts(configHosts []*Host, hostsDir string) error {
+	hostsSlice, err := h.loadHostsFromSources(configHosts, hostsDir, false)
+	if err != nil {
+		return err
 	}
 
 	// Replace hosts directly with locking
@@ -141,44 +174,21 @@ func (h *Manager) SetHosts(configHosts []*Host, hostsDir string) error {
 // Reload reloads hosts from the configured hosts directory and/or main config file.
 // It builds the desired state from both sources (config takes precedence) and syncs to it.
 // Uses bulk replace for efficiency when there are many hosts.
+// Errors loading individual files are logged but don't stop the reload.
 func (h *Manager) Reload(configHosts []*Host) error {
 	h.Logger.Info("Reloading host configuration")
 
-	// Build desired state: config hosts + directory hosts (config takes precedence)
-	desiredHosts := make(map[string]*Host)
-
-	// First, add directory hosts
-	if h.hostsDir != "" {
-		files, err := filepath.Glob(filepath.Join(h.hostsDir, "*.yaml"))
-		if err != nil {
-			return fmt.Errorf("failed to glob host files: %w", err)
-		}
-		for _, file := range files {
-			host, err := LoadHostFromFile(file)
-			if err != nil {
-				h.Logger.WithError(err).WithField("file", file).Error("Failed to load host file during reload")
-				continue
-			}
-			desiredHosts[host.Host] = host
-		}
-	}
-
-	// Then, add config hosts (they override directory hosts)
-	for _, host := range configHosts {
-		desiredHosts[host.Host] = host
-	}
-
-	// Convert map to slice
-	desiredHostsSlice := make([]*Host, 0, len(desiredHosts))
-	for _, host := range desiredHosts {
-		desiredHostsSlice = append(desiredHostsSlice, host)
+	// Load hosts from both sources (continue on error for individual files during reload)
+	hostsSlice, err := h.loadHostsFromSources(configHosts, h.hostsDir, true)
+	if err != nil {
+		return err
 	}
 
 	// Replace hosts directly with locking
-	h.Logger.WithField("host_count", len(desiredHostsSlice)).Info("Replacing hosts")
+	h.Logger.WithField("host_count", len(hostsSlice)).Info("Replacing hosts")
 	h.Lock()
 	h.cache = make(map[string]*Host)
-	h.replaceHosts(desiredHostsSlice)
+	h.replaceHosts(hostsSlice)
 	h.Unlock()
 
 	h.Logger.Info("Host reload completed")
