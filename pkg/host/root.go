@@ -25,6 +25,20 @@ type Host struct {
 	logger   *log.Entry      `yaml:"-"`
 }
 
+// InitComponents initializes all components (captcha, ban, appsec) for the host.
+// This should be called after the host logger has been set.
+func (h *Host) InitComponents() {
+	if err := h.Captcha.Init(h.logger); err != nil {
+		h.logger.Error(err)
+	}
+	if err := h.Ban.Init(h.logger); err != nil {
+		h.logger.Error(err)
+	}
+	if err := h.AppSec.Init(h.logger); err != nil {
+		h.logger.Error(err)
+	}
+}
+
 type Manager struct {
 	Hosts    []*Host
 	Logger   *log.Entry
@@ -282,15 +296,8 @@ func (h *Manager) replaceHosts(newHosts []*Host) {
 				"has_ban":     true,
 			})
 
-			if err := newHost.Captcha.Init(newHost.logger); err != nil {
-				newHost.logger.Error(err)
-			}
-			if err := newHost.Ban.Init(newHost.logger); err != nil {
-				newHost.logger.Error(err)
-			}
-			if err := newHost.AppSec.Init(newHost.logger); err != nil {
-				newHost.logger.Error(err)
-			}
+			// Initialize all components
+			newHost.InitComponents()
 			finalHosts = append(finalHosts, newHost)
 		}
 	}
