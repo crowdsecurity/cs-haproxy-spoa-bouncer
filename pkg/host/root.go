@@ -114,43 +114,43 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 	return matchedHost
 }
 
-// loadHostsFromDirectory loads hosts from a directory, handling errors based on the error handling mode.
-func (h *Manager) loadHostsFromDirectory(hostsDir string, errorMode string) (map[string]*Host, error) {
+// loadHostsFromDirectory loads hosts from a directory.
+// Returns the loaded hosts and any errors encountered (one per file that failed to load).
+// Errors loading individual files are collected and returned rather than stopping the process.
+func (h *Manager) loadHostsFromDirectory(hostsDir string) (map[string]*Host, []error) {
 	allHosts := make(map[string]*Host)
-	
+	var errors []error
+
 	// Store hostsDir for future reloads
 	h.hostsDir = hostsDir
 	files, err := filepath.Glob(filepath.Join(hostsDir, "*.yaml"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to glob host files: %w", err)
+		return nil, []error{fmt.Errorf("failed to glob host files: %w", err)}
 	}
-	
+
 	for _, file := range files {
 		host, err := LoadHostFromFile(file)
 		if err != nil {
-			if errorMode == "continue" {
-				h.Logger.WithError(err).WithField("file", file).Error("Failed to load host file")
-				continue
-			}
-			return nil, err
+			errors = append(errors, fmt.Errorf("failed to load host file %s: %w", file, err))
+			continue
 		}
 		allHosts[host.Host] = host
 	}
-	
-	return allHosts, nil
+
+	return allHosts, errors
 }
 
 // loadHostsFromSources loads hosts from both directory and config, merging them.
 // Config hosts take precedence over directory hosts.
-func (h *Manager) loadHostsFromSources(configHosts []*Host, hostsDir string, errorMode string) ([]*Host, error) {
+// Returns the loaded hosts and any errors encountered while loading directory files.
+func (h *Manager) loadHostsFromSources(configHosts []*Host, hostsDir string) ([]*Host, []error) {
 	allHosts := make(map[string]*Host)
+	var errors []error
 
 	// First, load from directory if provided
 	if hostsDir != "" {
-		dirHosts, err := h.loadHostsFromDirectory(hostsDir, errorMode)
-		if err != nil {
-			return nil, err
-		}
+		dirHosts, dirErrors := h.loadHostsFromDirectory(hostsDir)
+		errors = append(errors, dirErrors...)
 		allHosts = dirHosts
 	}
 
@@ -165,14 +165,16 @@ func (h *Manager) loadHostsFromSources(configHosts []*Host, hostsDir string, err
 		hostsSlice = append(hostsSlice, host)
 	}
 
-	return hostsSlice, nil
+	return hostsSlice, errors
 }
 
 // SetHosts sets hosts from both config and directory, merging them (config takes precedence).
+// During initial startup, any errors loading directory files will cause this to fail.
 func (h *Manager) SetHosts(configHosts []*Host, hostsDir string) error {
-	hostsSlice, err := h.loadHostsFromSources(configHosts, hostsDir, "fail")
-	if err != nil {
-		return err
+	hostsSlice, errors := h.loadHostsFromSources(configHosts, hostsDir)
+	if len(errors) > 0 {
+		// During initial startup, return the first error
+		return errors[0]
 	}
 
 	// Replace hosts directly with locking
@@ -191,10 +193,12 @@ func (h *Manager) SetHosts(configHosts []*Host, hostsDir string) error {
 func (h *Manager) Reload(configHosts []*Host) error {
 	h.Logger.Info("Reloading host configuration")
 
-	// Load hosts from both sources (continue on error for individual files during reload)
-	hostsSlice, err := h.loadHostsFromSources(configHosts, h.hostsDir, "continue")
-	if err != nil {
-		return err
+	// Load hosts from both sources
+	hostsSlice, errors := h.loadHostsFromSources(configHosts, h.hostsDir)
+	
+	// Log all errors but continue with reload
+	for _, err := range errors {
+		h.Logger.WithError(err).Error("Failed to load host file during reload")
 	}
 
 	// Replace hosts directly with locking
