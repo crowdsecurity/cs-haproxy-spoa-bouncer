@@ -12,6 +12,7 @@ Group=crowdsec-spoa
 ExecStart=${BIN} -c ${CFG}/crowdsec-spoa-bouncer.yaml
 ExecStartPre=${BIN} -c ${CFG}/crowdsec-spoa-bouncer.yaml -t
 ExecStartPost=/bin/sleep 0.1
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
 # Security hardening

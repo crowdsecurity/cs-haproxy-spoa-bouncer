@@ -66,3 +66,47 @@ If no host is found for the incoming request, then the remediation will be sent 
 If the remediation is `captcha` and no host is found, then the remediation will be automatically changed to a `ban` since we have no way to display the captcha.
 
 This is why we recommend having a catch-all configuration for the `ban` remediation it will allow you to change the `fallback_remediation` to `allow` or provide a `contact_us_url`. As this will impact user experience if they are not able to contact anyone for help.
+
+#### Reloading Host Configuration
+
+The bouncer supports reloading host configurations without restarting the service. This is useful when using the `hosts_dir` configuration option to manage hosts via individual YAML files.
+
+**How to reload:**
+
+```bash
+# Using systemctl (recommended)
+sudo systemctl reload crowdsec-spoa-bouncer
+
+# Or manually send SIGHUP
+sudo kill -HUP $(pidof crowdsec-spoa-bouncer)
+```
+
+**What gets reloaded:**
+
+- ✅ Hosts from the main configuration file (`hosts:` section)
+- ✅ Hosts loaded from `hosts_dir` directory (all `*.yaml` files)
+- ✅ New hosts are added
+- ✅ Removed hosts are deleted
+- ✅ Modified hosts are updated
+
+**Precedence:** If a host exists in both the main config and `hosts_dir`, the main config version takes precedence and will replace the directory version on reload.
+
+**What does NOT get reloaded:**
+
+- ❌ SPOA listener addresses (`listen_tcp`, `listen_unix`)
+- ❌ LAPI connection settings (`api_url`, `api_key`, etc.)
+- ❌ Logging configuration
+- ❌ Prometheus configuration
+
+For changes to non-host configuration, you must restart the service:
+
+```bash
+sudo systemctl restart crowdsec-spoa-bouncer
+```
+
+**Important notes:**
+
+- Both hosts from the main config file and `hosts_dir` are reloaded on `systemctl reload`.
+- If a host exists in both sources, the main config version takes precedence.
+- If a host file has errors during reload, it will be logged but the reload will continue processing other files.
+- The reload operation is thread-safe and does not interrupt active requests.

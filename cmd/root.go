@@ -91,6 +91,10 @@ func Execute() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Set up SIGHUP handler for reload
+	reloadChan := make(chan os.Signal, 1)
+	signal.Notify(reloadChan, syscall.SIGHUP)
+
 	g, ctx := errgroup.WithContext(ctx)
 
 	config.Geo.Init(ctx)
@@ -162,6 +166,7 @@ func Execute() error {
 	// Create a base logger for the host manager
 	hostManagerLogger := log.WithField("component", "host_manager")
 	HostManager := host.NewManager(hostManagerLogger)
+	HostManager.SetContext(ctx) // Set base service context for goroutines
 
 	// Create and initialize global session manager (single GC goroutine for all hosts)
 	globalSessions := &session.Sessions{
@@ -172,22 +177,43 @@ func Execute() error {
 	sessionLogger := log.WithField("component", "global_sessions")
 	globalSessions.Init(sessionLogger, ctx)
 
+	// Handle SIGHUP for reload
 	g.Go(func() error {
-		HostManager.Run(ctx)
-		return nil
+		for {
+			select {
+			case <-reloadChan:
+				log.Info("Received SIGHUP, reloading host configuration")
+
+				// Re-read config file to get updated hosts
+				var reloadConfigHosts []*host.Host
+				if *configPath != "" {
+					configMerged, err := cfg.MergedConfig(*configPath)
+					if err != nil {
+						log.WithError(err).Error("Failed to read config file during reload")
+					} else {
+						configExpanded := csstring.StrictExpand(string(configMerged), os.LookupEnv)
+						reloadConfig, err := cfg.NewConfig(strings.NewReader(configExpanded))
+						if err != nil {
+							log.WithError(err).Error("Failed to parse config file during reload")
+						} else {
+							reloadConfigHosts = reloadConfig.Hosts
+						}
+					}
+				}
+
+				if err := HostManager.Reload(reloadConfigHosts); err != nil {
+					log.WithError(err).Error("Failed to reload host configuration")
+					// Don't return error, just log it so the service continues running
+				}
+			case <-ctx.Done():
+				return nil
+			}
+		}
 	})
 
-	for _, h := range config.Hosts {
-		HostManager.Chan <- host.HostOp{
-			Host: h,
-			Op:   host.OpAdd,
-		}
-	}
-
-	if config.HostsDir != "" {
-		if err := HostManager.LoadFromDirectory(config.HostsDir); err != nil {
-			return fmt.Errorf("failed to load hosts from directory: %w", err)
-		}
+	// Set hosts from both config and directory (merged, config takes precedence)
+	if err := HostManager.SetHosts(config.Hosts, config.HostsDir); err != nil {
+		return fmt.Errorf("failed to load hosts: %w", err)
 	}
 
 	// Create single SPOA listener - ultra-simplified architecture
