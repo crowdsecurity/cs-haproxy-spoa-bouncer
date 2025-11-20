@@ -131,7 +131,7 @@ func (h *Manager) loadHostsFromDirectory(hostsDir string) (map[string]*Host, []e
 	for _, file := range files {
 		host, err := LoadHostFromFile(file)
 		if err != nil {
-			errors = append(errors, fmt.Errorf("failed to load host file %s: %w", file, err))
+			errors = append(errors, fmt.Errorf("%s: %w", file, err))
 			continue
 		}
 		allHosts[host.Host] = host
@@ -195,10 +195,13 @@ func (h *Manager) Reload(configHosts []*Host) error {
 
 	// Load hosts from both sources
 	hostsSlice, errors := h.loadHostsFromSources(configHosts, h.hostsDir)
-	
+
 	// Log all errors but continue with reload
-	for _, err := range errors {
-		h.Logger.WithError(err).Error("Failed to load host file during reload")
+	if len(errors) > 0 {
+		h.Logger.WithField("error_count", len(errors)).Warn("Some host files failed to load during reload")
+		for _, err := range errors {
+			h.Logger.WithError(err).Error("Host file load error")
+		}
 	}
 
 	// Replace hosts directly with locking
