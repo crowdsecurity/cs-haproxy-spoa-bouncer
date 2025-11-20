@@ -258,51 +258,21 @@ func (h *Manager) createHostLogger(host *Host) *log.Entry {
 
 // replaceHosts replaces the entire host list with a new set of hosts.
 // This is used for bulk updates to avoid many individual add/remove operations.
-// Preserves existing Host objects when host string matches to maintain sessions/state.
+// Sessions are managed globally and persist independently of host objects.
 func (h *Manager) replaceHosts(newHosts []*Host) {
-	// Build map of existing hosts by host string
-	existingHosts := make(map[string]*Host)
-	for _, host := range h.Hosts {
-		existingHosts[host.Host] = host
-	}
-
-	// Build map of new hosts by host string
-	newHostsMap := make(map[string]*Host)
+	// Initialize all new hosts
 	for _, host := range newHosts {
-		newHostsMap[host.Host] = host
-	}
+		host.logger = h.createHostLogger(host)
+		host.logger = host.logger.WithFields(log.Fields{
+			"has_captcha": host.Captcha.Provider != "",
+			"has_ban":     true,
+		})
 
-	// Remove hosts that are no longer needed
-	// Note: Sessions persist in global manager, so no cleanup needed
-	for hostStr := range existingHosts {
-		if _, exists := newHostsMap[hostStr]; !exists {
-			// Host removed - sessions will be garbage collected by global session manager
-		}
-	}
-
-	// Process new hosts - update existing or create new
-	finalHosts := make([]*Host, 0, len(newHosts))
-	for _, newHost := range newHosts {
-		if existingHost, exists := existingHosts[newHost.Host]; exists {
-			// Host already exists - preserve it completely to maintain sessions/state
-			// Configuration changes require a service restart to take effect
-			// This ensures active captcha sessions are not lost during reload
-			finalHosts = append(finalHosts, existingHost)
-		} else {
-			// New host - initialize it
-			newHost.logger = h.createHostLogger(newHost)
-			newHost.logger = newHost.logger.WithFields(log.Fields{
-				"has_captcha": newHost.Captcha.Provider != "",
-				"has_ban":     true,
-			})
-
-			// Initialize all components
-			newHost.InitComponents()
-			finalHosts = append(finalHosts, newHost)
-		}
+		// Initialize all components
+		host.InitComponents()
 	}
 
 	// Replace the entire slice
-	h.Hosts = finalHosts
+	h.Hosts = newHosts
 	h.sort()
 }
