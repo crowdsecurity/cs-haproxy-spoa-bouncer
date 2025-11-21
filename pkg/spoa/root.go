@@ -444,6 +444,10 @@ func (s *Spoa) createNewCaptchaCookie(req *request.Request, mes *message.Message
 // Returns the remediation and parsed HTTP request data for reuse in AppSec processing.
 func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Message, matchedHost *host.Host) (remediation.Remediation, HTTPRequestData) {
 	if err := matchedHost.Captcha.InjectKeyValues(&req.Actions); err != nil {
+		s.logger.WithFields(log.Fields{
+			"host":  matchedHost.Host,
+			"error": err,
+		}).Error("Captcha configuration is invalid, falling back to fallback remediation")
 		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
 	}
 

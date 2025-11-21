@@ -166,22 +166,7 @@ func (c *Captcha) Init(logger *log.Entry) error {
 		return err
 	}
 
-	// Require explicit cookie_secret configuration (breaking change in 0.3.0)
-	// This ensures proper secret management and compliance requirements
-	if c.CookieSecret == "" {
-		return fmt.Errorf("cookie_secret is required for captcha cookie signing. " +
-			"Please configure cookie_secret with at least 32 bytes. " +
-			"This is a breaking change in 0.3.0 - cookie_secret must be explicitly set")
-	}
-
-	// Validate cookie_secret meets minimum security requirements
-	if len(c.CookieSecret) < 32 {
-		return fmt.Errorf("cookie_secret must be at least 32 bytes for security. "+
-			"Current length: %d bytes. "+
-			"Please use a cryptographically secure random key of at least 32 bytes", len(c.CookieSecret))
-	}
-
-	// Initialize cookie generator
+	// Initialize cookie generator (cookie_secret is validated in IsValid())
 	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie", c.CookieSecret)
 
 	return nil
@@ -205,10 +190,10 @@ func (c *Captcha) getTimeout() int {
 }
 
 // Inject key values injects the captcha provider key values into the HAProxy transaction
+// Validates configuration before injecting values
 func (c *Captcha) InjectKeyValues(actions *action.Actions) error {
-
-	// We check if the captcha configuration is valid for the front-end
-	if err := c.IsFrontEndValid(); err != nil {
+	// Validate configuration before injecting values
+	if err := c.IsValid(); err != nil {
 		return err
 	}
 
@@ -336,8 +321,9 @@ func (c *Captcha) Validate(ctx context.Context, tokenUUID, toParse string) (bool
 	return false, fmt.Errorf("%s", errorMsg)
 }
 
-// IsFrontEndValid checks if the captcha configuration is valid for the front-end
-func (c *Captcha) IsFrontEndValid() error {
+// IsValid checks if the captcha configuration is valid (frontend and backend)
+func (c *Captcha) IsValid() error {
+	// Frontend validation
 	if c.Provider == "" {
 		return fmt.Errorf("empty captcha provider")
 	}
@@ -355,29 +341,27 @@ func (c *Captcha) IsFrontEndValid() error {
 		return fmt.Errorf("invalid fallback remediation %s", c.FallbackRemediation)
 	}
 
-	return nil
-}
-
-// IsValid checks if the captcha configuration is valid for the back-end most notably the secret key
-func (c *Captcha) IsValid() error {
-	if err := c.IsFrontEndValid(); err != nil {
-		return err
-	}
-
+	// Backend validation
 	if c.SecretKey == "" {
 		return fmt.Errorf("empty captcha secret key")
 	}
 
-	return nil
-}
-
-// GetCookieSecret returns the secret used for signing captcha cookies
-// Returns cookie_secret if set, otherwise falls back to secret_key
-func (c *Captcha) GetCookieSecret() string {
-	if c.CookieSecret != "" {
-		return c.CookieSecret
+	// Require explicit cookie_secret configuration (breaking change in 0.3.0)
+	// This ensures proper secret management and compliance requirements
+	if c.CookieSecret == "" {
+		return fmt.Errorf("cookie_secret is required for captcha cookie signing. " +
+			"Please configure cookie_secret with at least 32 bytes. " +
+			"This is a breaking change in 0.3.0 - cookie_secret must be explicitly set")
 	}
-	return c.SecretKey
+
+	// Validate cookie_secret meets minimum security requirements
+	if len(c.CookieSecret) < 32 {
+		return fmt.Errorf("cookie_secret must be at least 32 bytes for security. "+
+			"Current length: %d bytes. "+
+			"Please use a cryptographically secure random key of at least 32 bytes", len(c.CookieSecret))
+	}
+
+	return nil
 }
 
 // NewPendingToken creates a new pending captcha token using the host's configured TTL
@@ -419,6 +403,7 @@ func (c *Captcha) NewPassedToken(existingToken *CaptchaToken) CaptchaToken {
 }
 
 // GenerateCookie generates an HTTP cookie from a captcha token using the host's configuration
+// Note: cookie_secret is validated in InjectKeyValues() before this method is called
 func (c *Captcha) GenerateCookie(tok CaptchaToken, ssl *bool) (*http.Cookie, error) {
 	secure := false
 	if ssl != nil {
@@ -430,7 +415,7 @@ func (c *Captcha) GenerateCookie(tok CaptchaToken, ssl *bool) (*http.Cookie, err
 
 	return GenerateCaptchaCookie(
 		tok,
-		c.GetCookieSecret(),
+		c.CookieSecret,
 		c.CookieGenerator.Name,
 		*c.CookieGenerator.HTTPOnly,
 		secure,
@@ -438,6 +423,7 @@ func (c *Captcha) GenerateCookie(tok CaptchaToken, ssl *bool) (*http.Cookie, err
 }
 
 // ValidateCookie validates a base64-encoded captcha cookie value using the host's secret
+// Note: cookie_secret is validated in InjectKeyValues() before this method is called
 func (c *Captcha) ValidateCookie(b64Value string) (*CaptchaToken, error) {
-	return ValidateCaptchaCookie(b64Value, c.GetCookieSecret())
+	return ValidateCaptchaCookie(b64Value, c.CookieSecret)
 }
