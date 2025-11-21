@@ -13,6 +13,7 @@ import (
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/cookie"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
+	"github.com/google/uuid"
 	"github.com/negasus/haproxy-spoe-go/action"
 	log "github.com/sirupsen/logrus"
 )
@@ -33,9 +34,14 @@ type Captcha struct {
 	SiteKey             string                 `yaml:"site_key"`             // Captcha Provider Site Key
 	FallbackRemediation string                 `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
 	Timeout             int                    `yaml:"timeout"`              // HTTP client timeout in seconds (default: 5)
-	CookieGenerator     cookie.CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies from sessions
+	CookieGenerator     cookie.CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies
+	PendingTTL          string                 `yaml:"pending_ttl"`          // TTL for pending captcha tokens (default: 30m)
+	PassedTTL           string                 `yaml:"passed_ttl"`           // TTL for passed captcha tokens (default: 24h)
+	CookieSecret        string                 `yaml:"cookie_secret"`        // Secret for signing captcha cookies (defaults to secret_key if not set)
 	logger              *log.Entry             `yaml:"-"`
 	client              *http.Client           `yaml:"-"`
+	parsedPendingTTL    time.Duration          `yaml:"-"`
+	parsedPassedTTL     time.Duration          `yaml:"-"`
 }
 
 func (c *Captcha) Init(logger *log.Entry) error {
@@ -66,12 +72,39 @@ func (c *Captcha) Init(logger *log.Entry) error {
 		c.FallbackRemediation = "ban"
 	}
 
+	// Parse TTLs
+	if c.PendingTTL == "" {
+		c.PendingTTL = "30m"
+	}
+	if c.PassedTTL == "" {
+		c.PassedTTL = "24h"
+	}
+
+	var err error
+	c.parsedPendingTTL, err = time.ParseDuration(c.PendingTTL)
+	if err != nil {
+		c.logger.WithError(err).WithField("pending_ttl", c.PendingTTL).Warn("failed to parse pending_ttl, using default")
+		c.parsedPendingTTL = DefaultPendingTTL
+	}
+
+	c.parsedPassedTTL, err = time.ParseDuration(c.PassedTTL)
+	if err != nil {
+		c.logger.WithError(err).WithField("passed_ttl", c.PassedTTL).Warn("failed to parse passed_ttl, using default")
+		c.parsedPassedTTL = DefaultPassedTTL
+	}
+
 	if err := c.IsValid(); err != nil {
 		return err
 	}
 
-	// Initialize cookie generator (sessions are managed by SPOA, not captcha)
-	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie", c.SecretKey)
+	// Determine cookie secret (use cookie_secret if set, otherwise fall back to secret_key)
+	cookieSecret := c.CookieSecret
+	if cookieSecret == "" {
+		cookieSecret = c.SecretKey
+	}
+
+	// Initialize cookie generator
+	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie", cookieSecret)
 
 	return nil
 }
@@ -113,9 +146,9 @@ type CaptchaResponse struct {
 	ErrorCodes []string `json:"error-codes"`
 }
 
-// Validate tries to validate the captcha response and sets the session status to valid if the captcha is valid
-func (c *Captcha) Validate(ctx context.Context, uuid, toParse string) (bool, error) {
-	clog := c.logger.WithField("session", uuid)
+// Validate tries to validate the captcha response and returns true if the captcha is valid
+func (c *Captcha) Validate(ctx context.Context, tokenUUID, toParse string) (bool, error) {
+	clog := c.logger.WithField("uuid", tokenUUID)
 
 	if len(toParse) == 0 {
 		clog.Warn("captcha validation called with empty request body - form may be submitting without captcha response")
@@ -134,12 +167,6 @@ func (c *Captcha) Validate(ctx context.Context, uuid, toParse string) (bool, err
 		clog.Debug("user submitted empty captcha response")
 		return false, fmt.Errorf("empty captcha response field")
 	}
-
-	// if tries := s.Get(session.CAPTCHA_TRIES); tries != nil {
-	// 	s.Set(session.CAPTCHA_TRIES, tries.(int)+1)
-	// } else {
-	// 	s.Set(session.CAPTCHA_TRIES, 1)
-	// }
 
 	body := url.Values{}
 	body.Add("secret", c.SecretKey)
@@ -264,4 +291,75 @@ func (c *Captcha) IsValid() error {
 	}
 
 	return nil
+}
+
+// GetCookieSecret returns the secret used for signing captcha cookies
+// Returns cookie_secret if set, otherwise falls back to secret_key
+func (c *Captcha) GetCookieSecret() string {
+	if c.CookieSecret != "" {
+		return c.CookieSecret
+	}
+	return c.SecretKey
+}
+
+// NewPendingToken creates a new pending captcha token using the host's configured TTL
+func (c *Captcha) NewPendingToken() (CaptchaToken, error) {
+	tokenUUID, err := uuid.NewRandom()
+	if err != nil {
+		return CaptchaToken{}, fmt.Errorf("failed to generate UUID: %w", err)
+	}
+
+	now := time.Now().Unix()
+	return CaptchaToken{
+		UUID: tokenUUID.String(),
+		St:   Pending,
+		Iat:  now,
+		Exp:  now + int64(c.parsedPendingTTL.Seconds()),
+	}, nil
+}
+
+// NewPassedToken creates a new passed captcha token using the host's configured TTL
+// Reuses the UUID from the existing token for traceability
+func (c *Captcha) NewPassedToken(existingToken *CaptchaToken) CaptchaToken {
+	now := time.Now().Unix()
+	tokenUUID := ""
+	if existingToken != nil && existingToken.UUID != "" {
+		tokenUUID = existingToken.UUID
+	} else {
+		// Generate new UUID if none exists (shouldn't happen in normal flow)
+		if newUUID, err := uuid.NewRandom(); err == nil {
+			tokenUUID = newUUID.String()
+		}
+	}
+
+	return CaptchaToken{
+		UUID: tokenUUID,
+		St:   Valid,
+		Iat:  now,
+		Exp:  now + int64(c.parsedPassedTTL.Seconds()),
+	}
+}
+
+// GenerateCookie generates an HTTP cookie from a captcha token using the host's configuration
+func (c *Captcha) GenerateCookie(tok CaptchaToken, ssl *bool) (*http.Cookie, error) {
+	secure := false
+	if ssl != nil {
+		secure = *ssl
+	}
+	if c.CookieGenerator.Secure == "always" {
+		secure = true
+	}
+
+	return GenerateCaptchaCookie(
+		tok,
+		c.GetCookieSecret(),
+		c.CookieGenerator.Name,
+		*c.CookieGenerator.HTTPOnly,
+		secure,
+	)
+}
+
+// ValidateCookie validates a base64-encoded captcha cookie value using the host's secret
+func (c *Captcha) ValidateCookie(b64Value string) (*CaptchaToken, error) {
+	return ValidateCaptchaCookie(b64Value, c.GetCookieSecret())
 }

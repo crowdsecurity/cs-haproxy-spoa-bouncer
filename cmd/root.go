@@ -18,7 +18,6 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
@@ -163,15 +162,6 @@ func Execute() error {
 	hostManagerLogger := log.WithField("component", "host_manager")
 	HostManager := host.NewManager(hostManagerLogger)
 
-	// Create and initialize global session manager (single GC goroutine for all hosts)
-	globalSessions := &session.Sessions{
-		SessionIdleTimeout:    "1h", // Default values
-		SessionMaxTime:        "12h",
-		SessionGarbageSeconds: 60,
-	}
-	sessionLogger := log.WithField("component", "global_sessions")
-	globalSessions.Init(sessionLogger, ctx)
-
 	g.Go(func() error {
 		HostManager.Run(ctx)
 		return nil
@@ -195,13 +185,12 @@ func Execute() error {
 
 	// Create single SPOA directly with minimal configuration
 	spoaConfig := &spoa.SpoaConfig{
-		TcpAddr:        config.ListenTCP,
-		UnixAddr:       config.ListenUnix,
-		Dataset:        dataSet,
-		HostManager:    HostManager,
-		GeoDatabase:    &config.Geo,
-		GlobalSessions: globalSessions,
-		Logger:         spoaLogger,
+		TcpAddr:     config.ListenTCP,
+		UnixAddr:    config.ListenUnix,
+		Dataset:     dataSet,
+		HostManager: HostManager,
+		GeoDatabase: &config.Geo,
+		Logger:      spoaLogger,
 	}
 
 	singleSpoa, err := spoa.New(spoaConfig)
