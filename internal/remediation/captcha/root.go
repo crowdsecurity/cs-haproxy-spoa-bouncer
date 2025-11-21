@@ -349,16 +349,12 @@ func (c *Captcha) IsValid() error {
 	// Require explicit cookie_secret configuration (breaking change in 0.3.0)
 	// This ensures proper secret management and compliance requirements
 	if c.CookieSecret == "" {
-		return fmt.Errorf("cookie_secret is required for captcha cookie signing. " +
-			"Please configure cookie_secret with at least 32 bytes. " +
-			"This is a breaking change in 0.3.0 - cookie_secret must be explicitly set")
+		return fmt.Errorf("cookie_secret is required for captcha cookie signing. Please configure cookie_secret with at least 32 bytes. This is a breaking change in 0.3.0 - cookie_secret must be explicitly set")
 	}
 
 	// Validate cookie_secret meets minimum security requirements
 	if len(c.CookieSecret) < 32 {
-		return fmt.Errorf("cookie_secret must be at least 32 bytes for security. "+
-			"Current length: %d bytes. "+
-			"Please use a cryptographically secure random key of at least 32 bytes", len(c.CookieSecret))
+		return fmt.Errorf("cookie_secret must be at least 32 bytes for security. Current length: %d bytes. Please use a cryptographically secure random key of at least 32 bytes", len(c.CookieSecret))
 	}
 
 	return nil
