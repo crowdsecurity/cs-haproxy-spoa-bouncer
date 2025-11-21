@@ -1,0 +1,36 @@
+## Log configuration
+log_mode: stdout
+log_level: debug
+
+## LAPI configuration
+api_url: http://crowdsec:8080/
+api_key: +4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
+retry_initial_connect: true
+appsec_url: http://crowdsec:7422/
+
+## SPOA listener configuration
+listen_tcp: 0.0.0.0:9000
+#listen_unix: /run/crowdsec-spoa/spoa.sock
+
+hosts:
+  - host: "localhost*"
+    ban:
+      contact_us_url: "mailto:lol@crowdsec.net"
+    appsec:
+      always_send: true
+  - host: "*"
+    captcha:
+      secret_key: 0x90acf418F0A70371f2F828C30A16526e28876075
+      site_key: 7b50120d-ed3e-4e1d-8913-d832f4d769d3
+      provider: hcaptcha
+      session_idle_timeout: 5m
+      session_max_time: 30m
+    ban:
+      contact_us_url: "mailto:support@crowdsec.net"
+    appsec:
+      always_send: true
+
+prometheus:
+  enabled: true
+  listen_addr: 0.0.0.0
+  listen_port: 60601

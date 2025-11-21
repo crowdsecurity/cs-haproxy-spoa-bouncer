@@ -461,6 +461,8 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 	var tok *captcha.CaptchaToken
 
 	// Try to parse and validate the existing cookie using host's configuration
+	// Note: Old format cookies (pre-JWT) will fail validation and trigger creation of a new JWT cookie
+	// This provides backward compatibility during the migration period
 	if cookieB64 != nil {
 		parsedTok, err := matchedHost.Captcha.ValidateCookie(*cookieB64)
 		if err != nil {
@@ -471,7 +473,7 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 		}
 	}
 
-	// Create new cookie if token is missing or invalid
+	// Create new cookie if token is missing or invalid (including old format cookies)
 	if tok == nil {
 		var err error
 		tok, err = s.createNewCaptchaCookie(req, mes, matchedHost)
