@@ -2,6 +2,7 @@ package captcha
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/cookie"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
+	"github.com/crowdsecurity/go-cs-lib/ptr"
 	"github.com/google/uuid"
 	"github.com/negasus/haproxy-spoe-go/action"
 	log "github.com/sirupsen/logrus"
@@ -28,20 +29,88 @@ const (
 	MaxTimeout = 300
 )
 
+// CookieGenerator handles cookie configuration and generation for captcha
+type CookieGenerator struct {
+	Secure   string     `yaml:"secure"`    // Secure sets the secure flag on the cookie, valid arguments are "auto", "always", "never". "auto" relies on the `ssl_fc` flag from HAProxy
+	HTTPOnly *bool      `yaml:"http_only"` // HttpOnly sets the HttpOnly flag on the cookie
+	Secret   string     `yaml:"secret"`    // Secret used for signing cookies (required for stateless cookies)
+	Name     string     `yaml:"-"`         // Name of the cookie, usually set by the remediation. EG "crowdsec_captcha"
+	logger   *log.Entry `yaml:"-"`         // logger passed from the remediation
+}
+
+func (c *CookieGenerator) Init(logger *log.Entry, name, secret string) {
+	c.logger = logger.WithField("type", "cookie")
+	c.Name = name
+	if c.Secret == "" {
+		c.Secret = secret
+	}
+	c.SetDefaults()
+}
+
+func (c *CookieGenerator) SetDefaults() {
+	// Default Secure to auto
+	if c.Secure == "" {
+		c.Secure = "auto"
+	}
+	// Default httpOnly to true
+	if c.HTTPOnly == nil {
+		c.HTTPOnly = ptr.Of(true)
+	}
+	// Note: Cookies are always signed (required for stateless design)
+}
+
+func (c *CookieGenerator) IsValid() error {
+	//TODO
+	return nil
+}
+
+func (c *CookieGenerator) GenerateUnsetCookie(ssl *bool) (*http.Cookie, error) {
+	cookie := &http.Cookie{
+		Name:     c.Name,
+		Value:    "",
+		MaxAge:   -1,
+		HttpOnly: *c.HTTPOnly,
+		Secure:   false,
+		SameSite: http.SameSiteStrictMode,
+		Path:     "/",
+	}
+
+	switch c.Secure {
+	case "auto":
+		if ssl != nil {
+			cookie.Secure = *ssl
+		} else {
+			c.logger.Warn("ssl flag not set, defaulting to false")
+		}
+	case "always":
+		cookie.Secure = true
+	}
+
+	return cookie, urlEncodeValue(cookie)
+}
+
+func urlEncodeValue(cookie *http.Cookie) error {
+	cookie.Value = base64.URLEncoding.EncodeToString([]byte(cookie.Value))
+	if len(cookie.String()) > 4096 {
+		return fmt.Errorf("cookie value too long")
+	}
+	return nil
+}
+
 type Captcha struct {
-	Provider            string                 `yaml:"provider"`             // Captcha Provider
-	SecretKey           string                 `yaml:"secret_key"`           // Captcha Provider Secret Key
-	SiteKey             string                 `yaml:"site_key"`             // Captcha Provider Site Key
-	FallbackRemediation string                 `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
-	Timeout             int                    `yaml:"timeout"`              // HTTP client timeout in seconds (default: 5)
-	CookieGenerator     cookie.CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies
-	PendingTTL          string                 `yaml:"pending_ttl"`          // TTL for pending captcha tokens (default: 30m)
-	PassedTTL           string                 `yaml:"passed_ttl"`           // TTL for passed captcha tokens (default: 24h)
-	CookieSecret        string                 `yaml:"cookie_secret"`        // Secret for signing captcha cookies (defaults to secret_key if not set)
-	logger              *log.Entry             `yaml:"-"`
-	client              *http.Client           `yaml:"-"`
-	parsedPendingTTL    time.Duration          `yaml:"-"`
-	parsedPassedTTL     time.Duration          `yaml:"-"`
+	Provider            string          `yaml:"provider"`             // Captcha Provider
+	SecretKey           string          `yaml:"secret_key"`           // Captcha Provider Secret Key
+	SiteKey             string          `yaml:"site_key"`             // Captcha Provider Site Key
+	FallbackRemediation string          `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
+	Timeout             int             `yaml:"timeout"`              // HTTP client timeout in seconds (default: 5)
+	CookieGenerator     CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies
+	PendingTTL          string          `yaml:"pending_ttl"`          // TTL for pending captcha tokens (default: 30m)
+	PassedTTL           string          `yaml:"passed_ttl"`           // TTL for passed captcha tokens (default: 24h)
+	CookieSecret        string          `yaml:"cookie_secret"`        // Secret for signing captcha cookies (defaults to secret_key if not set)
+	logger              *log.Entry      `yaml:"-"`
+	client              *http.Client    `yaml:"-"`
+	parsedPendingTTL    time.Duration   `yaml:"-"`
+	parsedPassedTTL     time.Duration   `yaml:"-"`
 }
 
 func (c *Captcha) Init(logger *log.Entry) error {
