@@ -62,8 +62,7 @@ func (rM RemediationIdsMap) AddID(clog *log.Entry, r remediation.Remediation, id
 			clog.Tracef("remediation %s not found, creating", r.String())
 		}
 		// Pre-allocate slice with capacity for multiple IDs per remediation
-		rM[r] = make([]RemediationDetails, 1, 4) // Start with capacity 4
-		rM[r][0] = RemediationDetails{id, origin}
+		rM[r] = []RemediationDetails{{id, origin}}
 		return
 	}
 	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
