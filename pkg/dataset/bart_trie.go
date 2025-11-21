@@ -77,9 +77,11 @@ func (t *BartTrie) AddBatch(operations []BartAddOp) error {
 
 		// Check if the exact prefix exists by attempting to delete it
 		// DeletePersist returns (newTable, value, found) - if found is true, the exact prefix existed
-		_, existingData, exactPrefixExists := next.DeletePersist(prefix)
-		var newData RemediationIdsMap
+		var existingData RemediationIdsMap
+		var exactPrefixExists bool
+		next, existingData, exactPrefixExists = next.DeletePersist(prefix)
 
+		var newData RemediationIdsMap
 		if exactPrefixExists {
 			if valueLog != nil {
 				valueLog.Trace("exact prefix exists, merging IDs")
@@ -87,8 +89,6 @@ func (t *BartTrie) AddBatch(operations []BartAddOp) error {
 			// Clone existing data and add the new ID
 			newData = existingData.Clone()
 			newData.AddID(valueLog, op.R, op.ID, op.Origin)
-			// Re-insert with merged data (we deleted it to check, now we add it back)
-			next = next.InsertPersist(prefix, newData)
 		} else {
 			if valueLog != nil {
 				valueLog.Trace("creating new entry")
@@ -96,9 +96,9 @@ func (t *BartTrie) AddBatch(operations []BartAddOp) error {
 			// Create new data
 			newData = RemediationIdsMap{}
 			newData.AddID(valueLog, op.R, op.ID, op.Origin)
-			// Insert new entry
-			next = next.InsertPersist(prefix, newData)
 		}
+		// Re-insert with merged/new data (we deleted it to check, now we add it back)
+		next = next.InsertPersist(prefix, newData)
 	}
 
 	// Atomically swap in the final table (only once for the entire batch)
@@ -136,7 +136,9 @@ func (t *BartTrie) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 
 		// Check if exact prefix exists using DeletePersist (same pattern as AddBatch)
 		// DeletePersist returns (newTable, value, found) - if found is true, the exact prefix existed
-		next, existingData, exactPrefixExists := next.DeletePersist(prefix)
+		var existingData RemediationIdsMap
+		var exactPrefixExists bool
+		next, existingData, exactPrefixExists = next.DeletePersist(prefix)
 		if !exactPrefixExists {
 			if valueLog != nil {
 				valueLog.Trace("exact prefix not found")
@@ -167,7 +169,6 @@ func (t *BartTrie) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 				valueLog.Trace("removed prefix entirely")
 			}
 			// Prefix is already deleted from DeletePersist above, no need to delete again
-			// Just continue with the next operation
 		} else {
 			if valueLog != nil {
 				valueLog.Trace("removed ID from existing prefix")

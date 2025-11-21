@@ -96,6 +96,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 	if len(prefixOps) > 0 {
 		if err := d.BartUnifiedIPSet.AddBatch(prefixOps); err != nil {
 			log.Errorf("Error adding prefix decisions: %s", err.Error())
+			// Skip metrics increment on error
 		} else {
 			// AddBatch succeeded, increment metrics for all operations
 			for _, op := range prefixOps {
