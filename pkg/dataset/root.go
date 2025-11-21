@@ -72,8 +72,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				prefixLen = 32
 			}
 			prefix := netip.PrefixFrom(ip, prefixLen)
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Inc()
-			prefixOps = append(prefixOps, BartAddOp{prefix, origin, r, decision.ID})
+			prefixOps = append(prefixOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, ID: decision.ID, IPType: ipType, Scope: "ip"})
 		case "range":
 			prefix, err := netip.ParsePrefix(*decision.Value)
 			if err != nil {
@@ -84,27 +83,34 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			if prefix.Addr().Is6() {
 				ipType = "ipv6"
 			}
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
-			prefixOps = append(prefixOps, BartAddOp{prefix, origin, r, decision.ID})
+			prefixOps = append(prefixOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, ID: decision.ID, IPType: ipType, Scope: "range"})
 		case "country":
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": "", "scope": "country"}).Inc()
-			cnOps = append(cnOps, cnOp{*decision.Value, origin, r, decision.ID})
+			cnOps = append(cnOps, cnOp{cn: *decision.Value, origin: origin, r: r, id: decision.ID})
 		default:
 			log.Errorf("Unknown scope %s", *decision.Scope)
 		}
 	}
 
 	// Execute unified batch for all prefixes (IPs and ranges)
+	// Only increment metrics for successful additions
 	if len(prefixOps) > 0 {
 		if err := d.BartUnifiedIPSet.AddBatch(prefixOps); err != nil {
 			log.Errorf("Error adding prefix decisions: %s", err.Error())
+		} else {
+			// AddBatch succeeded, increment metrics for all operations
+			for _, op := range prefixOps {
+				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.Origin, "ip_type": op.IPType, "scope": op.Scope}).Inc()
+			}
 		}
 	}
 	// CN operations are handled individually (they use a different data structure)
+	// Only increment metrics for successful additions
 	for _, op := range cnOps {
 		if err := d.addCN(op.cn, op.origin, op.r, op.id); err != nil {
 			log.Errorf("Error adding CN decision: %s", err.Error())
+			continue
 		}
+		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.origin, "ip_type": "", "scope": "country"}).Inc()
 	}
 }
 
@@ -153,8 +159,7 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 				prefixLen = 32
 			}
 			prefix := netip.PrefixFrom(ip, prefixLen)
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Dec()
-			prefixOps = append(prefixOps, BartRemoveOp{prefix, r, decision.ID})
+			prefixOps = append(prefixOps, BartRemoveOp{Prefix: prefix, R: r, ID: decision.ID, Origin: origin, IPType: ipType, Scope: "ip"})
 		case "range":
 			prefix, err := netip.ParsePrefix(*decision.Value)
 			if err != nil {
@@ -165,24 +170,34 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 			if prefix.Addr().Is6() {
 				ipType = "ipv6"
 			}
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Dec()
-			prefixOps = append(prefixOps, BartRemoveOp{prefix, r, decision.ID})
+			prefixOps = append(prefixOps, BartRemoveOp{Prefix: prefix, R: r, ID: decision.ID, Origin: origin, IPType: ipType, Scope: "range"})
 		case "country":
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": "", "scope": "country"}).Dec()
-			cnOps = append(cnOps, cnOp{*decision.Value, r, decision.ID, origin})
+			cnOps = append(cnOps, cnOp{cn: *decision.Value, r: r, id: decision.ID, origin: origin})
 		default:
 			log.Errorf("Unknown scope %s", *decision.Scope)
 		}
 	}
 
 	// Execute unified batch for all prefixes (IPs and ranges)
+	// Only decrement metrics for successful removals
 	if len(prefixOps) > 0 {
-		d.BartUnifiedIPSet.RemoveBatch(prefixOps)
+		results := d.BartUnifiedIPSet.RemoveBatch(prefixOps)
+		for _, op := range results {
+			if op != nil {
+				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.Origin, "ip_type": op.IPType, "scope": op.Scope}).Dec()
+			}
+		}
 	}
 	// CN operations are handled individually (they use a different data structure)
+	// Only decrement metrics for successful removals
 	for _, op := range cnOps {
-		if _, err := d.removeCN(op.cn, op.r, op.id); err != nil {
+		removed, err := d.removeCN(op.cn, op.r, op.id)
+		if err != nil {
 			log.Errorf("Error removing CN decision: %s", err.Error())
+			continue
+		}
+		if removed {
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.origin, "ip_type": "", "scope": "country"}).Dec()
 		}
 	}
 }

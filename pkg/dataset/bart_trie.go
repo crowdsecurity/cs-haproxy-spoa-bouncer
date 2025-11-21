@@ -16,6 +16,8 @@ type BartAddOp struct {
 	Origin string
 	R      remediation.Remediation
 	ID     int64
+	IPType string
+	Scope  string
 }
 
 // BartRemoveOp represents a single prefix removal operation for batch processing
@@ -23,6 +25,9 @@ type BartRemoveOp struct {
 	Prefix netip.Prefix
 	R      remediation.Remediation
 	ID     int64
+	Origin string
+	IPType string
+	Scope  string
 }
 
 // BartTrie is a trie-based implementation using bart library.
@@ -103,8 +108,9 @@ func (t *BartTrie) AddBatch(operations []BartAddOp) error {
 }
 
 // RemoveBatch removes multiple prefixes from the bart table in a single atomic operation.
-// Returns a slice of booleans indicating whether each operation successfully removed an ID.
-func (t *BartTrie) RemoveBatch(operations []BartRemoveOp) []bool {
+// Returns a slice of pointers to successfully removed operations (nil for failures).
+// This allows callers to access operation metadata (Origin, IPType, Scope) for metrics.
+func (t *BartTrie) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 	if len(operations) == 0 {
 		return nil
 	}
@@ -117,7 +123,7 @@ func (t *BartTrie) RemoveBatch(operations []BartRemoveOp) []bool {
 
 	// Process all operations, chaining the table updates
 	next := cur
-	results := make([]bool, len(operations))
+	results := make([]*BartRemoveOp, len(operations))
 	for i, op := range operations {
 		prefix := op.Prefix.Masked()
 
@@ -128,13 +134,14 @@ func (t *BartTrie) RemoveBatch(operations []BartRemoveOp) []bool {
 			valueLog.Trace("removing from bart trie")
 		}
 
-		// Check if prefix exists
-		existingData, found := next.Lookup(prefix.Addr())
-		if !found {
+		// Check if exact prefix exists using DeletePersist (same pattern as AddBatch)
+		// DeletePersist returns (newTable, value, found) - if found is true, the exact prefix existed
+		next, existingData, exactPrefixExists := next.DeletePersist(prefix)
+		if !exactPrefixExists {
 			if valueLog != nil {
-				valueLog.Trace("prefix not found")
+				valueLog.Trace("exact prefix not found")
 			}
-			results[i] = false
+			results[i] = nil
 			continue
 		}
 
@@ -145,24 +152,27 @@ func (t *BartTrie) RemoveBatch(operations []BartRemoveOp) []bool {
 			if valueLog != nil {
 				valueLog.Trace("ID not found")
 			}
-			results[i] = false
+			results[i] = nil
+			// Re-insert the prefix since we deleted it to check for existence
+			next = next.InsertPersist(prefix, existingData)
 			continue
 		}
 
-		// ID was successfully removed
-		results[i] = true
+		// ID was successfully removed - return pointer to the operation for metadata access
+		// Use index to get pointer to original operation (safe since we don't modify the slice)
+		results[i] = &operations[i]
 
 		if clonedData.IsEmpty() {
 			if valueLog != nil {
 				valueLog.Trace("removed prefix entirely")
 			}
-			// Delete the entry using DeletePersist
-			next, _, _ = next.DeletePersist(prefix)
+			// Prefix is already deleted from DeletePersist above, no need to delete again
+			// Just continue with the next operation
 		} else {
 			if valueLog != nil {
 				valueLog.Trace("removed ID from existing prefix")
 			}
-			// Update with modified data using InsertPersist
+			// Re-insert with modified data (we deleted it to check, now we add it back with updated data)
 			next = next.InsertPersist(prefix, clonedData)
 		}
 	}

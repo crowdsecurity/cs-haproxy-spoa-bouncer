@@ -34,6 +34,7 @@ func (s *BartUnifiedIPSet) AddBatch(operations []BartAddOp) error {
 
 // RemoveBatch removes multiple prefixes in a single batch operation.
 // IPs should be converted to /32 or /128 prefixes before calling this method.
-func (s *BartUnifiedIPSet) RemoveBatch(operations []BartRemoveOp) []bool {
+// Returns a slice of pointers to successfully removed operations (nil for failures).
+func (s *BartUnifiedIPSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 	return s.trie.RemoveBatch(operations)
 }
