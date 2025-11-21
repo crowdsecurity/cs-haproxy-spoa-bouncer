@@ -75,30 +75,26 @@ func (t *BartTrie) AddBatch(operations []BartAddOp) error {
 			valueLog.Trace("adding to bart trie")
 		}
 
-		// Check if the exact prefix exists by attempting to delete it
-		// DeletePersist returns (newTable, value, found) - if found is true, the exact prefix existed
-		var existingData RemediationIdsMap
-		var exactPrefixExists bool
-		next, existingData, exactPrefixExists = next.DeletePersist(prefix)
-
-		var newData RemediationIdsMap
-		if exactPrefixExists {
-			if valueLog != nil {
-				valueLog.Trace("exact prefix exists, merging IDs")
+		// Use ModifyPersist to atomically update or create the prefix entry
+		// This is more efficient than DeletePersist + InsertPersist as it only traverses once
+		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationIdsMap, exists bool) (RemediationIdsMap, bool) {
+			if exists {
+				if valueLog != nil {
+					valueLog.Trace("exact prefix exists, merging IDs")
+				}
+				// Clone existing data and add the new ID
+				newData := existingData.Clone()
+				newData.AddID(valueLog, op.R, op.ID, op.Origin)
+				return newData, false // false = don't delete
 			}
-			// Clone existing data and add the new ID
-			newData = existingData.Clone()
-			newData.AddID(valueLog, op.R, op.ID, op.Origin)
-		} else {
 			if valueLog != nil {
 				valueLog.Trace("creating new entry")
 			}
 			// Create new data
-			newData = RemediationIdsMap{}
+			newData := RemediationIdsMap{}
 			newData.AddID(valueLog, op.R, op.ID, op.Origin)
-		}
-		// Re-insert with merged/new data (we deleted it to check, now we add it back)
-		next = next.InsertPersist(prefix, newData)
+			return newData, false // false = don't delete
+		})
 	}
 
 	// Atomically swap in the final table (only once for the entire batch)
@@ -134,48 +130,43 @@ func (t *BartTrie) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 			valueLog.Trace("removing from bart trie")
 		}
 
-		// Check if exact prefix exists using DeletePersist (same pattern as AddBatch)
-		// DeletePersist returns (newTable, value, found) - if found is true, the exact prefix existed
-		var existingData RemediationIdsMap
-		var exactPrefixExists bool
-		next, existingData, exactPrefixExists = next.DeletePersist(prefix)
-		if !exactPrefixExists {
-			if valueLog != nil {
-				valueLog.Trace("exact prefix not found")
+		// Use ModifyPersist to atomically update or remove the prefix entry
+		// This is more efficient than DeletePersist + InsertPersist as it only traverses once
+		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationIdsMap, exists bool) (RemediationIdsMap, bool) {
+			if !exists {
+				if valueLog != nil {
+					valueLog.Trace("exact prefix not found")
+				}
+				results[i] = nil
+				return existingData, false // false = don't delete (prefix doesn't exist anyway)
 			}
-			results[i] = nil
-			continue
-		}
 
-		// Clone existing data and remove the ID
-		clonedData := existingData.Clone()
-		err := clonedData.RemoveID(valueLog, op.R, op.ID)
-		if err != nil {
-			if valueLog != nil {
-				valueLog.Trace("ID not found")
+			// Clone existing data and remove the ID
+			clonedData := existingData.Clone()
+			err := clonedData.RemoveID(valueLog, op.R, op.ID)
+			if err != nil {
+				if valueLog != nil {
+					valueLog.Trace("ID not found")
+				}
+				results[i] = nil
+				return existingData, false // false = don't delete, keep original data
 			}
-			results[i] = nil
-			// Re-insert the prefix since we deleted it to check for existence
-			next = next.InsertPersist(prefix, existingData)
-			continue
-		}
 
-		// ID was successfully removed - return pointer to the operation for metadata access
-		// Use index to get pointer to original operation (safe since we don't modify the slice)
-		results[i] = &operations[i]
+			// ID was successfully removed - return pointer to the operation for metadata access
+			// Use index to get pointer to original operation (safe since we don't modify the slice)
+			results[i] = &operations[i]
 
-		if clonedData.IsEmpty() {
-			if valueLog != nil {
-				valueLog.Trace("removed prefix entirely")
+			if clonedData.IsEmpty() {
+				if valueLog != nil {
+					valueLog.Trace("removed prefix entirely")
+				}
+				return clonedData, true // true = delete the prefix (it's now empty)
 			}
-			// Prefix is already deleted from DeletePersist above, no need to delete again
-		} else {
 			if valueLog != nil {
 				valueLog.Trace("removed ID from existing prefix")
 			}
-			// Re-insert with modified data (we deleted it to check, now we add it back with updated data)
-			next = next.InsertPersist(prefix, clonedData)
-		}
+			return clonedData, false // false = don't delete, keep modified data
+		})
 	}
 
 	// Atomically swap in the final table (only once for the entire batch)
