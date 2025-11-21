@@ -180,7 +180,7 @@ func (h *Manager) sort() {
 func (h *Manager) removeHost(host *Host) {
 	for i, th := range h.Hosts {
 		if th == host {
-			// Sessions persist in global manager, no cleanup needed
+			// No cleanup needed
 			if i == len(h.Hosts)-1 {
 				h.Hosts = h.Hosts[:i]
 			} else {
@@ -239,7 +239,7 @@ func (h *Manager) addHost(host *Host) {
 		"has_ban":     true, // Ban is always available
 	})
 
-	// Initialize captcha (no longer needs sessions - SPOA handles that)
+	// Initialize captcha
 	if err := host.Captcha.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
