@@ -1,14 +1,11 @@
 package captcha
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
+
+	"github.com/golang-jwt/jwt/v4"
 )
 
 // CaptchaToken represents the payload stored in a signed captcha cookie
@@ -26,81 +23,89 @@ const (
 	DefaultPassedTTL = 24 * time.Hour
 )
 
-// SignCaptchaToken signs a CaptchaToken and returns a signed string in the format "payload.sig"
-// The payload is base64url-encoded JSON, and the signature is HMAC-SHA256 of the payload
+// SignCaptchaToken signs a CaptchaToken using JWT (JWS) and returns a signed JWT string
+// Uses HMAC-SHA256 for signing. The token can be encrypted (JWE) in the future if needed.
 func SignCaptchaToken(tok CaptchaToken, secret []byte) (string, error) {
-	// Serialize token to JSON
-	jsonData, err := json.Marshal(tok)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal token: %w", err)
+	// Create JWT claims from CaptchaToken
+	claims := jwt.MapClaims{
+		"uuid": tok.UUID,
+		"st":   tok.St,
+		"iat":  tok.Iat,
+		"exp":  tok.Exp,
 	}
 
-	// Base64url-encode the payload
-	payload := base64.RawURLEncoding.EncodeToString(jsonData)
+	// Create token with HMAC-SHA256 signing method
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
-	// Compute HMAC-SHA256 signature
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(payload))
-	sig := mac.Sum(nil)
+	// Sign and get the complete encoded token as a string
+	tokenString, err := token.SignedString(secret)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign token: %w", err)
+	}
 
-	// Base64url-encode the signature
-	sigB64 := base64.RawURLEncoding.EncodeToString(sig)
-
-	// Return format: payload.sig
-	return payload + "." + sigB64, nil
+	return tokenString, nil
 }
 
-// ParseAndVerifyCaptchaToken parses and verifies a signed captcha token string
+// ParseAndVerifyCaptchaToken parses and verifies a JWT token string
 // Returns the token if valid, or an error if invalid, expired, or tampered with
+// JWT library automatically handles expiration checking via the "exp" claim
 func ParseAndVerifyCaptchaToken(raw string, secret []byte) (*CaptchaToken, error) {
 	if raw == "" {
 		return nil, fmt.Errorf("empty token")
 	}
 
-	// Split on "." to get payload and signature
-	parts := strings.Split(raw, ".")
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid token format: expected payload.sig")
-	}
+	// Parse and verify the JWT token
+	token, err := jwt.Parse(raw, func(token *jwt.Token) (interface{}, error) {
+		// Validate signing method
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return secret, nil
+	})
 
-	payload := parts[0]
-	sigB64 := parts[1]
-
-	// Decode the signature
-	sig, err := base64.RawURLEncoding.DecodeString(sigB64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode signature: %w", err)
+		return nil, fmt.Errorf("failed to parse/verify token: %w", err)
 	}
 
-	// Recompute HMAC
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(payload))
-	expectedSig := mac.Sum(nil)
-
-	// Constant-time comparison
-	if !hmac.Equal(sig, expectedSig) {
-		return nil, fmt.Errorf("invalid signature")
+	// Extract claims
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		return nil, fmt.Errorf("invalid token claims")
 	}
 
-	// Decode the payload
-	jsonData, err := base64.RawURLEncoding.DecodeString(payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode payload: %w", err)
+	// Convert JWT claims back to CaptchaToken
+	tok := &CaptchaToken{
+		UUID: getStringClaim(claims, "uuid"),
+		St:   getStringClaim(claims, "st"),
+		Iat:  getInt64Claim(claims, "iat"),
+		Exp:  getInt64Claim(claims, "exp"),
 	}
 
-	// Unmarshal JSON into token
-	var tok CaptchaToken
-	if err := json.Unmarshal(jsonData, &tok); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal token: %w", err)
-	}
+	return tok, nil
+}
 
-	// Check expiration
-	now := time.Now().Unix()
-	if now > tok.Exp {
-		return nil, fmt.Errorf("token expired: exp=%d, now=%d", tok.Exp, now)
+// Helper functions to safely extract claims from JWT
+func getStringClaim(claims jwt.MapClaims, key string) string {
+	if val, ok := claims[key]; ok {
+		if str, ok := val.(string); ok {
+			return str
+		}
 	}
+	return ""
+}
 
-	return &tok, nil
+func getInt64Claim(claims jwt.MapClaims, key string) int64 {
+	if val, ok := claims[key]; ok {
+		switch v := val.(type) {
+		case int64:
+			return v
+		case float64:
+			return int64(v)
+		case int:
+			return int64(v)
+		}
+	}
+	return 0
 }
 
 // IsPassed checks if the token indicates the captcha was passed (not expired and status is valid)
@@ -114,9 +119,10 @@ func (t *CaptchaToken) IsPending() bool {
 }
 
 // GenerateCaptchaCookie generates an HTTP cookie from a captcha token (stateless)
-// The cookie is a session cookie (no Expires/MaxAge) with the signed token as the value
+// The cookie is a session cookie (no Expires/MaxAge) with the signed JWT token as the value
+// JWT tokens are already base64url-encoded, so no additional encoding is needed
 func GenerateCaptchaCookie(tok CaptchaToken, secret string, name string, httpOnly bool, secure bool) (*http.Cookie, error) {
-	// Sign the token
+	// Sign the token (JWT is already base64url-encoded)
 	signedToken, err := SignCaptchaToken(tok, []byte(secret))
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign captcha token: %w", err)
@@ -124,16 +130,15 @@ func GenerateCaptchaCookie(tok CaptchaToken, secret string, name string, httpOnl
 
 	cookie := &http.Cookie{
 		Name:     name,
-		Value:    signedToken,
-		MaxAge:   0, // Session cookie (no Expires/MaxAge)
+		Value:    signedToken, // JWT is already URL-safe, no need for additional encoding
+		MaxAge:   0,           // Session cookie (no Expires/MaxAge)
 		HttpOnly: httpOnly,
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 		Path:     "/",
 	}
 
-	// Base64url-encode the cookie value
-	cookie.Value = base64.URLEncoding.EncodeToString([]byte(cookie.Value))
+	// Check cookie length (JWT format: header.payload.signature, all base64url-encoded)
 	if len(cookie.String()) > 4096 {
 		return nil, fmt.Errorf("cookie value too long")
 	}
@@ -141,17 +146,13 @@ func GenerateCaptchaCookie(tok CaptchaToken, secret string, name string, httpOnl
 	return cookie, nil
 }
 
-// ValidateCaptchaCookie validates a base64-encoded captcha cookie value and returns the parsed token
+// ValidateCaptchaCookie validates a captcha cookie value and returns the parsed token
 // Returns the token if valid, or an error if invalid, expired, or tampered with
-func ValidateCaptchaCookie(b64Value string, secret string) (*CaptchaToken, error) {
-	// Decode base64-encoded cookie value
-	value, err := base64.URLEncoding.DecodeString(b64Value)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode cookie value: %w", err)
-	}
-
-	// Parse and verify the signed token
-	tok, err := ParseAndVerifyCaptchaToken(string(value), []byte(secret))
+// JWT tokens are already base64url-encoded, so the cookie value can be used directly
+func ValidateCaptchaCookie(cookieValue string, secret string) (*CaptchaToken, error) {
+	// JWT tokens are already base64url-encoded and URL-safe
+	// Parse and verify the signed token directly
+	tok, err := ParseAndVerifyCaptchaToken(cookieValue, []byte(secret))
 	if err != nil {
 		return nil, err
 	}
