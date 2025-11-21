@@ -62,8 +62,8 @@ func (rM RemediationIdsMap) AddID(clog *log.Entry, r remediation.Remediation, id
 			clog.Tracef("remediation %s not found, creating", r.String())
 		}
 		// Pre-allocate slice with capacity for multiple IDs per remediation
-		rM[r] = make([]RemediationDetails, 0, 4) // Start with capacity 4
-		rM[r] = append(rM[r], RemediationDetails{id, origin})
+		rM[r] = make([]RemediationDetails, 1, 4) // Start with capacity 4
+		rM[r][0] = RemediationDetails{id, origin}
 		return
 	}
 	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
@@ -79,6 +79,9 @@ func (rM RemediationIdsMap) GetRemediationAndOrigin() (remediation.Remediation, 
 	first := true
 
 	for k, v := range rM {
+		if len(v) == 0 {
+			continue // Skip empty slices (defensive check)
+		}
 		if first || k > maxRemediation {
 			maxRemediation = k
 			maxOrigin = v[0].Origin // We can use [0] here as crowdsec cannot return multiple decisions for the same remediation AND value
