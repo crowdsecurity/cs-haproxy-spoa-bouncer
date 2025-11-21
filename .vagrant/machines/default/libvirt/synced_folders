@@ -1,1 +1,0 @@
-{"rsync":{"/vagrant":{"type":"rsync","nfs_version":"4","nfs_udp":false,"guestpath":"/vagrant","hostpath":"/opt/cs-haproxy-spoa-bouncer","disabled":false,"rsync__exclude":[".git/","node_modules/","*.log"],"__vagrantfile":true,"exclude":[".git/","node_modules/","*.log"],"owner":"vagrant","group":"vagrant"}}}
