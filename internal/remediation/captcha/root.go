@@ -106,7 +106,7 @@ type Captcha struct {
 	CookieGenerator     CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies
 	PendingTTL          string          `yaml:"pending_ttl"`          // TTL for pending captcha tokens (default: 30m)
 	PassedTTL           string          `yaml:"passed_ttl"`           // TTL for passed captcha tokens (default: 24h)
-	CookieSecret        string          `yaml:"cookie_secret"`        // Secret for signing captcha cookies (defaults to secret_key if not set)
+	CookieSecret        string          `yaml:"cookie_secret"`        // Secret for signing captcha cookies (required, minimum 32 bytes) - breaking change in 0.3.0
 	logger              *log.Entry      `yaml:"-"`
 	client              *http.Client    `yaml:"-"`
 	parsedPendingTTL    time.Duration   `yaml:"-"`
@@ -166,14 +166,23 @@ func (c *Captcha) Init(logger *log.Entry) error {
 		return err
 	}
 
-	// Determine cookie secret (use cookie_secret if set, otherwise fall back to secret_key)
-	cookieSecret := c.CookieSecret
-	if cookieSecret == "" {
-		cookieSecret = c.SecretKey
+	// Require explicit cookie_secret configuration (breaking change in 0.3.0)
+	// This ensures proper secret management and compliance requirements
+	if c.CookieSecret == "" {
+		return fmt.Errorf("cookie_secret is required for captcha cookie signing. " +
+			"Please configure cookie_secret with at least 32 bytes. " +
+			"This is a breaking change in 0.3.0 - cookie_secret must be explicitly set")
+	}
+
+	// Validate cookie_secret meets minimum security requirements
+	if len(c.CookieSecret) < 32 {
+		return fmt.Errorf("cookie_secret must be at least 32 bytes for security. "+
+			"Current length: %d bytes. "+
+			"Please use a cryptographically secure random key of at least 32 bytes", len(c.CookieSecret))
 	}
 
 	// Initialize cookie generator
-	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie", cookieSecret)
+	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie", c.CookieSecret)
 
 	return nil
 }
