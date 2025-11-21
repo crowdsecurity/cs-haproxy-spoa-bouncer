@@ -35,4 +35,4 @@ venv/
 /rpm/SRPMS
 
 # local configuration
-/config/*.yaml.local
+/config/*.yaml.local.vagrant/
