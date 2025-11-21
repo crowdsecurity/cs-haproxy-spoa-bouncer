@@ -15,8 +15,8 @@ type RemediationDetails struct {
 
 type RemediationIdsMap map[remediation.Remediation][]RemediationDetails
 
-func (rM *RemediationIdsMap) RemoveID(clog *log.Entry, r remediation.Remediation, id int64) error {
-	ids, ok := (*rM)[r]
+func (rM RemediationIdsMap) RemoveID(clog *log.Entry, r remediation.Remediation, id int64) error {
+	ids, ok := rM[r]
 	if !ok {
 		return fmt.Errorf("remediation %s not found", r.String())
 	}
@@ -32,20 +32,20 @@ func (rM *RemediationIdsMap) RemoveID(clog *log.Entry, r remediation.Remediation
 	if index != lastIndex {
 		ids[index] = ids[lastIndex]
 	}
-	(*rM)[r] = ids[:lastIndex]
+	rM[r] = ids[:lastIndex]
 
-	if len((*rM)[r]) == 0 {
+	if len(rM[r]) == 0 {
 		if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
 			clog.Tracef("removing empty remediation %s", r.String())
 		}
-		delete(*rM, r)
+		delete(rM, r)
 	}
 
 	return nil
 }
 
-func (rM *RemediationIdsMap) ContainsID(r remediation.Remediation, id int64) (int, bool) {
-	if details, ok := (*rM)[r]; ok {
+func (rM RemediationIdsMap) ContainsID(r remediation.Remediation, id int64) (int, bool) {
+	if details, ok := rM[r]; ok {
 		for i, v := range details {
 			if v.ID == id {
 				return i, true
@@ -55,35 +55,30 @@ func (rM *RemediationIdsMap) ContainsID(r remediation.Remediation, id int64) (in
 	return -1, false
 }
 
-func (rM *RemediationIdsMap) AddID(clog *log.Entry, r remediation.Remediation, id int64, origin string) {
-	// Initialize map if nil
-	if *rM == nil {
-		*rM = make(RemediationIdsMap, 1) // Pre-allocate for 1 remediation type
-	}
-
-	ids, ok := (*rM)[r]
+func (rM RemediationIdsMap) AddID(clog *log.Entry, r remediation.Remediation, id int64, origin string) {
+	ids, ok := rM[r]
 	if !ok {
 		if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
 			clog.Tracef("remediation %s not found, creating", r.String())
 		}
 		// Pre-allocate slice with capacity for multiple IDs per remediation
-		(*rM)[r] = make([]RemediationDetails, 0, 4) // Start with capacity 4
-		(*rM)[r] = append((*rM)[r], RemediationDetails{id, origin})
+		rM[r] = make([]RemediationDetails, 0, 4) // Start with capacity 4
+		rM[r] = append(rM[r], RemediationDetails{id, origin})
 		return
 	}
 	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
 		clog.Tracef("remediation %s found, appending id %d", r.String(), id)
 	}
-	(*rM)[r] = append(ids, RemediationDetails{id, origin})
+	rM[r] = append(ids, RemediationDetails{id, origin})
 }
 
-func (rM *RemediationIdsMap) GetRemediationAndOrigin() (remediation.Remediation, string) {
+func (rM RemediationIdsMap) GetRemediationAndOrigin() (remediation.Remediation, string) {
 	// Optimize: find max directly without allocating slice
 	var maxRemediation remediation.Remediation
 	var maxOrigin string
 	first := true
 
-	for k, v := range *rM {
+	for k, v := range rM {
 		if first || k > maxRemediation {
 			maxRemediation = k
 			maxOrigin = v[0].Origin // We can use [0] here as crowdsec cannot return multiple decisions for the same remediation AND value
@@ -95,19 +90,19 @@ func (rM *RemediationIdsMap) GetRemediationAndOrigin() (remediation.Remediation,
 }
 
 // IsEmpty returns true if the RemediationIdsMap has no entries
-func (rM *RemediationIdsMap) IsEmpty() bool {
-	return len(*rM) == 0
+func (rM RemediationIdsMap) IsEmpty() bool {
+	return len(rM) == 0
 }
 
 // Clone creates a deep copy of the RemediationIdsMap.
 // This is required for bart's InsertPersist/DeletePersist operations
 // which use structural typing to detect the Clone method.
-func (rM *RemediationIdsMap) Clone() RemediationIdsMap {
-	if rM == nil || *rM == nil {
+func (rM RemediationIdsMap) Clone() RemediationIdsMap {
+	if rM == nil {
 		return nil
 	}
-	cloned := make(RemediationIdsMap, len(*rM))
-	for k, v := range *rM {
+	cloned := make(RemediationIdsMap, len(rM))
+	for k, v := range rM {
 		// Deep copy the slice
 		clonedSlice := make([]RemediationDetails, len(v))
 		copy(clonedSlice, v)
