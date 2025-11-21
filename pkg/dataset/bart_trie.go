@@ -3,121 +3,182 @@ package dataset
 import (
 	"net/netip"
 	"sync"
+	"sync/atomic"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/gaissmai/bart"
 	log "github.com/sirupsen/logrus"
 )
 
-// BartTrie is a trie-based implementation using bart library
+// BartAddOp represents a single prefix add operation for batch processing
+type BartAddOp struct {
+	Prefix netip.Prefix
+	Origin string
+	R      remediation.Remediation
+	ID     int64
+}
+
+// BartRemoveOp represents a single prefix removal operation for batch processing
+type BartRemoveOp struct {
+	Prefix netip.Prefix
+	R      remediation.Remediation
+	ID     int64
+}
+
+// BartTrie is a trie-based implementation using bart library.
+// Uses atomic pointer for lock-free reads and mutex-protected writes
+// following the pattern recommended in bart's documentation.
 type BartTrie struct {
-	sync.RWMutex
-	table  *bart.Table[RemediationIdsMap]
-	logger *log.Entry
+	tableAtomicPtr atomic.Pointer[bart.Table[RemediationIdsMap]]
+	writeMutex     sync.Mutex // Protects writers only
+	logger         *log.Entry
 }
 
 // NewBartTrie creates a new bart-based trie
 func NewBartTrie(logAlias string) *BartTrie {
-	return &BartTrie{
-		table:  &bart.Table[RemediationIdsMap]{},
+	baseTable := &bart.Table[RemediationIdsMap]{}
+	trie := &BartTrie{
 		logger: log.WithField("alias", logAlias),
 	}
+	trie.tableAtomicPtr.Store(baseTable)
+	return trie
 }
 
-// Add adds a prefix to the bart table
-func (t *BartTrie) Add(prefix netip.Prefix, origin string, r remediation.Remediation, id int64) error {
-	t.Lock()
-	defer t.Unlock()
-
-	prefix = prefix.Masked()
-
-	// Only build logging fields if trace level is enabled
-	var valueLog *log.Entry
-	if t.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-		valueLog = t.logger.WithField("prefix", prefix.String()).WithField("remediation", r.String())
-		valueLog.Trace("adding to bart trie")
+// AddBatch adds multiple prefixes to the bart table in a single atomic operation.
+// This is much more efficient than calling Add() multiple times, as it only
+// swaps the atomic pointer once at the end instead of once per prefix.
+func (t *BartTrie) AddBatch(operations []BartAddOp) error {
+	if len(operations) == 0 {
+		return nil
 	}
 
-	// Use Modify to handle both insert and update cases
-	t.table.Modify(prefix, func(current RemediationIdsMap, found bool) (RemediationIdsMap, bool) {
-		if found {
-			if valueLog != nil {
-				valueLog.Trace("updating existing entry")
-			}
-			current.AddID(valueLog, r, id, origin)
-			return current, false // false = update, not delete
+	t.writeMutex.Lock()
+	defer t.writeMutex.Unlock()
+
+	// Get current table atomically
+	cur := t.tableAtomicPtr.Load()
+
+	// Process all operations, chaining the table updates
+	next := cur
+	for _, op := range operations {
+		prefix := op.Prefix.Masked()
+
+		// Only build logging fields if trace level is enabled
+		var valueLog *log.Entry
+		if t.logger.Logger.IsLevelEnabled(log.TraceLevel) {
+			valueLog = t.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R.String())
+			valueLog.Trace("adding to bart trie")
 		}
 
-		if valueLog != nil {
-			valueLog.Trace("creating new entry")
+		// Check if the exact prefix exists by attempting to delete it
+		// DeletePersist returns (newTable, value, found) - if found is true, the exact prefix existed
+		_, existingData, exactPrefixExists := next.DeletePersist(prefix)
+		var newData RemediationIdsMap
+
+		if exactPrefixExists {
+			if valueLog != nil {
+				valueLog.Trace("exact prefix exists, merging IDs")
+			}
+			// Clone existing data and add the new ID
+			newData = existingData.Clone()
+			newData.AddID(valueLog, op.R, op.ID, op.Origin)
+			// Re-insert with merged data (we deleted it to check, now we add it back)
+			next = next.InsertPersist(prefix, newData)
+		} else {
+			if valueLog != nil {
+				valueLog.Trace("creating new entry")
+			}
+			// Create new data
+			newData = RemediationIdsMap{}
+			newData.AddID(valueLog, op.R, op.ID, op.Origin)
+			// Insert new entry
+			next = next.InsertPersist(prefix, newData)
 		}
-		newData := RemediationIdsMap{}
-		newData.AddID(valueLog, r, id, origin)
-		return newData, false // false = insert, not delete
-	})
+	}
+
+	// Atomically swap in the final table (only once for the entire batch)
+	t.tableAtomicPtr.Store(next)
 
 	return nil
 }
 
-// Remove removes a prefix from the bart table
-func (t *BartTrie) Remove(prefix netip.Prefix, r remediation.Remediation, id int64) bool {
-	t.Lock()
-	defer t.Unlock()
-
-	prefix = prefix.Masked()
-
-	// Only build logging fields if trace level is enabled
-	var valueLog *log.Entry
-	if t.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-		valueLog = t.logger.WithField("prefix", prefix.String()).WithField("remediation", r.String())
-		valueLog.Trace("removing from bart trie")
+// RemoveBatch removes multiple prefixes from the bart table in a single atomic operation.
+// Returns a slice of booleans indicating whether each operation successfully removed an ID.
+func (t *BartTrie) RemoveBatch(operations []BartRemoveOp) []bool {
+	if len(operations) == 0 {
+		return nil
 	}
 
-	// Track whether the ID was actually found and removed
-	var idRemoved bool
+	t.writeMutex.Lock()
+	defer t.writeMutex.Unlock()
 
-	// Use Modify to handle the removal
-	t.table.Modify(prefix, func(current RemediationIdsMap, found bool) (RemediationIdsMap, bool) {
+	// Get current table atomically
+	cur := t.tableAtomicPtr.Load()
+
+	// Process all operations, chaining the table updates
+	next := cur
+	results := make([]bool, len(operations))
+	for i, op := range operations {
+		prefix := op.Prefix.Masked()
+
+		// Only build logging fields if trace level is enabled
+		var valueLog *log.Entry
+		if t.logger.Logger.IsLevelEnabled(log.TraceLevel) {
+			valueLog = t.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R.String())
+			valueLog.Trace("removing from bart trie")
+		}
+
+		// Check if prefix exists
+		existingData, found := next.Lookup(prefix.Addr())
 		if !found {
 			if valueLog != nil {
 				valueLog.Trace("prefix not found")
 			}
-			return current, false // no-op
+			results[i] = false
+			continue
 		}
 
-		// Remove the specific ID
-		err := current.RemoveID(valueLog, r, id)
+		// Clone existing data and remove the ID
+		clonedData := existingData.Clone()
+		err := clonedData.RemoveID(valueLog, op.R, op.ID)
 		if err != nil {
 			if valueLog != nil {
 				valueLog.Trace("ID not found")
 			}
-			return current, false // no-op
+			results[i] = false
+			continue
 		}
 
 		// ID was successfully removed
-		idRemoved = true
+		results[i] = true
 
-		if current.IsEmpty() {
+		if clonedData.IsEmpty() {
 			if valueLog != nil {
 				valueLog.Trace("removed prefix entirely")
 			}
-			return current, true // delete the entry
+			// Delete the entry using DeletePersist
+			next, _, _ = next.DeletePersist(prefix)
+		} else {
+			if valueLog != nil {
+				valueLog.Trace("removed ID from existing prefix")
+			}
+			// Update with modified data using InsertPersist
+			next = next.InsertPersist(prefix, clonedData)
 		}
+	}
 
-		if valueLog != nil {
-			valueLog.Trace("removed ID from existing prefix")
-		}
-		return current, false // update with modified data
-	})
+	// Atomically swap in the final table (only once for the entire batch)
+	t.tableAtomicPtr.Store(next)
 
-	return idRemoved
+	return results
 }
 
-// Contains checks if an IP address matches any prefix in the bart table
-// Returns the longest matching prefix's remediation and origin
+// Contains checks if an IP address matches any prefix in the bart table.
+// Returns the longest matching prefix's remediation and origin.
+// This method uses lock-free reads via atomic pointer for optimal performance.
 func (t *BartTrie) Contains(ip netip.Addr) (remediation.Remediation, string) {
-	t.RLock()
-	defer t.RUnlock()
+	// Lock-free read: atomically load the current table pointer
+	table := t.tableAtomicPtr.Load()
 
 	// Only build logging fields if trace level is enabled
 	var valueLog *log.Entry
@@ -127,7 +188,7 @@ func (t *BartTrie) Contains(ip netip.Addr) (remediation.Remediation, string) {
 	}
 
 	// Use Lookup to get the longest prefix match
-	data, found := t.table.Lookup(ip)
+	data, found := table.Lookup(ip)
 	if !found {
 		if valueLog != nil {
 			valueLog.Trace("no match found")

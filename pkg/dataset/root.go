@@ -29,17 +29,160 @@ func New() *DataSet {
 }
 
 func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
+	if len(decisions) == 0 {
+		return
+	}
+
+	// Batch operations for better performance, especially during initial load
+	// Convert IPs to prefixes immediately so we can use a single unified batch
+	type cnOp struct {
+		cn     string
+		origin string
+		r      remediation.Remediation
+		id     int64
+	}
+	// Pre-allocate with estimated capacity for better performance
+	prefixOps := make([]BartAddOp, 0, len(decisions))
+	cnOps := make([]cnOp, 0)
+
+	// Collect all operations, converting IPs to prefixes immediately
 	for _, decision := range decisions {
-		if err := d.AddDecision(decision); err != nil {
-			log.Errorf("Error adding decision: %s", err.Error())
+		origin := *decision.Origin
+		if origin == "lists" && decision.Scenario != nil {
+			origin = *decision.Origin + ":" + *decision.Scenario
+		}
+
+		scope := strings.ToLower(*decision.Scope)
+		r := remediation.FromString(*decision.Type)
+
+		switch scope {
+		case "ip":
+			ip, err := netip.ParseAddr(*decision.Value)
+			if err != nil {
+				log.Errorf("Error parsing IP address %s: %s", *decision.Value, err.Error())
+				continue
+			}
+			// Convert IP to prefix immediately
+			var prefixLen int
+			ipType := "ipv4"
+			if ip.Is6() {
+				prefixLen = 128
+				ipType = "ipv6"
+			} else {
+				prefixLen = 32
+			}
+			prefix := netip.PrefixFrom(ip, prefixLen)
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Inc()
+			prefixOps = append(prefixOps, BartAddOp{prefix, origin, r, decision.ID})
+		case "range":
+			prefix, err := netip.ParsePrefix(*decision.Value)
+			if err != nil {
+				log.Errorf("Error parsing prefix %s: %s", *decision.Value, err.Error())
+				continue
+			}
+			ipType := "ipv4"
+			if prefix.Addr().Is6() {
+				ipType = "ipv6"
+			}
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
+			prefixOps = append(prefixOps, BartAddOp{prefix, origin, r, decision.ID})
+		case "country":
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": "", "scope": "country"}).Inc()
+			cnOps = append(cnOps, cnOp{*decision.Value, origin, r, decision.ID})
+		default:
+			log.Errorf("Unknown scope %s", *decision.Scope)
+		}
+	}
+
+	// Execute unified batch for all prefixes (IPs and ranges)
+	if len(prefixOps) > 0 {
+		if err := d.BartUnifiedIPSet.AddBatch(prefixOps); err != nil {
+			log.Errorf("Error adding prefix decisions: %s", err.Error())
+		}
+	}
+	// CN operations are handled individually (they use a different data structure)
+	for _, op := range cnOps {
+		if err := d.addCN(op.cn, op.origin, op.r, op.id); err != nil {
+			log.Errorf("Error adding CN decision: %s", err.Error())
 		}
 	}
 }
 
 func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
+	if len(decisions) == 0 {
+		return
+	}
+
+	// Batch operations for better performance
+	// Convert IPs to prefixes immediately so we can use a single unified batch
+	type cnOp struct {
+		cn     string
+		r      remediation.Remediation
+		id     int64
+		origin string
+	}
+
+	// Pre-allocate with estimated capacity for better performance
+	prefixOps := make([]BartRemoveOp, 0, len(decisions))
+	cnOps := make([]cnOp, 0)
+
+	// Collect all operations, converting IPs to prefixes immediately
 	for _, decision := range decisions {
-		if err := d.RemoveDecision(decision); err != nil {
-			log.Errorf("Error removing decision: %s", err.Error())
+		origin := *decision.Origin
+		if origin == "lists" && decision.Scenario != nil {
+			origin = *decision.Origin + ":" + *decision.Scenario
+		}
+
+		scope := strings.ToLower(*decision.Scope)
+		r := remediation.FromString(*decision.Type)
+
+		switch scope {
+		case "ip":
+			ip, err := netip.ParseAddr(*decision.Value)
+			if err != nil {
+				log.Errorf("Error parsing IP address %s: %s", *decision.Value, err.Error())
+				continue
+			}
+			// Convert IP to prefix immediately
+			var prefixLen int
+			ipType := "ipv4"
+			if ip.Is6() {
+				prefixLen = 128
+				ipType = "ipv6"
+			} else {
+				prefixLen = 32
+			}
+			prefix := netip.PrefixFrom(ip, prefixLen)
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Dec()
+			prefixOps = append(prefixOps, BartRemoveOp{prefix, r, decision.ID})
+		case "range":
+			prefix, err := netip.ParsePrefix(*decision.Value)
+			if err != nil {
+				log.Errorf("Error parsing prefix %s: %s", *decision.Value, err.Error())
+				continue
+			}
+			ipType := "ipv4"
+			if prefix.Addr().Is6() {
+				ipType = "ipv6"
+			}
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Dec()
+			prefixOps = append(prefixOps, BartRemoveOp{prefix, r, decision.ID})
+		case "country":
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": "", "scope": "country"}).Dec()
+			cnOps = append(cnOps, cnOp{*decision.Value, r, decision.ID, origin})
+		default:
+			log.Errorf("Unknown scope %s", *decision.Scope)
+		}
+	}
+
+	// Execute unified batch for all prefixes (IPs and ranges)
+	if len(prefixOps) > 0 {
+		d.BartUnifiedIPSet.RemoveBatch(prefixOps)
+	}
+	// CN operations are handled individually (they use a different data structure)
+	for _, op := range cnOps {
+		if _, err := d.removeCN(op.cn, op.r, op.id); err != nil {
+			log.Errorf("Error removing CN decision: %s", err.Error())
 		}
 	}
 }
@@ -54,100 +197,6 @@ func (d *DataSet) CheckIP(ip netip.Addr) (remediation.Remediation, string, error
 
 func (d *DataSet) CheckCN(cn string) (remediation.Remediation, string) {
 	return d.CNSet.Contains(cn)
-}
-
-func (d *DataSet) RemoveDecision(decision *models.Decision) error {
-	origin := *decision.Origin
-	if origin == "lists" && decision.Scenario != nil {
-		origin = *decision.Origin + ":" + *decision.Scenario
-	}
-
-	// Use strings.ToLower for case-insensitive comparison (required for compatibility)
-	scope := strings.ToLower(*decision.Scope)
-
-	switch scope {
-	case "ip":
-		// Parse IP directly to determine type efficiently
-		ip, err := netip.ParseAddr(*decision.Value)
-		if err != nil {
-			return err
-		}
-		removed := d.BartUnifiedIPSet.RemoveIP(ip, remediation.FromString(*decision.Type), decision.ID)
-		if removed {
-			ipType := "ipv4"
-			if ip.Is6() {
-				ipType = "ipv6"
-			}
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Dec()
-		}
-		return nil
-	case "range":
-		// Parse prefix directly to determine type efficiently
-		prefix, err := netip.ParsePrefix(*decision.Value)
-		if err != nil {
-			return err
-		}
-		removed := d.BartUnifiedIPSet.RemovePrefix(prefix, remediation.FromString(*decision.Type), decision.ID)
-		if removed {
-			ipType := "ipv4"
-			if prefix.Addr().Is6() {
-				ipType = "ipv6"
-			}
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Dec()
-		}
-		return nil
-	case "country":
-		removed, err := d.removeCN(*decision.Value, remediation.FromString(*decision.Type), decision.ID)
-		if err != nil {
-			return err
-		}
-		if removed {
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": "", "scope": "country"}).Dec()
-		}
-		return nil
-	}
-	return fmt.Errorf("unknown scope %s", *decision.Scope)
-}
-
-func (d *DataSet) AddDecision(decision *models.Decision) error {
-	origin := *decision.Origin
-	if origin == "lists" && decision.Scenario != nil {
-		origin = *decision.Origin + ":" + *decision.Scenario
-	}
-
-	// Use strings.ToLower for case-insensitive comparison (required for compatibility)
-	scope := strings.ToLower(*decision.Scope)
-
-	switch scope {
-	case "ip":
-		// Parse IP directly to determine type efficiently
-		ip, err := netip.ParseAddr(*decision.Value)
-		if err != nil {
-			return err
-		}
-		ipType := "ipv4"
-		if ip.Is6() {
-			ipType = "ipv6"
-		}
-		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Inc()
-		return d.BartUnifiedIPSet.AddIP(ip, origin, remediation.FromString(*decision.Type), decision.ID)
-	case "range":
-		// Parse prefix directly to determine type efficiently
-		prefix, err := netip.ParsePrefix(*decision.Value)
-		if err != nil {
-			return err
-		}
-		ipType := "ipv4"
-		if prefix.Addr().Is6() {
-			ipType = "ipv6"
-		}
-		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
-		return d.BartUnifiedIPSet.AddPrefix(prefix, origin, remediation.FromString(*decision.Type), decision.ID)
-	case "country":
-		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": "", "scope": "country"}).Inc()
-		return d.addCN(*decision.Value, origin, remediation.FromString(*decision.Type), decision.ID)
-	}
-	return fmt.Errorf("unknown scope %s", *decision.Scope)
 }
 
 // Helper method for CN operations (still needed for country scope)

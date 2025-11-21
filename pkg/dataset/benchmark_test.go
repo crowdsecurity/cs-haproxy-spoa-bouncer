@@ -189,19 +189,13 @@ func TestCorrectness(t *testing.T) {
 func TestLongestPrefixMatch(t *testing.T) {
 	dataset := New()
 
-	// Add a broader prefix first
-	if err := dataset.BartUnifiedIPSet.AddPrefix(netip.MustParsePrefix("192.168.0.0/16"), "test", remediation.Ban, 1); err != nil {
-		t.Fatalf("Failed to add prefix: %v", err)
-	}
-
-	// Add a more specific prefix
-	if err := dataset.BartUnifiedIPSet.AddPrefix(netip.MustParsePrefix("192.168.1.0/24"), "test", remediation.Captcha, 2); err != nil {
-		t.Fatalf("Failed to add prefix: %v", err)
-	}
-
-	// Add an even more specific IP
-	if err := dataset.BartUnifiedIPSet.AddIP(netip.MustParseAddr("192.168.1.1"), "test", remediation.Allow, 3); err != nil {
-		t.Fatalf("Failed to add IP: %v", err)
+	// Add prefixes and IPs using unified batch method (IPs converted to /32 prefix)
+	if err := dataset.BartUnifiedIPSet.AddBatch([]BartAddOp{
+		BartAddOp{netip.MustParsePrefix("192.168.0.0/16"), "test", remediation.Ban, 1},
+		BartAddOp{netip.MustParsePrefix("192.168.1.0/24"), "test", remediation.Captcha, 2},
+		BartAddOp{netip.PrefixFrom(netip.MustParseAddr("192.168.1.1"), 32), "test", remediation.Allow, 3},
+	}); err != nil {
+		t.Fatalf("Failed to add prefixes: %v", err)
 	}
 
 	// Test that we get the most specific match (Allow should win over Ban)

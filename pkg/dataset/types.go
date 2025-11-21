@@ -99,6 +99,23 @@ func (rM *RemediationIdsMap) IsEmpty() bool {
 	return len(*rM) == 0
 }
 
+// Clone creates a deep copy of the RemediationIdsMap.
+// This is required for bart's InsertPersist/DeletePersist operations
+// which use structural typing to detect the Clone method.
+func (rM *RemediationIdsMap) Clone() RemediationIdsMap {
+	if rM == nil || *rM == nil {
+		return nil
+	}
+	cloned := make(RemediationIdsMap, len(*rM))
+	for k, v := range *rM {
+		// Deep copy the slice
+		clonedSlice := make([]RemediationDetails, len(v))
+		copy(clonedSlice, v)
+		cloned[k] = clonedSlice
+	}
+	return cloned
+}
+
 type CNSet struct {
 	sync.RWMutex
 	Items  map[string]RemediationIdsMap
