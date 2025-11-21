@@ -150,10 +150,12 @@ func Execute() error {
 				if len(decisions.New) > 0 {
 					log.Debugf("Processing %d new decisions", len(decisions.New))
 					dataSet.Add(decisions.New)
+					log.Debugf("Finished processing %d new decisions", len(decisions.New))
 				}
 				if len(decisions.Deleted) > 0 {
 					log.Debugf("Processing %d deleted decisions", len(decisions.Deleted))
 					dataSet.Remove(decisions.Deleted)
+					log.Debugf("Finished processing %d deleted decisions", len(decisions.Deleted))
 				}
 			}
 		}
