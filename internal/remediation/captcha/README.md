@@ -14,7 +14,7 @@ hosts:
       timeout: 10  # HTTP client timeout in seconds (default: 5)
       pending_ttl: "30m"  # TTL for pending captcha tokens (default: 30m)
       passed_ttl: "24h"   # TTL for passed captcha tokens (default: 24h)
-      cookie_secret: "optional-secret"  # Secret for signing cookies (defaults to secret_key)
+      cookie_secret: "your-32-byte-minimum-secret-key-here"  # REQUIRED: Secret for signing cookies (minimum 32 bytes) - breaking change in 0.3.0
   - host: "*"
     captcha:
       fallback_remediation: allow
@@ -28,7 +28,7 @@ hosts:
 - `timeout` - HTTP client timeout in seconds for captcha validation requests (default: 5)
 - `pending_ttl` - Time-to-live for pending captcha tokens. Accepts Go duration format (e.g., "30m", "1h", "2h30m"). Default: "30m"
 - `passed_ttl` - Time-to-live for passed captcha tokens. Accepts Go duration format (e.g., "24h", "48h", "7d"). Default: "24h"
-- `cookie_secret` - Secret key used for signing captcha cookies. If not set, defaults to `secret_key`. This allows you to use a different secret for cookie signing than for captcha provider validation.
+- `cookie_secret` - **REQUIRED** (breaking change in 0.3.0): Secret key used for signing captcha cookies. Must be at least 32 bytes. This must be explicitly configured and should be different from `secret_key` for compliance and security best practices. For multi-instance deployments, use the same `cookie_secret` across all instances to share cookies.
 - `fallback_remediation` - The remediation to use if the captcha configuration is invalid, defaults to `ban`. Supported values are `ban` | `allow`, `allow` will allow the request to pass through without any remediation.
 
 ### Notes
