@@ -339,7 +339,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	// Only parse HTTP data if it hasn't been parsed yet (i.e., for Allow/Ban cases)
 	// For Captcha, httpData is already populated by handleCaptchaRemediation
 	if httpData.Headers == nil {
-		httpData = parseHTTPData(s.logger, mes)
+		httpData = parseHTTPData(mes)
 	}
 
 	// AppSec validation - reuse httpData already parsed above
@@ -406,7 +406,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 }
 
 // parseHTTPData extracts HTTP request data from the message for reuse in AppSec processing
-func parseHTTPData(logger *log.Entry, mes *message.Message) HTTPRequestData {
+func parseHTTPData(mes *message.Message) HTTPRequestData {
 	var httpData HTTPRequestData
 
 	url, _ := readKeyFromMessage[string](mes, "url")

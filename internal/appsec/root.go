@@ -124,7 +124,7 @@ func (a *AppSec) ValidateRequest(ctx context.Context, req *AppSecRequest) (remed
 
 	// Ensure response body is fully read for proper connection reuse
 	// This allows the connection to be reused via keep-alive
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	// Process response based on HTTP status code
 	return a.processAppSecResponse(resp)
@@ -174,6 +174,7 @@ func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) 
 		"host":       req.Host,
 		"method":     req.Method,
 		"url":        req.URL,
+		"remote_ip":  req.RemoteIP,
 		"user_agent": req.UserAgent,
 	}).Debug("Created AppSec request with headers")
 
