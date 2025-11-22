@@ -109,6 +109,7 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 }
 
 func (h *Manager) Run(ctx context.Context) {
+
 	for {
 		select {
 		case instruction := <-h.Chan:
@@ -119,7 +120,7 @@ func (h *Manager) Run(ctx context.Context) {
 				h.removeHost(instruction.Host)
 			case OpAdd:
 				h.cache = make(map[string]*Host)
-				h.addHost(ctx, instruction.Host)
+				h.addHost(instruction.Host)
 				h.sort()
 			case OpPatch:
 				h.patchHost(instruction.Host)
@@ -189,7 +190,7 @@ func (h *Manager) sort() {
 func (h *Manager) removeHost(host *Host) {
 	for i, th := range h.Hosts {
 		if th == host {
-			host.Captcha.Cancel()
+			// Sessions persist in global manager, no cleanup needed
 			if i == len(h.Hosts)-1 {
 				h.Hosts = h.Hosts[:i]
 			} else {
@@ -238,7 +239,7 @@ func (h *Manager) createHostLogger(host *Host) *log.Entry {
 	return hostLogger.WithField("host", host.Host)
 }
 
-func (h *Manager) addHost(ctx context.Context, host *Host) {
+func (h *Manager) addHost(host *Host) {
 	// Create a logger for this host that inherits base logger values
 	host.logger = h.createHostLogger(host)
 
@@ -248,7 +249,8 @@ func (h *Manager) addHost(ctx context.Context, host *Host) {
 		"has_ban":     true, // Ban is always available
 	})
 
-	if err := host.Captcha.Init(host.logger, ctx); err != nil {
+	// Initialize captcha (no longer needs sessions - SPOA handles that)
+	if err := host.Captcha.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
 	if err := host.Ban.Init(host.logger); err != nil {
