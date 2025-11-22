@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
@@ -315,31 +316,30 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				return // Cannot proceed without unset cookie
 			}
 
-			s.logger.WithFields(log.Fields{
-				"host": matchedHost.Host,
-			}).Debug("Allow decision but captcha cookie present, will clear cookie")
 			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", unsetCookie.String())
 			// Note: We deliberately don't set captcha_status here
 		}
-		// Parse HTTP data for AppSec processing
-		httpData = parseHTTPData(s.logger, mes)
 	case remediation.Ban:
 		//Handle ban
 		matchedHost.Ban.InjectKeyValues(&req.Actions)
-		// Parse HTTP data for AppSec processing
-		httpData = parseHTTPData(s.logger, mes)
 	case remediation.Captcha:
+		// Handle captcha
 		r, httpData = s.handleCaptchaRemediation(req, mes, matchedHost)
-		// If remediation changed to fallback, return early
-		// If it became Allow, continue for AppSec processing
-		if r != remediation.Captcha && r != remediation.Allow {
-			return
-		}
 	}
 
 	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
 	if r > remediation.Unknown && !matchedHost.AppSec.AlwaysSend {
 		return
+	}
+
+	if !matchedHost.AppSec.IsValid() {
+		return
+	}
+
+	// Only parse HTTP data if it hasn't been parsed yet (i.e., for Allow/Ban cases)
+	// For Captcha, httpData is already populated by handleCaptchaRemediation
+	if httpData.Headers == nil {
+		httpData = parseHTTPData(s.logger, mes)
 	}
 
 	// AppSec validation - reuse httpData already parsed above
@@ -353,8 +353,11 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		srcIP = srcIPPtr.String()
 	}
 
-	// Get optional fields
-	userAgent, _ := readKeyFromMessage[string](mes, "user-agent")
+	// Get optional fields - extract User-Agent from headers since it's already sent via headers=req.hdrs
+	userAgent := ""
+	if httpData.Headers != nil {
+		userAgent = httpData.Headers.Get("User-Agent")
+	}
 	version, _ := readKeyFromMessage[string](mes, "version")
 
 	// Build AppSec request from already-parsed httpData
@@ -363,7 +366,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		Method:    "",
 		URL:       "",
 		RemoteIP:  srcIP,
-		UserAgent: "",
+		UserAgent: userAgent,
 		Version:   "",
 		Headers:   httpData.Headers,
 		Body:      nil,
@@ -375,9 +378,6 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	if httpData.URL != nil {
 		appSecReq.URL = *httpData.URL
 	}
-	if userAgent != nil {
-		appSecReq.UserAgent = *userAgent
-	}
 	if version != nil {
 		appSecReq.Version = *version
 	}
@@ -386,7 +386,10 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	}
 
 	// Validate with AppSec - update r directly (defer will handle setting it)
-	appSecRemediation, err := matchedHost.AppSec.ValidateRequest(context.Background(), appSecReq)
+	// Use a timeout context that's slightly less than HAProxy's processing timeout (6s) to avoid connection resets
+	appSecCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	appSecRemediation, err := matchedHost.AppSec.ValidateRequest(appSecCtx, appSecReq)
 	if err != nil {
 		s.logger.WithError(err).Warn("AppSec validation failed, using original remediation")
 		return
@@ -406,49 +409,21 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 func parseHTTPData(logger *log.Entry, mes *message.Message) HTTPRequestData {
 	var httpData HTTPRequestData
 
-	url, err := readKeyFromMessage[string](mes, "url")
-	if err != nil {
-		logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "url",
-		}).Debug("failed to read url from message for AppSec processing - ensure HAProxy is sending the 'url' variable in crowdsec-http message")
-	}
+	url, _ := readKeyFromMessage[string](mes, "url")
 	httpData.URL = url
 
-	method, err := readKeyFromMessage[string](mes, "method")
-	if err != nil {
-		logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "method",
-		}).Debug("failed to read method from message for AppSec processing - ensure HAProxy is sending the 'method' variable in crowdsec-http message")
-	}
+	method, _ := readKeyFromMessage[string](mes, "method")
 	httpData.Method = method
 
 	headersType, err := readKeyFromMessage[string](mes, "headers")
-	if err != nil {
-		logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "headers",
-		}).Debug("failed to read headers from message for AppSec processing - ensure HAProxy is sending the 'headers' variable in crowdsec-http message")
-	} else if headersType != nil {
+	if err == nil && headersType != nil {
 		headers, parseErr := readHeaders(*headersType)
-		if parseErr != nil {
-			logger.WithFields(log.Fields{
-				"error": parseErr,
-				"key":   "headers",
-			}).Debug("failed to parse headers from message for AppSec processing")
-		} else {
+		if parseErr == nil {
 			httpData.Headers = headers
 		}
 	}
 
-	body, err := readKeyFromMessage[[]byte](mes, "body")
-	if err != nil {
-		logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "body",
-		}).Debug("failed to read body from message for AppSec processing - ensure HAProxy is sending the 'body' variable in crowdsec-http message")
-	}
+	body, _ := readKeyFromMessage[[]byte](mes, "body")
 	httpData.Body = body
 
 	return httpData
@@ -666,7 +641,6 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 	if captchaStatus == captcha.Valid {
 		storedURL := ses.Get(session.URI)
 		if storedURL != nil && storedURL != "" {
-			s.logger.Debug("redirecting to: ", storedURL)
 			req.Actions.SetVar(action.ScopeTransaction, "redirect", storedURL)
 			// Delete the URI from the session so we dont redirect loop
 			ses.Delete(session.URI)
@@ -850,20 +824,41 @@ func readKeyFromMessage[T string | net.IP | netip.Addr | bool | []byte](msg *mes
 
 func readHeaders(headers string) (http.Header, error) {
 	h := http.Header{}
-	hs := strings.Split(headers, "\r\n")
+
+	// Normalize line endings: replace \r\n with \n first, then split by \n
+	// HAProxy's req.hdrs can send headers with either \r\n or \n separators
+	normalized := strings.ReplaceAll(headers, "\r\n", "\n")
+	hs := strings.Split(normalized, "\n")
 
 	if len(hs) == 0 {
 		return nil, fmt.Errorf("no headers found")
 	}
 
-	for _, header := range hs {
+	for i, header := range hs {
+		header = strings.TrimSpace(header)
 		if header == "" {
 			continue
 		}
 
+		// Skip the HTTP request line if present (first line that looks like "METHOD PATH HTTP/VERSION")
+		// HAProxy's req.hdrs may include the request line at the beginning
+		if i == 0 {
+			// Check if this looks like an HTTP request line (starts with HTTP method)
+			parts := strings.Fields(header)
+			if len(parts) >= 3 {
+				// Check if third part looks like HTTP version (e.g., "HTTP/1.1")
+				// Format: "METHOD PATH HTTP/VERSION"
+				if strings.HasPrefix(parts[2], "HTTP/") {
+					// This is the request line, skip it
+					continue
+				}
+			}
+		}
+
 		kv := strings.SplitN(header, ":", 2)
 		if len(kv) != 2 {
-			return nil, fmt.Errorf("invalid header: %q", header)
+			// Skip lines without colon (might be continuation or malformed)
+			continue
 		}
 
 		h.Add(strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]))

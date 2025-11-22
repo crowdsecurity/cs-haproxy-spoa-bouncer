@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -57,9 +58,18 @@ func (a *AppSec) Init(logger *log.Entry, globalURL, globalAPIKey string) error {
 
 	// Only create client if URL is configured
 	if url != "" {
+		// Configure transport with keep-alive enabled and optimized connection pooling
+		transport := &http.Transport{
+			MaxIdleConns:        100,              // Total idle connections across all hosts
+			MaxIdleConnsPerHost: 10,               // Idle connections per host (default is 2)
+			IdleConnTimeout:     90 * time.Second, // How long idle connections are kept
+			DisableKeepAlives:   false,            // Enable keep-alive (default)
+		}
+
 		a.Client = &AppSecClient{
 			HTTPClient: &http.Client{
-				Timeout: 5 * time.Second,
+				Timeout:   5 * time.Second,
+				Transport: transport,
 			},
 			APIKey: apiKey,
 			URL:    url,
@@ -75,6 +85,10 @@ func (a *AppSec) Init(logger *log.Entry, globalURL, globalAPIKey string) error {
 	}
 
 	return nil
+}
+
+func (a *AppSec) IsValid() bool {
+	return a.Client != nil && a.Client.URL != ""
 }
 
 func (a *AppSec) InitLogger(logger *log.Entry) {
@@ -108,6 +122,10 @@ func (a *AppSec) ValidateRequest(ctx context.Context, req *AppSecRequest) (remed
 	}
 	defer resp.Body.Close()
 
+	// Ensure response body is fully read for proper connection reuse
+	// This allows the connection to be reused via keep-alive
+	io.Copy(io.Discard, resp.Body)
+
 	// Process response based on HTTP status code
 	return a.processAppSecResponse(resp)
 }
@@ -115,15 +133,6 @@ func (a *AppSec) ValidateRequest(ctx context.Context, req *AppSecRequest) (remed
 func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) {
 	var httpReq *http.Request
 	var err error
-
-	// Debug logging to see what we're receiving
-	a.logger.WithFields(log.Fields{
-		"host":       req.Host,
-		"method":     req.Method,
-		"url":        req.URL,
-		"remote_ip":  req.RemoteIP,
-		"user_agent": req.UserAgent,
-	}).Debug("Creating AppSec request")
 
 	// Determine HTTP method based on whether there's a body
 	if len(req.Body) > 0 {
@@ -159,6 +168,14 @@ func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) 
 
 	httpReq.Header.Set("X-Crowdsec-Appsec-Api-Key", a.Client.APIKey)
 	httpReq.Header.Set("X-Crowdsec-Appsec-User-Agent", req.UserAgent)
+
+	// Debug logging to see what we're actually sending (log after all headers are set)
+	a.logger.WithFields(log.Fields{
+		"host":       req.Host,
+		"method":     req.Method,
+		"url":        req.URL,
+		"user_agent": req.UserAgent,
+	}).Debug("Created AppSec request with headers")
 
 	// Set HTTP version from the request (set by HAProxy SPOE)
 	httpVersion := "11" // Default to HTTP/1.1
