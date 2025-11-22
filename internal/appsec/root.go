@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -145,13 +146,9 @@ func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) 
 		return nil, err
 	}
 
-	// Copy original headers first
+	// Copy original headers
 	if req.Headers != nil {
-		for key, values := range req.Headers {
-			for _, value := range values {
-				httpReq.Header.Add(key, value)
-			}
-		}
+		httpReq.Header = maps.Clone(req.Headers)
 	}
 
 	// Now override with our trusted CrowdSec headers
