@@ -395,7 +395,21 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		return
 	}
 
-	// If AppSec returns a more restrictive remediation, use it (defer will set it)
+	// Track metrics if AppSec returns a more restrictive remediation than Allow
+	if appSecRemediation > remediation.Allow && srcIPPtr != nil && srcIPPtr.IsValid() {
+		ipTypeLabel := "ipv4"
+		if srcIPPtr.Is6() {
+			ipTypeLabel = "ipv6"
+		}
+
+		metrics.TotalBlockedRequests.With(prometheus.Labels{
+			"ip_type":     ipTypeLabel,
+			"origin":      "appsec",
+			"remediation": appSecRemediation.String(),
+		}).Inc()
+	}
+
+	// If AppSec returns a more restrictive remediation, use it (defer will handle setting it)
 	if appSecRemediation > r {
 		r = appSecRemediation
 		// If AppSec returns ban, inject ban values
