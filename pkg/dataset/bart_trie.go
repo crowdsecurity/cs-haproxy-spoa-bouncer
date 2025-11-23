@@ -40,18 +40,21 @@ type BartTrie struct {
 }
 
 // NewBartTrie creates a new bart-based trie
+// The table starts as nil and will be created on first use for better memory efficiency
 func NewBartTrie(logAlias string) *BartTrie {
-	baseTable := &bart.Table[RemediationIdsMap]{}
 	trie := &BartTrie{
 		logger: log.WithField("alias", logAlias),
 	}
-	trie.tableAtomicPtr.Store(baseTable)
+	// Initialize with nil; the table will be allocated during the first AddBatch operation.
+	// This approach enables using Insert for the initial table population, which is more memory efficient than incremental updates.
 	return trie
 }
 
 // AddBatch adds multiple prefixes to the bart table in a single atomic operation.
 // This is much more efficient than calling Add() multiple times, as it only
 // swaps the atomic pointer once at the end instead of once per prefix.
+// For the initial load (when table is nil), uses Insert for better memory efficiency.
+// For subsequent updates, uses ModifyPersist for incremental changes.
 func (t *BartTrie) AddBatch(operations []BartAddOp) error {
 	if len(operations) == 0 {
 		return nil
@@ -63,6 +66,65 @@ func (t *BartTrie) AddBatch(operations []BartAddOp) error {
 	// Get current table atomically
 	cur := t.tableAtomicPtr.Load()
 
+	// Check if this is the initial load (table is nil)
+	if cur == nil {
+		return t.initializeBatch(operations)
+	}
+
+	// Table already exists - use ModifyPersist for incremental updates
+	return t.updateBatch(cur, operations)
+}
+
+// initializeBatch creates a new table and initializes it with the given operations using Insert.
+// This is more memory efficient than using ModifyPersist for the initial load.
+// Handles duplicate prefixes by merging IDs before inserting.
+func (t *BartTrie) initializeBatch(operations []BartAddOp) error {
+	// Create a new table for the initial load
+	next := &bart.Table[RemediationIdsMap]{}
+
+	// First, collect all operations by prefix to handle duplicates
+	prefixMap := make(map[netip.Prefix]RemediationIdsMap)
+	for _, op := range operations {
+		prefix := op.Prefix.Masked()
+
+		// Only build logging fields if trace level is enabled
+		var valueLog *log.Entry
+		if t.logger.Logger.IsLevelEnabled(log.TraceLevel) {
+			valueLog = t.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R.String())
+			valueLog.Trace("initial load: collecting prefix operations")
+		}
+
+		// Get or create the data for this prefix
+		data, exists := prefixMap[prefix]
+		if !exists {
+			data = RemediationIdsMap{}
+		}
+		// Add the ID (this handles merging if prefix already seen)
+		data.AddID(valueLog, op.R, op.ID, op.Origin)
+		prefixMap[prefix] = data
+	}
+
+	// Now insert all unique prefixes using Insert
+	for prefix, data := range prefixMap {
+		// Only build logging fields if trace level is enabled
+		var valueLog *log.Entry
+		if t.logger.Logger.IsLevelEnabled(log.TraceLevel) {
+			valueLog = t.logger.WithField("prefix", prefix.String())
+			valueLog.Trace("initial load: inserting into bart trie")
+		}
+
+		// Use Insert for initial load - more memory efficient than ModifyPersist
+		next.Insert(prefix, data)
+	}
+
+	// Atomically swap in the new table
+	t.tableAtomicPtr.Store(next)
+	return nil
+}
+
+// updateBatch updates an existing table with the given operations using ModifyPersist.
+// This handles incremental updates efficiently.
+func (t *BartTrie) updateBatch(cur *bart.Table[RemediationIdsMap], operations []BartAddOp) error {
 	// Process all operations, chaining the table updates
 	next := cur
 	for _, op := range operations {
@@ -99,7 +161,6 @@ func (t *BartTrie) AddBatch(operations []BartAddOp) error {
 
 	// Atomically swap in the final table (only once for the entire batch)
 	t.tableAtomicPtr.Store(next)
-
 	return nil
 }
 
@@ -116,6 +177,11 @@ func (t *BartTrie) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 
 	// Get current table atomically
 	cur := t.tableAtomicPtr.Load()
+
+	// If table is nil, nothing to remove - return all nil results
+	if cur == nil {
+		return make([]*BartRemoveOp, len(operations))
+	}
 
 	// Process all operations, chaining the table updates
 	next := cur
@@ -181,6 +247,11 @@ func (t *BartTrie) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 func (t *BartTrie) Contains(ip netip.Addr) (remediation.Remediation, string) {
 	// Lock-free read: atomically load the current table pointer
 	table := t.tableAtomicPtr.Load()
+
+	// Check for nil table (not yet initialized)
+	if table == nil {
+		return remediation.Allow, ""
+	}
 
 	// Only build logging fields if trace level is enabled
 	var valueLog *log.Entry
