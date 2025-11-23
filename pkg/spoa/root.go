@@ -644,24 +644,21 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediatio
 
 	// If no IP-specific remediation, check country-based
 	if r < remediation.Unknown && s.geoDatabase.IsValid() {
-		ipStd := net.IP(ip.AsSlice())
-		if ipStd != nil {
-			record, err := s.geoDatabase.GetCity(&ipStd)
-			if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
-				s.logger.WithFields(log.Fields{
-					"ip":    ip.String(),
-					"error": err,
-				}).Warn("Failed to get geo location")
-			} else if record != nil {
-				iso := geo.GetIsoCodeFromRecord(record)
-				if iso != "" {
-					cnR, cnOrigin := s.dataset.CheckCN(iso)
-					if cnR > remediation.Unknown {
-						r = cnR
-						origin = cnOrigin
-					}
-					req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
+		record, err := s.geoDatabase.GetCity(ip)
+		if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
+			s.logger.WithFields(log.Fields{
+				"ip":    ip.String(),
+				"error": err,
+			}).Warn("Failed to get geo location")
+		} else if record != nil {
+			iso := geo.GetIsoCodeFromRecord(record)
+			if iso != "" {
+				cnR, cnOrigin := s.dataset.CheckCN(iso)
+				if cnR > remediation.Unknown {
+					r = cnR
+					origin = cnOrigin
 				}
+				req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
 			}
 		}
 	}
