@@ -190,13 +190,11 @@ func TestLongestPrefixMatch(t *testing.T) {
 	dataset := New()
 
 	// Add prefixes and IPs using unified batch method (IPs converted to /32 prefix)
-	if err := dataset.BartUnifiedIPSet.AddBatch([]BartAddOp{
+	dataset.BartUnifiedIPSet.AddBatch([]BartAddOp{
 		{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Origin: "test", R: remediation.Ban, ID: 1, IPType: "ipv4", Scope: "range"},
 		{Prefix: netip.MustParsePrefix("192.168.1.0/24"), Origin: "test", R: remediation.Captcha, ID: 2, IPType: "ipv4", Scope: "range"},
 		{Prefix: netip.PrefixFrom(netip.MustParseAddr("192.168.1.1"), 32), Origin: "test", R: remediation.Allow, ID: 3, IPType: "ipv4", Scope: "ip"},
-	}); err != nil {
-		t.Fatalf("Failed to add prefixes: %v", err)
-	}
+	})
 
 	// Test that we get the most specific match (Allow should win over Ban)
 	ip1 := netip.MustParseAddr("192.168.1.1")

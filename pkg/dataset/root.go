@@ -73,6 +73,8 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			}
 			prefix := netip.PrefixFrom(ip, prefixLen)
 			prefixOps = append(prefixOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, ID: decision.ID, IPType: ipType, Scope: "ip"})
+			// Increment metrics immediately - all operations always succeed
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Inc()
 		case "range":
 			prefix, err := netip.ParsePrefix(*decision.Value)
 			if err != nil {
@@ -84,6 +86,8 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				ipType = "ipv6"
 			}
 			prefixOps = append(prefixOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, ID: decision.ID, IPType: ipType, Scope: "range"})
+			// Increment metrics immediately - all operations always succeed
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
 		case "country":
 			cnOps = append(cnOps, cnOp{cn: *decision.Value, origin: origin, r: r, id: decision.ID})
 		default:
@@ -92,17 +96,9 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 	}
 
 	// Execute unified batch for all prefixes (IPs and ranges)
-	// Only increment metrics for successful additions
+	// Metrics already incremented during batch creation since all operations always succeed
 	if len(prefixOps) > 0 {
-		if err := d.BartUnifiedIPSet.AddBatch(prefixOps); err != nil {
-			log.Errorf("Error adding prefix decisions: %s", err.Error())
-			// Skip metrics increment on error
-		} else {
-			// AddBatch succeeded, increment metrics for all operations
-			for _, op := range prefixOps {
-				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.Origin, "ip_type": op.IPType, "scope": op.Scope}).Inc()
-			}
-		}
+		d.BartUnifiedIPSet.AddBatch(prefixOps)
 	}
 	// CN operations are handled individually (they use a different data structure)
 	// Only increment metrics for successful additions

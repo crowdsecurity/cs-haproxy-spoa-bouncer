@@ -54,9 +54,10 @@ func NewBartUnifiedIPSet(logAlias string) *BartUnifiedIPSet {
 // swaps the atomic pointer once at the end instead of once per prefix.
 // For the initial load (when table is nil), uses Insert for better memory efficiency.
 // For subsequent updates, uses ModifyPersist for incremental changes.
-func (s *BartUnifiedIPSet) AddBatch(operations []BartAddOp) error {
+// All operations always succeed (duplicates are merged, new entries are created).
+func (s *BartUnifiedIPSet) AddBatch(operations []BartAddOp) {
 	if len(operations) == 0 {
-		return nil
+		return
 	}
 
 	s.writeMutex.Lock()
@@ -68,17 +69,17 @@ func (s *BartUnifiedIPSet) AddBatch(operations []BartAddOp) error {
 	// Check if this is the initial load (table is nil)
 	if cur == nil {
 		s.initializeBatch(operations)
-		return nil
+		return
 	}
 
 	// Table already exists - use ModifyPersist for incremental updates
 	s.updateBatch(cur, operations)
-	return nil
 }
 
 // initializeBatch creates a new table and initializes it with the given operations using Insert.
 // This is more memory efficient than using ModifyPersist for the initial load.
 // Handles duplicate prefixes by merging IDs before inserting.
+// All operations always succeed.
 func (s *BartUnifiedIPSet) initializeBatch(operations []BartAddOp) {
 	// Create a new table for the initial load
 	next := &bart.Table[RemediationIdsMap]{}
@@ -124,6 +125,7 @@ func (s *BartUnifiedIPSet) initializeBatch(operations []BartAddOp) {
 
 // updateBatch updates an existing table with the given operations using ModifyPersist.
 // This handles incremental updates efficiently.
+// All operations always succeed.
 func (s *BartUnifiedIPSet) updateBatch(cur *bart.Table[RemediationIdsMap], operations []BartAddOp) {
 	// Process all operations, chaining the table updates
 	next := cur
