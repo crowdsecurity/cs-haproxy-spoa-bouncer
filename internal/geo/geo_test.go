@@ -2,7 +2,7 @@ package geo
 
 import (
 	"context"
-	"net"
+	"net/netip"
 	"path/filepath"
 	"testing"
 
@@ -20,28 +20,34 @@ func TestGetCityAndASN(t *testing.T) {
 
 	g.Init(ctx)
 
-	ip := net.ParseIP("2.125.160.216")
-	city, err := g.GetCity(&ip)
+	ip := netip.MustParseAddr("2.125.160.216")
+	city, err := g.GetCity(ip)
 	if err != nil {
 		t.Fatalf("GetCity returned error: %v", err)
 	}
 
-	assert.Equal(t, "Boxford", city.City.Names["en"], "Expected city name 'Boxford', got '%s'", city.City.Names["en"])
-	assert.Equal(t, "Europe", city.Continent.Names["en"], "Expected continent name 'Europe', got '%s'", city.City.Names["en"])
+	// v2: Names is a struct with fields (English, German, etc.) instead of a map
+	cityName := city.City.Names.English
+	assert.Equal(t, "Boxford", cityName, "Expected city name 'Boxford', got '%s'", cityName)
+	continentName := city.Continent.Names.English
+	assert.Equal(t, "Europe", continentName, "Expected continent name 'Europe', got '%s'", continentName)
 
-	ip = net.ParseIP("1.0.0.1")
-	asn, err := g.GetASN(&ip)
+	ip = netip.MustParseAddr("1.0.0.1")
+	asn, err := g.GetASN(ip)
 	if err != nil {
-		t.Fatalf("GetCity returned error: %v", err)
+		t.Fatalf("GetASN returned error: %v", err)
 	}
 	assert.Equal(t, uint(15169), asn.AutonomousSystemNumber, "Expected ASN 15169, got %d", asn.AutonomousSystemNumber)
-	t.Logf("City: %+v", asn)
+	t.Logf("ASN: %+v", asn)
 
-	ip = net.ParseIP("1.1.1.1")
-	city, err = g.GetCity(&ip)
+	ip = netip.MustParseAddr("1.1.1.1")
+	city, err = g.GetCity(ip)
 	if err != nil {
 		t.Fatalf("GetCity returned error: %v", err)
 	}
-	assert.Empty(t, city.City.Names, "Expected empty city names map, got %v", city.City.Names)
-	assert.Empty(t, city.Continent.Names, "Expected empty continent names map, got %v", city.Continent.Names)
+	// v2: Names is a struct with fields, check English field
+	cityName = city.City.Names.English
+	assert.Empty(t, cityName, "Expected empty city name, got '%s'", cityName)
+	continentName = city.Continent.Names.English
+	assert.Empty(t, continentName, "Expected empty continent name, got '%s'", continentName)
 }
