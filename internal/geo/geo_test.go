@@ -75,7 +75,7 @@ func TestInit_EmptyPaths(t *testing.T) {
 	// GetCity should return error
 	ip := netip.MustParseAddr("1.1.1.1")
 	_, err := g.GetCity(ip)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, ErrNotValidConfig, err)
 }
 
@@ -96,7 +96,7 @@ func TestInit_MissingFiles(t *testing.T) {
 	// GetCity should return error
 	ip := netip.MustParseAddr("1.1.1.1")
 	_, err := g.GetCity(ip)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, ErrNotValidConfig, err)
 }
 
@@ -172,10 +172,9 @@ func TestInit_WatchFilesGoroutine(t *testing.T) {
 
 func TestInit_EmptyFile(t *testing.T) {
 	// Create a temporary empty file
-	tmpFile, err := os.CreateTemp("", "empty-*.mmdb")
+	tmpFile, err := os.CreateTemp(t.TempDir(), "empty-*.mmdb")
 	require.NoError(t, err)
 	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
 	tmpFile.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
