@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
@@ -34,7 +33,6 @@ type Spoa struct {
 	ListenAddr   net.Listener
 	ListenSocket net.Listener
 	Server       *agent.Agent
-	HAWaitGroup  *sync.WaitGroup
 	logger       *log.Entry
 	// Direct access to shared data (no IPC needed)
 	dataset        *dataset.DataSet
@@ -73,7 +71,6 @@ func New(config *SpoaConfig) (*Spoa, error) {
 	// No worker-specific log level; inherits from parent logger
 
 	s := &Spoa{
-		HAWaitGroup:    &sync.WaitGroup{},
 		logger:         workerLogger,
 		dataset:        config.Dataset,
 		hostManager:    config.HostManager,
@@ -162,29 +159,19 @@ func (s *Spoa) Serve(ctx context.Context) error {
 func (s *Spoa) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down")
 
-	doneChan := make(chan struct{})
-
-	// Close TCP listener
+	// Close TCP listener - the library now handles waiting for handlers internally
 	if s.ListenAddr != nil {
 		s.ListenAddr.Close()
 	}
 
-	// Initially  we didn't close the unix socket as we wanted to persist permissions
+	// Close Unix socket - the library now handles waiting for handlers internally
 	if s.ListenSocket != nil {
 		s.ListenSocket.Close()
 	}
 
-	go func() {
-		s.HAWaitGroup.Wait()
-		close(doneChan)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-doneChan:
-		return nil
-	}
+	// The library's workgroup now handles waiting for all frame handlers to complete
+	// when the listeners are closed, so we don't need to wait here
+	return nil
 }
 
 // HTTPRequestData holds parsed HTTP request data for reuse across handlers
@@ -644,24 +631,21 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediatio
 
 	// If no IP-specific remediation, check country-based
 	if r < remediation.Unknown && s.geoDatabase.IsValid() {
-		ipStd := net.IP(ip.AsSlice())
-		if ipStd != nil {
-			record, err := s.geoDatabase.GetCity(&ipStd)
-			if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
-				s.logger.WithFields(log.Fields{
-					"ip":    ip.String(),
-					"error": err,
-				}).Warn("Failed to get geo location")
-			} else if record != nil {
-				iso := geo.GetIsoCodeFromRecord(record)
-				if iso != "" {
-					cnR, cnOrigin := s.dataset.CheckCN(iso)
-					if cnR > remediation.Unknown {
-						r = cnR
-						origin = cnOrigin
-					}
-					req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
+		record, err := s.geoDatabase.GetCity(ip)
+		if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
+			s.logger.WithFields(log.Fields{
+				"ip":    ip.String(),
+				"error": err,
+			}).Warn("Failed to get geo location")
+		} else if record != nil {
+			iso := geo.GetIsoCodeFromRecord(record)
+			if iso != "" {
+				cnR, cnOrigin := s.dataset.CheckCN(iso)
+				if cnR > remediation.Unknown {
+					r = cnR
+					origin = cnOrigin
 				}
+				req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
 			}
 		}
 	}
@@ -708,9 +692,7 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 
 func handlerWrapper(s *Spoa) func(req *request.Request) {
 	return func(req *request.Request) {
-		s.HAWaitGroup.Add(1)
-		defer s.HAWaitGroup.Done()
-
+		// The library now handles workgroup tracking internally, no need for manual Add/Done
 		for _, messageName := range messageNames {
 			mes, err := req.Messages.GetByName(messageName)
 			if err != nil {
