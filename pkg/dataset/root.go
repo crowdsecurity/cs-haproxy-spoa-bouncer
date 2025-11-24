@@ -32,6 +32,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 	if len(decisions) == 0 {
 		return
 	}
+	log.Infof("Processing %d new decisions", len(decisions))
 
 	// Batch operations for better performance, especially during initial load
 	// Convert IPs to prefixes immediately so we can use a single unified batch
@@ -63,13 +64,11 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				continue
 			}
 			// Convert IP to prefix immediately
-			var prefixLen int
+			prefixLen := 32
 			ipType := "ipv4"
 			if ip.Is6() {
 				prefixLen = 128
 				ipType = "ipv6"
-			} else {
-				prefixLen = 32
 			}
 			prefix := netip.PrefixFrom(ip, prefixLen)
 			prefixOps = append(prefixOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, ID: decision.ID, IPType: ipType, Scope: "ip"})
@@ -97,9 +96,8 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 
 	// Execute unified batch for all prefixes (IPs and ranges)
 	// Metrics already incremented during batch creation since all operations always succeed
-	if len(prefixOps) > 0 {
-		d.BartUnifiedIPSet.AddBatch(prefixOps)
-	}
+	d.BartUnifiedIPSet.AddBatch(prefixOps)
+	log.Infof("Finished processing %d decisions", len(decisions))
 	// CN operations are handled individually (they use a different data structure)
 	// Only increment metrics for successful additions
 	for _, op := range cnOps {
@@ -115,7 +113,7 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	if len(decisions) == 0 {
 		return
 	}
-
+	log.Infof("Processing %d deleted decisions", len(decisions))
 	// Batch operations for better performance
 	// Convert IPs to prefixes immediately so we can use a single unified batch
 	type cnOp struct {
@@ -147,13 +145,11 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 				continue
 			}
 			// Convert IP to prefix immediately
-			var prefixLen int
+			prefixLen := 32
 			ipType := "ipv4"
 			if ip.Is6() {
 				prefixLen = 128
 				ipType = "ipv6"
-			} else {
-				prefixLen = 32
 			}
 			prefix := netip.PrefixFrom(ip, prefixLen)
 			prefixOps = append(prefixOps, BartRemoveOp{Prefix: prefix, R: r, ID: decision.ID, Origin: origin, IPType: ipType, Scope: "ip"})
@@ -177,14 +173,13 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 
 	// Execute unified batch for all prefixes (IPs and ranges)
 	// Only decrement metrics for successful removals
-	if len(prefixOps) > 0 {
-		results := d.BartUnifiedIPSet.RemoveBatch(prefixOps)
-		for _, op := range results {
-			if op != nil {
-				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.Origin, "ip_type": op.IPType, "scope": op.Scope}).Dec()
-			}
+	results := d.BartUnifiedIPSet.RemoveBatch(prefixOps)
+	for _, op := range results {
+		if op != nil {
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.Origin, "ip_type": op.IPType, "scope": op.Scope}).Dec()
 		}
 	}
+	log.Infof("Finished processing %d deleted decisions", len(decisions))
 	// CN operations are handled individually (they use a different data structure)
 	// Only decrement metrics for successful removals
 	for _, op := range cnOps {
