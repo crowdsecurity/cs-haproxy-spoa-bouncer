@@ -3,12 +3,12 @@ package geo
 import (
 	"context"
 	"fmt"
-	"net"
+	"net/netip"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/oschwald/geoip2-golang"
+	"github.com/oschwald/geoip2-golang/v2"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -93,21 +93,19 @@ func (g *GeoDatabase) IsValid() bool {
 	return !g.loadFailed
 }
 
-func (g *GeoDatabase) GetASN(ip *net.IP) (*geoip2.ASN, error) {
-
+func (g *GeoDatabase) GetASN(ip netip.Addr) (*geoip2.ASN, error) {
 	if !g.IsValid() {
 		return nil, ErrNotValidConfig
 	}
 
 	g.RLock()
 	defer g.RUnlock()
-	record := &geoip2.ASN{}
 
 	if g.asnReader == nil {
-		return record, nil
+		return &geoip2.ASN{}, nil
 	}
 
-	record, err := g.asnReader.ASN(*ip)
+	record, err := g.asnReader.ASN(ip)
 	if err != nil {
 		return record, err
 	}
@@ -115,20 +113,19 @@ func (g *GeoDatabase) GetASN(ip *net.IP) (*geoip2.ASN, error) {
 	return record, nil
 }
 
-func (g *GeoDatabase) GetCity(ip *net.IP) (*geoip2.City, error) {
+func (g *GeoDatabase) GetCity(ip netip.Addr) (*geoip2.City, error) {
 	if !g.IsValid() {
 		return nil, ErrNotValidConfig
 	}
 
 	g.RLock()
 	defer g.RUnlock()
-	record := &geoip2.City{}
 
 	if g.cityReader == nil {
-		return record, nil
+		return &geoip2.City{}, nil
 	}
 
-	record, err := g.cityReader.City(*ip)
+	record, err := g.cityReader.City(ip)
 	if err != nil {
 		return record, err
 	}
@@ -137,19 +134,20 @@ func (g *GeoDatabase) GetCity(ip *net.IP) (*geoip2.City, error) {
 }
 
 // Just a simple helper function to get the ISO code from the record in the same order as CrowdSec
+// Updated for v2: field names changed from IsoCode to ISOCode
 func GetIsoCodeFromRecord(record *geoip2.City) string {
 	if record == nil {
 		return ""
 	}
 
-	if record.Country.IsoCode != "" {
-		return record.Country.IsoCode
+	if record.Country.ISOCode != "" {
+		return record.Country.ISOCode
 	}
-	if record.RegisteredCountry.IsoCode != "" {
-		return record.RegisteredCountry.IsoCode
+	if record.RegisteredCountry.ISOCode != "" {
+		return record.RegisteredCountry.ISOCode
 	}
-	if record.RepresentedCountry.IsoCode != "" {
-		return record.RepresentedCountry.IsoCode
+	if record.RepresentedCountry.ISOCode != "" {
+		return record.RepresentedCountry.ISOCode
 	}
 	return ""
 }
