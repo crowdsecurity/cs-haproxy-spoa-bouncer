@@ -7,7 +7,7 @@ require (
 	github.com/crowdsecurity/go-cs-bouncer v0.0.19
 	github.com/crowdsecurity/go-cs-lib v0.0.23
 	github.com/google/uuid v1.6.0
-	github.com/negasus/haproxy-spoe-go v1.0.5
+	github.com/negasus/haproxy-spoe-go v1.0.7
 	github.com/oschwald/geoip2-golang v1.9.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
