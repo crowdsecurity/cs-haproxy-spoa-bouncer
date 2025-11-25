@@ -629,8 +629,9 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediatio
 		return remediation.Allow, "" // Safe default
 	}
 
-	// If no IP-specific remediation, check country-based
-	if r < remediation.Unknown && s.geoDatabase.IsValid() {
+	// Always try to get and set ISO code if geo database is available
+	// This allows upstream services to use the ISO code regardless of remediation status
+	if s.geoDatabase.IsValid() {
 		record, err := s.geoDatabase.GetCity(ip)
 		if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
 			s.logger.WithFields(log.Fields{
@@ -640,12 +641,17 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediatio
 		} else if record != nil {
 			iso := geo.GetIsoCodeFromRecord(record)
 			if iso != "" {
-				cnR, cnOrigin := s.dataset.CheckCN(iso)
-				if cnR > remediation.Unknown {
-					r = cnR
-					origin = cnOrigin
-				}
+				// Always set the ISO code variable when available
 				req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
+
+				// If no IP-specific remediation, check country-based remediation
+				if r < remediation.Unknown {
+					cnR, cnOrigin := s.dataset.CheckCN(iso)
+					if cnR > remediation.Unknown {
+						r = cnR
+						origin = cnOrigin
+					}
+				}
 			}
 		}
 	}
