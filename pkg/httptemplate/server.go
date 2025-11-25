@@ -1,6 +1,7 @@
 package httptemplate
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -122,10 +123,25 @@ func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get hostname from Host header (HAProxy forwards the original Host header)
+	// Security: Validate hostname to prevent header manipulation attacks
+	// Note: This assumes HAProxy properly sanitizes headers, but we add defense in depth
 	hostname := r.Host
 	if hostname == "" {
 		s.logger.Warn("Host header not found, cannot match host configuration")
 		http.Error(w, "Bad Request: Missing Host header", http.StatusBadRequest)
+		return
+	}
+
+	// Validate hostname: check for invalid characters and reasonable length
+	// This prevents potential header injection or manipulation attacks
+	if len(hostname) > 253 { // Max DNS hostname length
+		s.logger.WithField("hostname_length", len(hostname)).Warn("Host header too long, rejecting")
+		http.Error(w, "Bad Request: Invalid Host header", http.StatusBadRequest)
+		return
+	}
+	if strings.ContainsAny(hostname, "\r\n\t") {
+		s.logger.WithField("hostname", hostname).Warn("Host header contains invalid characters, rejecting")
+		http.Error(w, "Bad Request: Invalid Host header", http.StatusBadRequest)
 		return
 	}
 
@@ -162,7 +178,7 @@ func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
 		renderer = s.banRenderer
 		statusCode = http.StatusForbidden
 	case "captcha":
-		// matchedHost nil check already done above at line 137-140
+		// matchedHost nil check for captcha already done above at lines 137-140
 		renderer = s.captchaRenderer
 		statusCode = http.StatusOK
 	case "allow":
@@ -195,14 +211,20 @@ func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Buffer template output before writing headers to ensure we can send proper error response
+	// if rendering fails
+	var buf bytes.Buffer
+	if err := renderer.Render(&buf, data); err != nil {
+		s.logger.WithError(err).Error("failed to render template")
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Set headers and write buffered content
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(statusCode)
-
-	// Render template directly to response writer
-	if err := renderer.Render(w, data); err != nil {
-		s.logger.WithError(err).Error("failed to render template")
-		// Headers already sent, can't send error response
-		return
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		s.logger.WithError(err).Error("failed to write response")
 	}
 }
 

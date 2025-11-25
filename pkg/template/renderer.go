@@ -2,8 +2,8 @@ package template
 
 import (
 	"fmt"
+	"html/template"
 	"io"
-	"text/template"
 )
 
 // TemplateData holds the data for template rendering
@@ -17,7 +17,8 @@ type TemplateData struct {
 	CaptchaFrontendJS  string
 }
 
-// Renderer handles template rendering using Go's native text/template package
+// Renderer handles template rendering using Go's native html/template package
+// html/template provides automatic HTML escaping to prevent XSS attacks
 type Renderer struct {
 	tmpl *template.Template
 }

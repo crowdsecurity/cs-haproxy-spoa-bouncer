@@ -3,6 +3,7 @@ package cfg
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"gopkg.in/yaml.v2"
 
@@ -101,8 +102,14 @@ func (c *BouncerConfig) Validate() error {
 			if c.HTTPTemplateServer.TLS.CertFile == "" {
 				return fmt.Errorf("http_template_server.tls.cert_file is required when http_template_server.tls.enabled is true")
 			}
+			if _, err := os.Stat(c.HTTPTemplateServer.TLS.CertFile); err != nil {
+				return fmt.Errorf("http_template_server.tls.cert_file does not exist or is not accessible: %w", err)
+			}
 			if c.HTTPTemplateServer.TLS.KeyFile == "" {
 				return fmt.Errorf("http_template_server.tls.key_file is required when http_template_server.tls.enabled is true")
+			}
+			if _, err := os.Stat(c.HTTPTemplateServer.TLS.KeyFile); err != nil {
+				return fmt.Errorf("http_template_server.tls.key_file does not exist or is not accessible: %w", err)
 			}
 		}
 	}
