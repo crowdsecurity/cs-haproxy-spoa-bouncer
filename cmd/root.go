@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
@@ -31,25 +32,6 @@ import (
 )
 
 const name = "crowdsec-spoa-bouncer"
-
-func HandleSignals(ctx context.Context) error {
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, syscall.SIGTERM, os.Interrupt)
-
-	select {
-	case s := <-signalChan:
-		switch s {
-		case syscall.SIGTERM:
-			return errors.New("received SIGTERM")
-		case os.Interrupt: // cross-platform SIGINT
-			return errors.New("received interrupt")
-		}
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	return nil
-}
 
 func Execute() error {
 	// Parent pflags
@@ -107,7 +89,10 @@ func Execute() error {
 		return fmt.Errorf("unable to configure bouncer: %w", err)
 	}
 
-	g, ctx := errgroup.WithContext(context.Background())
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	g, ctx := errgroup.WithContext(ctx)
 
 	config.Geo.Init(ctx)
 
@@ -119,10 +104,6 @@ func Execute() error {
 	if bouncer.InsecureSkipVerify != nil {
 		log.Debugf("InsecureSkipVerify is set to %t", *bouncer.InsecureSkipVerify)
 	}
-
-	g.Go(func() error {
-		return HandleSignals(ctx)
-	})
 
 	g.Go(func() error {
 		err := bouncer.Run(ctx)
@@ -167,14 +148,8 @@ func Execute() error {
 				if decisions == nil {
 					continue
 				}
-				if len(decisions.New) > 0 {
-					log.Debugf("Processing %d new decisions", len(decisions.New))
-					dataSet.Add(decisions.New)
-				}
-				if len(decisions.Deleted) > 0 {
-					log.Debugf("Processing %d deleted decisions", len(decisions.Deleted))
-					dataSet.Remove(decisions.Deleted)
-				}
+				dataSet.Add(decisions.New)
+				dataSet.Remove(decisions.Deleted)
 			}
 		}
 	})
@@ -182,6 +157,15 @@ func Execute() error {
 	// Create a base logger for the host manager
 	hostManagerLogger := log.WithField("component", "host_manager")
 	HostManager := host.NewManager(hostManagerLogger)
+
+	// Create and initialize global session manager (single GC goroutine for all hosts)
+	globalSessions := &session.Sessions{
+		SessionIdleTimeout:    "1h", // Default values
+		SessionMaxTime:        "12h",
+		SessionGarbageSeconds: 60,
+	}
+	sessionLogger := log.WithField("component", "global_sessions")
+	globalSessions.Init(sessionLogger, ctx)
 
 	g.Go(func() error {
 		HostManager.Run(ctx)
@@ -224,12 +208,13 @@ func Execute() error {
 
 	// Create single SPOA directly with minimal configuration
 	spoaConfig := &spoa.SpoaConfig{
-		TcpAddr:     config.ListenTCP,
-		UnixAddr:    config.ListenUnix,
-		Dataset:     dataSet,
-		HostManager: HostManager,
-		GeoDatabase: &config.Geo,
-		Logger:      spoaLogger,
+		TcpAddr:        config.ListenTCP,
+		UnixAddr:       config.ListenUnix,
+		Dataset:        dataSet,
+		HostManager:    HostManager,
+		GeoDatabase:    &config.Geo,
+		GlobalSessions: globalSessions,
+		Logger:         spoaLogger,
 	}
 
 	singleSpoa, err := spoa.New(spoaConfig)
@@ -248,18 +233,9 @@ func Execute() error {
 	_ = csdaemon.Notify(csdaemon.Ready, log.StandardLogger())
 
 	err = g.Wait()
-
-	// Determine if this was an expected shutdown signal
-	isExpectedShutdown := false
-	if err != nil {
-		switch err.Error() {
-		case "received SIGTERM":
-			log.Info("Received SIGTERM, shutting down")
-			isExpectedShutdown = true
-		case "received interrupt":
-			log.Info("Received interrupt, shutting down")
-			isExpectedShutdown = true
-		}
+	if errors.Is(err, context.Canceled) {
+		log.Info("Context canceled, shutting down")
+		err = nil
 	}
 
 	// Shutdown SPOA server gracefully after all goroutines finish
@@ -279,10 +255,5 @@ func Execute() error {
 		}
 	}
 
-	// Return error only if it was unexpected
-	if err != nil && !isExpectedShutdown {
-		return err
-	}
-
-	return nil
+	return err
 }

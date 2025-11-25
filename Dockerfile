@@ -34,14 +34,11 @@ RUN mkdir -p /usr/lib/crowdsec-haproxy-spoa-bouncer/lua
 COPY --from=build /go/src/cs-spoa-bouncer/lua/* /usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
 
 ## Copy templates (matching Debian/RPM paths)
-## Copy .tmpl files explicitly to ensure they're included
 RUN mkdir -p /var/lib/crowdsec-haproxy-spoa-bouncer/html
-COPY --from=build /go/src/cs-spoa-bouncer/templates/ban.tmpl /var/lib/crowdsec-haproxy-spoa-bouncer/html/ban.tmpl
-COPY --from=build /go/src/cs-spoa-bouncer/templates/captcha.tmpl /var/lib/crowdsec-haproxy-spoa-bouncer/html/captcha.tmpl
+COPY --from=build /go/src/cs-spoa-bouncer/templates/* /var/lib/crowdsec-haproxy-spoa-bouncer/html/
 
 RUN chown -R root:haproxy /usr/lib/crowdsec-haproxy-spoa-bouncer/lua /var/lib/crowdsec-haproxy-spoa-bouncer/html && \
     chmod -R 755 /usr/lib/crowdsec-haproxy-spoa-bouncer/lua /var/lib/crowdsec-haproxy-spoa-bouncer/html
-
 VOLUME [ "/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/", "/var/lib/crowdsec-haproxy-spoa-bouncer/html/" ]
 
 RUN chmod +x /docker_start.sh
