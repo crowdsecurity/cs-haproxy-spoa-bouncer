@@ -98,7 +98,7 @@ func (s *Server) loadTemplate(name, path string) (*template.Renderer, error) {
 		return nil, fmt.Errorf("failed to read template file %s: %w", templatePath, err)
 	}
 
-	renderer, err := template.NewRenderer(string(content))
+	renderer, err := template.NewRenderer(name, string(content))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create renderer: %w", err)
 	}
@@ -108,7 +108,7 @@ func (s *Server) loadTemplate(name, path string) (*template.Renderer, error) {
 }
 
 // handleRender is the main endpoint that handles both ban and captcha rendering
-// It reads the remediation type from X-CrowdSec-Remediation header (set by HAProxy)
+// It reads the remediation type from X-Crowdsec-Remediation header (set by HAProxy)
 // It looks up host configuration using the Host header to get ban/captcha settings
 // Security: HAProxy must delete any user-provided headers and set them from transaction variables
 func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
@@ -162,11 +162,7 @@ func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
 		renderer = s.banRenderer
 		statusCode = http.StatusForbidden
 	case "captcha":
-		if matchedHost == nil {
-			s.logger.Error("captcha remediation but no host configuration found")
-			http.Error(w, "Internal Server Error: No host configuration for captcha", http.StatusInternalServerError)
-			return
-		}
+		// matchedHost nil check already done above at line 137-140
 		renderer = s.captchaRenderer
 		statusCode = http.StatusOK
 	case "allow":

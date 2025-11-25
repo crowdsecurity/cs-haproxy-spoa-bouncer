@@ -179,7 +179,7 @@ func Execute() error {
 		}
 	}
 
-	// Create and start HTTP template server if enabled (after HostManager is created)
+	// Create HTTP template server if enabled (after HostManager is created, but before starting)
 	var httpTemplateServer *httptemplate.Server
 	if config.HTTPTemplateServer.Enabled {
 		httpTemplateLogger := log.WithField("component", "http_template_server")
@@ -188,19 +188,22 @@ func Execute() error {
 		if err != nil {
 			return fmt.Errorf("failed to create HTTP template server: %w", err)
 		}
-
-		g.Go(func() error {
-			if err := httpTemplateServer.Serve(ctx); err != nil {
-				return fmt.Errorf("HTTP template server failed: %w", err)
-			}
-			return nil
-		})
 	}
 
 	if config.HostsDir != "" {
 		if err := HostManager.LoadFromDirectory(config.HostsDir); err != nil {
 			return fmt.Errorf("failed to load hosts from directory: %w", err)
 		}
+	}
+
+	// Start HTTP template server after hosts are loaded to ensure host configurations are available
+	if httpTemplateServer != nil {
+		g.Go(func() error {
+			if err := httpTemplateServer.Serve(ctx); err != nil {
+				return fmt.Errorf("HTTP template server failed: %w", err)
+			}
+			return nil
+		})
 	}
 
 	// Create single SPOA listener - ultra-simplified architecture

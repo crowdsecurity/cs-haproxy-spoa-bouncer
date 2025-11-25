@@ -23,10 +23,13 @@ type Renderer struct {
 }
 
 // NewRenderer creates a new template renderer with the given template content
-func NewRenderer(templateContent string) (*Renderer, error) {
-	tmpl, err := template.New("template").Parse(templateContent)
+func NewRenderer(name, templateContent string) (*Renderer, error) {
+	if name == "" {
+		name = "template"
+	}
+	tmpl, err := template.New(name).Parse(templateContent)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse template: %w", err)
+		return nil, fmt.Errorf("failed to parse template %q: %w", name, err)
 	}
 
 	return &Renderer{
