@@ -241,21 +241,29 @@ func Execute() error {
 		err = nil
 	}
 
-	// Shutdown SPOA server gracefully after all goroutines finish
-	log.Info("Shutting down SPOA listener")
+	// Shutdown services gracefully in parallel after all goroutines finish
+	// Both services share a single 5-second timeout window
+	log.Info("Shutting down services")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if shutdownErr := singleSpoa.Shutdown(shutdownCtx); shutdownErr != nil {
-		log.Errorf("Failed to shutdown SPOA: %v", shutdownErr)
+	shutdownGroup, shutdownCtx := errgroup.WithContext(shutdownCtx)
+
+	// Shutdown SPOA in parallel
+	shutdownGroup.Go(func() error {
+		return singleSpoa.Shutdown(shutdownCtx)
+	})
+
+	// Shutdown HTTP template server in parallel if it was started
+	if httpTemplateServer != nil {
+		shutdownGroup.Go(func() error {
+			return httpTemplateServer.Shutdown(shutdownCtx)
+		})
 	}
 
-	// Shutdown HTTP template server if it was started
-	if httpTemplateServer != nil {
-		log.Info("Shutting down HTTP template server")
-		if shutdownErr := httpTemplateServer.Shutdown(shutdownCtx); shutdownErr != nil {
-			log.Errorf("Failed to shutdown HTTP template server: %v", shutdownErr)
-		}
+	// Wait for both shutdowns to complete (or timeout)
+	if shutdownErr := shutdownGroup.Wait(); shutdownErr != nil {
+		log.Errorf("Failed to shutdown services gracefully: %v", shutdownErr)
 	}
 
 	return err
