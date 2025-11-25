@@ -34,6 +34,13 @@ func (g *GeoDatabase) Init(ctx context.Context) {
 		return
 	}
 
+	// Validate paths exist before attempting to load
+	if err := g.validatePaths(); err != nil {
+		log.Errorf("geo database path validation failed: %s", err)
+		g.loadFailed = true
+		return
+	}
+
 	if err := g.open(); err != nil {
 		log.Errorf("failed to open databases: %s", err)
 		g.loadFailed = true
@@ -50,25 +57,65 @@ func (g *GeoDatabase) reload() error {
 	return g.open()
 }
 
-func (g *GeoDatabase) open() error {
-	if !g.IsValid() {
-		return ErrNotValidConfig
+// validatePaths checks if the configured database paths exist and are readable
+func (g *GeoDatabase) validatePaths() error {
+	if g.ASNPath != "" {
+		if err := g.validatePath(g.ASNPath, "ASN"); err != nil {
+			return err
+		}
 	}
 
+	if g.CityPath != "" {
+		if err := g.validatePath(g.CityPath, "City"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validatePath checks if a single database path exists and is readable
+func (g *GeoDatabase) validatePath(path, dbType string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%s database file does not exist: %s", dbType, path)
+		}
+		return fmt.Errorf("failed to stat %s database file %s: %w", dbType, path, err)
+	}
+
+	if info.IsDir() {
+		return fmt.Errorf("%s database path is a directory, not a file: %s", dbType, path)
+	}
+
+	if info.Size() == 0 {
+		return fmt.Errorf("%s database file is empty: %s", dbType, path)
+	}
+
+	return nil
+}
+
+func (g *GeoDatabase) open() error {
 	g.Lock()
 	defer g.Unlock()
+
 	var err error
 	if g.asnReader == nil && g.ASNPath != "" {
 		g.asnReader, err = geoip2.Open(g.ASNPath)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to open ASN database: %w", err)
 		}
 	}
 
 	if g.cityReader == nil && g.CityPath != "" {
 		g.cityReader, err = geoip2.Open(g.CityPath)
 		if err != nil {
-			return err
+			// Clean up ASN reader if it was opened successfully
+			if g.asnReader != nil {
+				g.asnReader.Close()
+				g.asnReader = nil
+			}
+			return fmt.Errorf("failed to open City database: %w", err)
 		}
 	}
 
@@ -158,51 +205,29 @@ func GetIsoCodeFromRecord(record *geoip2.City) string {
 func (g *GeoDatabase) WatchFiles(ctx context.Context) {
 
 	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
-			ticker.Stop()
 			return
 		case <-ticker.C:
 			shouldUpdate := false
-			if asnLastModTime, ok := g.lastModTime[g.ASNPath]; ok {
-				info, err := os.Stat(g.ASNPath)
-				if err != nil {
-					log.Warnf("failed to stat ASN database: %s", err)
-					continue
-				}
-				if info.ModTime().After(asnLastModTime) {
-					log.Infof("ASN database has been updated, reloading")
+
+			// Check ASN database
+			if g.ASNPath != "" {
+				if updated := g.checkAndUpdateModTime(g.ASNPath, "ASN"); updated {
 					shouldUpdate = true
-					g.lastModTime[g.ASNPath] = info.ModTime()
 				}
-			} else {
-				info, err := os.Stat(g.ASNPath)
-				if err != nil {
-					log.Warnf("failed to stat ASN database: %s", err)
-					continue
-				}
-				g.lastModTime[g.ASNPath] = info.ModTime()
 			}
-			if cityLastModTime, ok := g.lastModTime[g.CityPath]; ok {
-				info, err := os.Stat(g.CityPath)
-				if err != nil {
-					log.Warnf("failed to stat city database: %s", err)
-					continue
-				}
-				if info.ModTime().After(cityLastModTime) {
-					log.Infof("City database has been updated, reloading")
+
+			// Check City database
+			if g.CityPath != "" {
+				if updated := g.checkAndUpdateModTime(g.CityPath, "City"); updated {
 					shouldUpdate = true
-					g.lastModTime[g.CityPath] = info.ModTime()
 				}
-			} else {
-				info, err := os.Stat(g.CityPath)
-				if err != nil {
-					log.Warnf("failed to stat city database: %s", err)
-					continue
-				}
-				g.lastModTime[g.CityPath] = info.ModTime()
 			}
+
 			if shouldUpdate {
 				if err := g.reload(); err != nil {
 					log.Warnf("failed to reload databases: %s", err)
@@ -210,4 +235,36 @@ func (g *GeoDatabase) WatchFiles(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// checkAndUpdateModTime checks if a database file has been modified and updates the lastModTime
+// Returns true if the file was updated (needs reload), false otherwise
+func (g *GeoDatabase) checkAndUpdateModTime(path, dbType string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		log.Warnf("failed to stat %s database: %s", dbType, err)
+		return false
+	}
+
+	g.RLock()
+	lastModTime, exists := g.lastModTime[path]
+	g.RUnlock()
+
+	if !exists {
+		// First time checking this file, just record the mod time
+		g.Lock()
+		g.lastModTime[path] = info.ModTime()
+		g.Unlock()
+		return false
+	}
+
+	if info.ModTime().After(lastModTime) {
+		log.Infof("%s database has been updated, reloading", dbType)
+		g.Lock()
+		g.lastModTime[path] = info.ModTime()
+		g.Unlock()
+		return true
+	}
+
+	return false
 }
