@@ -39,10 +39,12 @@ type Host struct {
 }
 
 type Manager struct {
-	Hosts  []*Host
-	Chan   chan HostOp
-	Logger *log.Entry
-	cache  map[string]*Host
+	Hosts           []*Host
+	Chan            chan HostOp
+	Logger          *log.Entry
+	cache           map[string]*Host
+	trie            *domainTrie
+	complexPatterns []*Host // Patterns that don't fit well in the trie (wildcards in middle)
 	sync.RWMutex
 }
 
@@ -66,10 +68,12 @@ func (h *Manager) String() string {
 
 func NewManager(l *log.Entry) *Manager {
 	return &Manager{
-		Hosts:  make([]*Host, 0),
-		Chan:   make(chan HostOp),
-		Logger: l,
-		cache:  make(map[string]*Host),
+		Hosts:           make([]*Host, 0),
+		Chan:            make(chan HostOp),
+		Logger:          l,
+		cache:           make(map[string]*Host),
+		trie:            newDomainTrie(),
+		complexPatterns: make([]*Host, 0),
 	}
 }
 
@@ -86,14 +90,15 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 		return host
 	}
 
-	for _, host := range h.Hosts {
-		matched, err := filepath.Match(host.Host, toMatch)
-		if matched && err == nil {
-			host.logger.WithField("requested_host", toMatch).Debug("matched host pattern")
-			h.cache[toMatch] = host
-			return host
-		}
+	// Use trie for efficient matching
+	host := h.trie.match(toMatch, h.complexPatterns)
+
+	if host != nil {
+		host.logger.WithField("requested_host", toMatch).Debug("matched host pattern")
+		h.cache[toMatch] = host
+		return host
 	}
+
 	h.Logger.WithField("requested_host", toMatch).Debug("no matching host found")
 	return nil
 }
@@ -178,6 +183,25 @@ func (h *Manager) sort() {
 }
 
 func (h *Manager) removeHost(host *Host) {
+	// Remove from trie
+	if isComplexPattern(host.Host) {
+		// Remove from complexPatterns
+		for i, th := range h.complexPatterns {
+			if th == host {
+				if i == len(h.complexPatterns)-1 {
+					h.complexPatterns = h.complexPatterns[:i]
+				} else {
+					h.complexPatterns = append(h.complexPatterns[:i], h.complexPatterns[i+1:]...)
+				}
+				break
+			}
+		}
+	} else {
+		// Remove from trie
+		h.trie.remove(host)
+	}
+
+	// Remove from Hosts slice
 	for i, th := range h.Hosts {
 		if th == host {
 			// Sessions persist in global manager, no cleanup needed
@@ -186,6 +210,8 @@ func (h *Manager) removeHost(host *Host) {
 			} else {
 				h.Hosts = append(h.Hosts[:i], h.Hosts[i+1:]...)
 			}
+			// Clear cache since host configuration changed
+			h.cache = make(map[string]*Host)
 			return
 		}
 	}
@@ -249,5 +275,14 @@ func (h *Manager) addHost(host *Host) {
 	if err := host.AppSec.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
+
+	// Add to Hosts slice (for backward compatibility and complex patterns)
 	h.Hosts = append(h.Hosts, host)
+
+	// Add to trie or complexPatterns based on pattern complexity
+	if isComplexPattern(host.Host) {
+		h.complexPatterns = append(h.complexPatterns, host)
+	} else {
+		h.trie.add(host)
+	}
 }
