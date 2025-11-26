@@ -146,16 +146,15 @@ func (s *BartUnifiedIPSet) updateBatch(cur *bart.Table[RemediationIdsMap], opera
 				if valueLog != nil {
 					valueLog.Trace("exact prefix exists, merging IDs")
 				}
-				// Clone existing data and add the new ID
-				newData := existingData.Clone()
-				newData.AddID(valueLog, op.R, op.ID, op.Origin)
-				return newData, false // false = don't delete
+				// bart already cloned via our Cloner interface, modify directly
+				existingData.AddID(valueLog, op.R, op.ID, op.Origin)
+				return existingData, false // false = don't delete
 			}
 			if valueLog != nil {
 				valueLog.Trace("creating new entry")
 			}
 			// Create new data
-			newData := RemediationIdsMap{}
+			newData := make(RemediationIdsMap)
 			newData.AddID(valueLog, op.R, op.ID, op.Origin)
 			return newData, false // false = don't delete
 		})
@@ -209,31 +208,30 @@ func (s *BartUnifiedIPSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveO
 				return existingData, false // false = don't delete (prefix doesn't exist anyway)
 			}
 
-			// Clone existing data and remove the ID
-			clonedData := existingData.Clone()
-			err := clonedData.RemoveID(valueLog, op.R, op.ID)
+			// bart already cloned via our Cloner interface, modify directly
+			err := existingData.RemoveID(valueLog, op.R, op.ID)
 			if err != nil {
 				if valueLog != nil {
 					valueLog.Trace("ID not found")
 				}
 				results[i] = nil
-				return existingData, false // false = don't delete, keep original data
+				return existingData, false // false = don't delete, keep data unchanged
 			}
 
 			// ID was successfully removed - return pointer to the operation for metadata access
 			// Use index to get pointer to original operation (safe since we don't modify the slice)
 			results[i] = &operations[i]
 
-			if clonedData.IsEmpty() {
+			if existingData.IsEmpty() {
 				if valueLog != nil {
 					valueLog.Trace("removed prefix entirely")
 				}
-				return clonedData, true // true = delete the prefix (it's now empty)
+				return existingData, true // true = delete the prefix (it's now empty)
 			}
 			if valueLog != nil {
 				valueLog.Trace("removed ID from existing prefix")
 			}
-			return clonedData, false // false = don't delete, keep modified data
+			return existingData, false // false = don't delete, keep modified data
 		})
 	}
 
