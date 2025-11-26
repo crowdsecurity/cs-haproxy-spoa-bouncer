@@ -278,8 +278,8 @@ func (dt *domainTrie) findMatches(parts []string, depth int, node *domainTrieNod
 	if child, ok := node.children[currentPart]; ok {
 		prevBest := *bestMatch
 		dt.findMatches(parts, depth+1, child, bestMatch, bestPriority)
-		// Check if exact path found a match (either changed from nil or was already set)
-		exactMatchFound = *bestMatch != nil && (*bestMatch != prevBest || prevBest != nil)
+		// Check if exact path found a match (only if it actually improved the match)
+		exactMatchFound = *bestMatch != nil && *bestMatch != prevBest
 	}
 
 	// Try wildcard match only if exact path didn't find anything

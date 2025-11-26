@@ -42,7 +42,7 @@ type Manager struct {
 	Hosts           []*Host
 	Chan            chan HostOp
 	Logger          *log.Entry
-	cache           map[string]*Host
+	cache           sync.Map // map[string]*Host - thread-safe cache for matched hosts
 	trie            *domainTrie
 	complexPatterns []*Host // Patterns that don't fit well in the trie (wildcards in middle)
 	sync.RWMutex
@@ -71,13 +71,21 @@ func NewManager(l *log.Entry) *Manager {
 		Hosts:           make([]*Host, 0),
 		Chan:            make(chan HostOp),
 		Logger:          l,
-		cache:           make(map[string]*Host),
+		// cache is a sync.Map, zero value is ready to use
 		trie:            newDomainTrie(),
 		complexPatterns: make([]*Host, 0),
 	}
 }
 
 func (h *Manager) MatchFirstHost(toMatch string) *Host {
+	// Check cache first (thread-safe via sync.Map)
+	if cached, ok := h.cache.Load(toMatch); ok {
+		if host, ok := cached.(*Host); ok {
+			host.logger.WithField("requested_host", toMatch).Debug("matched host from cache")
+			return host
+		}
+	}
+
 	h.RLock()
 	defer h.RUnlock()
 
@@ -85,17 +93,12 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 		return nil
 	}
 
-	if host, ok := h.cache[toMatch]; ok {
-		host.logger.WithField("requested_host", toMatch).Debug("matched host from cache")
-		return host
-	}
-
 	// Use trie for efficient matching
 	host := h.trie.match(toMatch, h.complexPatterns)
 
 	if host != nil {
 		host.logger.WithField("requested_host", toMatch).Debug("matched host pattern")
-		h.cache[toMatch] = host
+		h.cache.Store(toMatch, host) // Thread-safe via sync.Map
 		return host
 	}
 
@@ -111,10 +114,10 @@ func (h *Manager) Run(ctx context.Context) {
 			h.Lock()
 			switch instruction.Op {
 			case OpRemove:
-				h.cache = make(map[string]*Host)
+				h.cache.Clear() // Clear cache when hosts change
 				h.removeHost(instruction.Host)
 			case OpAdd:
-				h.cache = make(map[string]*Host)
+				h.cache.Clear() // Clear cache when hosts change
 				h.addHost(instruction.Host)
 				h.sort()
 			case OpPatch:
@@ -183,9 +186,9 @@ func (h *Manager) sort() {
 }
 
 func (h *Manager) removeHost(host *Host) {
-	// Remove from trie
+	// Remove from trie or complexPatterns based on pattern type
 	if isComplexPattern(host.Host) {
-		// Remove from complexPatterns
+		// Complex patterns are stored in slice, not trie
 		for i, th := range h.complexPatterns {
 			if th == host {
 				if i == len(h.complexPatterns)-1 {
@@ -211,7 +214,7 @@ func (h *Manager) removeHost(host *Host) {
 				h.Hosts = append(h.Hosts[:i], h.Hosts[i+1:]...)
 			}
 			// Clear cache since host configuration changed
-			h.cache = make(map[string]*Host)
+			h.cache.Clear()
 			return
 		}
 	}
