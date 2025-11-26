@@ -166,16 +166,9 @@ func Execute() error {
 	sessionLogger := log.WithField("component", "global_sessions")
 	globalSessions.Init(sessionLogger, ctx)
 
-	g.Go(func() error {
-		HostManager.Run(ctx)
-		return nil
-	})
-
+	// Add hosts from config
 	for _, h := range config.Hosts {
-		HostManager.Chan <- host.HostOp{
-			Host: h,
-			Op:   host.OpAdd,
-		}
+		HostManager.AddHost(h)
 	}
 
 	if config.HostsDir != "" {
