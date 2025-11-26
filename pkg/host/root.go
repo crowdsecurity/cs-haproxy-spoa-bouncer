@@ -42,7 +42,7 @@ type Manager struct {
 	Hosts  []*Host
 	Chan   chan HostOp
 	Logger *log.Entry
-	cache  map[string]*Host
+	cache  sync.Map // map[string]*Host - thread-safe cache for matched hosts
 	sync.RWMutex
 }
 
@@ -69,11 +69,19 @@ func NewManager(l *log.Entry) *Manager {
 		Hosts:  make([]*Host, 0),
 		Chan:   make(chan HostOp),
 		Logger: l,
-		cache:  make(map[string]*Host),
+		// cache is a sync.Map, zero value is ready to use
 	}
 }
 
 func (h *Manager) MatchFirstHost(toMatch string) *Host {
+	// Check cache first (thread-safe via sync.Map)
+	if cached, ok := h.cache.Load(toMatch); ok {
+		if host, ok := cached.(*Host); ok {
+			host.logger.WithField("requested_host", toMatch).Debug("matched host from cache")
+			return host
+		}
+	}
+
 	h.RLock()
 	defer h.RUnlock()
 
@@ -81,16 +89,11 @@ func (h *Manager) MatchFirstHost(toMatch string) *Host {
 		return nil
 	}
 
-	if host, ok := h.cache[toMatch]; ok {
-		host.logger.WithField("requested_host", toMatch).Debug("matched host from cache")
-		return host
-	}
-
 	for _, host := range h.Hosts {
 		matched, err := filepath.Match(host.Host, toMatch)
 		if matched && err == nil {
 			host.logger.WithField("requested_host", toMatch).Debug("matched host pattern")
-			h.cache[toMatch] = host
+			h.cache.Store(toMatch, host) // Thread-safe via sync.Map
 			return host
 		}
 	}
@@ -106,10 +109,10 @@ func (h *Manager) Run(ctx context.Context) {
 			h.Lock()
 			switch instruction.Op {
 			case OpRemove:
-				h.cache = make(map[string]*Host)
+				h.cache.Clear() // Clear cache when hosts change
 				h.removeHost(instruction.Host)
 			case OpAdd:
-				h.cache = make(map[string]*Host)
+				h.cache.Clear() // Clear cache when hosts change
 				h.addHost(instruction.Host)
 				h.sort()
 			case OpPatch:
