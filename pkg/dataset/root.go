@@ -48,15 +48,13 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 
 	// Collect all operations, converting IPs to prefixes immediately
 	for _, decision := range decisions {
-		// Intern origin string to:
-		// 1. Break reference to Decision struct memory (allows GC of DecisionsStreamResponse)
-		// 2. Deduplicate repeated origins (memory efficiency - origins have low cardinality)
+		// Clone origin string to break reference to Decision struct memory
+		// This allows GC to reclaim the DecisionsStreamResponse after processing
 		var origin string
-		originStr := *decision.Origin
-		if originStr == "lists" && decision.Scenario != nil {
-			origin = internString(originStr + ":" + *decision.Scenario)
+		if *decision.Origin == "lists" && decision.Scenario != nil {
+			origin = strings.Clone(*decision.Origin + ":" + *decision.Scenario)
 		} else {
-			origin = internString(originStr)
+			origin = strings.Clone(*decision.Origin)
 		}
 
 		scope := strings.ToLower(*decision.Scope)
@@ -136,14 +134,13 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 
 	// Collect all operations, converting IPs to prefixes immediately
 	for _, decision := range decisions {
-		// Intern origin string to break reference to Decision struct memory
-		// (allows GC of DecisionsStreamResponse)
+		// Clone origin string to break reference to Decision struct memory
+		// This allows GC to reclaim the DecisionsStreamResponse after processing
 		var origin string
-		originStr := *decision.Origin
-		if originStr == "lists" && decision.Scenario != nil {
-			origin = internString(originStr + ":" + *decision.Scenario)
+		if *decision.Origin == "lists" && decision.Scenario != nil {
+			origin = strings.Clone(*decision.Origin + ":" + *decision.Scenario)
 		} else {
-			origin = internString(originStr)
+			origin = strings.Clone(*decision.Origin)
 		}
 
 		scope := strings.ToLower(*decision.Scope)

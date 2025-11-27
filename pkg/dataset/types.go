@@ -101,7 +101,7 @@ func (rM RemediationIdsMap) IsEmpty() bool {
 // which use structural typing to detect the Clone method.
 func (rM RemediationIdsMap) Clone() RemediationIdsMap {
 	if rM == nil {
-		return nil
+		return make(RemediationIdsMap)
 	}
 	cloned := make(RemediationIdsMap, len(rM))
 	for k, v := range rM {
