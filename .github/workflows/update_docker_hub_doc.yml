@@ -1,0 +1,28 @@
+name: (push-master) Update Docker Hub README
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'docker/README.md'
+
+jobs:
+  update-docker-hub-readme:
+    runs-on: ubuntu-latest
+    steps:
+
+      -
+        name: Check out the repo
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
+        if: ${{ github.repository_owner == 'crowdsecurity' }}
+
+      -
+        name: Update docker hub README
+        uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa
+        if: ${{ github.repository_owner == 'crowdsecurity' }}
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          repository: crowdsecurity/haproxy-spoa-bouncer
+          readme-filepath: "./docker/README.md"
