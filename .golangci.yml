@@ -5,6 +5,7 @@ linters:
   disable:
     - godoclint
     - funcorder
+
     #
     # Redundant
     #
@@ -14,30 +15,14 @@ linters:
     - gocyclo   # revive
     - lll       # revive
 
-    #
-    # Recommended? (easy)
-    #
-
     - exhaustive            # check exhaustiveness of enum switch statements
     - godot                 # Check if comments end in a period
     - gosec                 # (gas): Inspects source code for security problems
     - inamedparam           # reports interfaces with unnamed method parameters
     - promlinter            # Check Prometheus metrics naming via promlint
-    - tagalign              # check that struct tags are well aligned
-    - thelper               # thelper detects tests helpers which is not start with t.Helper() method.
     - wrapcheck             # Checks that errors returned from external packages are wrapped
 
-    #
-    # Recommended? (requires some work)
-    #
-
-    - errname               # Checks that sentinel errors are prefixed with the `Err` and error types are suffixed with the `Error`.
-    - ireturn               # Accept Interfaces, Return Concrete Types
     - mnd                   # An analyzer to detect magic numbers.
-
-    #
-    # Formatting only, useful in IDE but should not be forced on CI?
-    #
 
     - nlreturn              # nlreturn checks for a new line before return and branch statements to increase code clarity
     - whitespace            # Whitespace is a linter that checks for unnecessary newlines at the start and end of functions, if, for, etc.
@@ -46,18 +31,11 @@ linters:
     - noinlineerr
     - embeddedstructfieldcheck
 
-    #
-    # Well intended, but not ready for this
-    #
-    - forcetypeassert       # finds forced type assertions
     - godox                 # Tool for detection of FIXME, TODO and other comment keywords
     - err113                # Go linter to check the errors handling expressions
     - paralleltest          # Detects missing usage of t.Parallel() method in your Go test
     - testpackage           # linter that makes you use a separate _test package
 
-    #
-    # Too strict / too many false positives (for now?)
-    #
     - exhaustruct           # Checks if all structure fields are initialized
     - forbidigo             # Forbids identifiers
     - gochecknoglobals      # Check that no global variables exist.
@@ -65,12 +43,13 @@ linters:
     - tagliatelle           # Checks the struct tags.
     - varnamelen            # checks that the length of a variable's name matches its scope
     - prealloc
+    - forcetypeassert  # !!!
 
     - depguard
+    - nonamedreturns
 
-    - perfsprint
-    - noctx # manu
-    - dupword
+    - noctx   # !!!
+    - perfsprint # !!!
 
 
   settings:
@@ -85,44 +64,48 @@ linters:
       disabled-checks:
         - paramTypeCombine
         - todoCommentWithoutDetail
-        - exposedSyncMutex # manu
+        - emptyStringTest # !!!
+        - exposedSyncMutex # !!!
         - commentedOutCode
-        - ptrToRefParam  # manu
-        - octalLiteral # manu
         - unnamedResult
-        - assignOp
-        - importShadow # manu
-        - emptyStringTest  # manu
-        - builtinShadow # manu
-        - captLocal # manu
+        - importShadow # !!!
         - commentFormatting
         - whyNoLint
-        - preferFprint  # manu
 
     govet:
       disable:
         - fieldalignment
-        - shadow # manu
+        - shadow # !!!
       enable-all: true
 
     maintidx:
       # adjusted to accommodate API constructor complexity
-      under: 10
+      under: 17
 
     misspell:
       locale: US
 
+    modernize:
+      disable:
+        - any   # !!!
+        - bloop
+        - testingcontext  # !!!
+
     nestif:
       # lower this after refactoring
-      min-complexity: 13
+      min-complexity: 12
 
     nlreturn:
       block-size: 5
 
     nolintlint:
       require-explanation: false  # don't require an explanation for nolint directives
-      require-specific: false     # don't require nolint directives to be specific about which linter is being skipped
+      require-specific: true      # require nolint directives to be specific about which linter is being skipped
       allow-unused: false         # report any unused nolint directives
+
+    perfsprint:
+      error-format: true
+      string-format: true
 
     revive:
       severity: error
@@ -131,83 +114,71 @@ linters:
         - name: add-constant
           disabled: true
         - name: bool-literal-in-expr
-          disabled: true
+          disabled: true   # !!!
         - name: cognitive-complexity
           arguments:
             # lower this after refactoring
-            - 90
+            - 40
         - name: comment-spacings
-          disabled: true
-        - name: confusing-results
           disabled: true
         - name: cyclomatic
           arguments:
             # lower this after refactoring
-            - 49
+            - 33
         - name: enforce-switch-style
           disabled: true
         - name: context-as-argument
-          disabled: true
+          disabled: true  # !!!
         - name: empty-lines
           disabled: true
         - name: function-length
           arguments:
             # lower this after refactoring
-            - 111
-            - 287
+            - 93
+            - 233
         - name: import-alias-naming
           disabled: true
         - name: import-shadowing
-          disabled: true
+          disabled: true  # !!!
         - name: line-length-limit
           arguments:
             # lower this after refactoring
-            - 251
+            - 231
         - name: max-control-nesting
           arguments:
             # lower this after refactoring
-            - 7
+            - 6
         - name: if-return
-          disabled: true
-        - name: max-public-structs
-          disabled: true
+          disabled: true   # !!!
         - name: package-directory-mismatch
-          disabled: true
-        - name: redundant-test-main-exit
-          disabled: true
+          disabled: true  # !!!
         - name: struct-tag
-          disabled: true
+          disabled: true   # !!!
         - name: var-naming
-          disabled: true
+          disabled: true   # !!!
         - name: exported
-          disabled: true
-        - name: identical-switch-branches
-          disabled: true
+          disabled: true   # !!!
         - name: indent-error-flow
-          disabled: true
+          disabled: true   # !!!
         - name: unexported-naming
-          disabled: true
+          disabled: true  # !!!
         - name: unnecessary-format
-          disabled: true
+          disabled: true  # !!!
         - name: unused-parameter
-          disabled: true
+          disabled: true   # !!!
         - name: use-any
-          disabled: true
+          disabled: true   # !!!
         - name: use-errors-new
-          disabled: true
+          disabled: true   # !!!
         - name: unused-receiver
-          disabled: true
+          disabled: true   # !!!
         - name: var-declaration
-          disabled: true
+          disabled: true   # !!!
 
     staticcheck:
       checks:
         - all
-        - -ST1003   # manu
-
-    wsl:
-      # Allow blocks to end with comments
-      allow-trailing-comment: true
+        - -ST1003   # !!!
 
   exclusions:
     presets:
@@ -222,12 +193,6 @@ linters:
       - linters:
           - govet
         text: 'shadow: declaration of "(err|ctx)" shadows declaration'
-
-      # named/naked returns are evil, with a single exception
-      # https://go.dev/wiki/CodeReviewComments#named-result-parameters
-      - linters:
-          - nonamedreturns
-        text: named return .* with type .* found
 
       # we use t,ctx instead of ctx,t in tests
       - linters:
