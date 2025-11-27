@@ -149,6 +149,11 @@ func Execute() error {
 				}
 				dataSet.Add(decisions.New)
 				dataSet.Remove(decisions.Deleted)
+				// Clear references to allow GC of the DecisionsStreamResponse
+				// The Decision structs contain pointer fields (*string) that we may have
+				// extracted strings from. Clearing these references helps GC reclaim memory.
+				decisions.New = nil
+				decisions.Deleted = nil
 			}
 		}
 	})
