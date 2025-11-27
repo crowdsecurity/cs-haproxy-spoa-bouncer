@@ -3,6 +3,7 @@ package dataset
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	log "github.com/sirupsen/logrus"
@@ -113,21 +114,35 @@ func (rM RemediationIdsMap) Clone() RemediationIdsMap {
 	return cloned
 }
 
+// cnItems is the internal map type for CNSet
+type cnItems map[string]RemediationIdsMap
+
+// CNSet stores country code decisions with lock-free reads.
+// Uses atomic pointer for the items map - SPOA handlers never block.
+//
+// Concurrency model:
+// - Reads are completely lock-free (atomic pointer load)
+// - Writes use copy-on-write (clone entire map, modify, swap)
 type CNSet struct {
-	sync.RWMutex
-	Items  map[string]RemediationIdsMap
-	logger *log.Entry
+	items   atomic.Pointer[cnItems]
+	writeMu sync.Mutex // Serializes write operations
+	logger  *log.Entry
 }
 
-func (s *CNSet) Init(logAlias string) {
-	s.Items = make(map[string]RemediationIdsMap)
-	s.logger = log.WithField("alias", logAlias)
+// NewCNSet creates a new CNSet for storing country code decisions
+func NewCNSet(logAlias string) *CNSet {
+	s := &CNSet{
+		logger: log.WithField("alias", logAlias),
+	}
+	items := make(cnItems)
+	s.items.Store(&items)
 	s.logger.Tracef("initialized")
+	return s
 }
 
 func (s *CNSet) Add(cn string, origin string, r remediation.Remediation, id int64) {
-	s.Lock()
-	defer s.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	// Only build logging fields if trace level is enabled
 	var valueLog *log.Entry
@@ -136,22 +151,36 @@ func (s *CNSet) Add(cn string, origin string, r remediation.Remediation, id int6
 		valueLog.Trace("adding")
 	}
 
-	if v, ok := s.Items[cn]; ok {
+	// Clone the current map
+	current := s.items.Load()
+	if current == nil {
+		// Defensive: should never happen with proper initialization
+		current = &cnItems{}
+	}
+	newItems := make(cnItems, len(*current)+1)
+	for k, v := range *current {
+		newItems[k] = v.Clone()
+	}
+
+	if v, ok := newItems[cn]; ok {
 		if valueLog != nil {
 			valueLog.Trace("already exists")
 		}
 		v.AddID(valueLog, r, id, origin)
-		return
+	} else {
+		if valueLog != nil {
+			valueLog.Trace("not found, creating new entry")
+		}
+		newItems[cn] = RemediationIdsMap{r: []RemediationDetails{{id, origin}}}
 	}
-	if valueLog != nil {
-		valueLog.Trace("not found, creating new entry")
-	}
-	s.Items[cn] = RemediationIdsMap{r: []RemediationDetails{{id, origin}}}
+
+	// Atomic swap - readers see old or new, never partial
+	s.items.Store(&newItems)
 }
 
 func (s *CNSet) Remove(cn string, r remediation.Remediation, id int64) bool {
-	s.Lock()
-	defer s.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	// Only build logging fields if trace level is enabled
 	var valueLog *log.Entry
@@ -159,8 +188,14 @@ func (s *CNSet) Remove(cn string, r remediation.Remediation, id int64) bool {
 		valueLog = s.logger.WithField("value", cn).WithField("remediation", r.String())
 	}
 
-	v, ok := s.Items[cn]
-	if !ok {
+	current := s.items.Load()
+	if current == nil {
+		if valueLog != nil {
+			valueLog.Trace("not initialized")
+		}
+		return false
+	}
+	if _, ok := (*current)[cn]; !ok {
 		if valueLog != nil {
 			valueLog.Trace("value not found")
 		}
@@ -170,26 +205,35 @@ func (s *CNSet) Remove(cn string, r remediation.Remediation, id int64) bool {
 		valueLog.Trace("found")
 	}
 
-	if err := v.RemoveID(valueLog, r, id); err != nil {
+	// Clone the current map
+	newItems := make(cnItems, len(*current))
+	for k, val := range *current {
+		newItems[k] = val.Clone()
+	}
+
+	// Modify the cloned entry
+	if err := newItems[cn].RemoveID(valueLog, r, id); err != nil {
 		if valueLog != nil {
 			valueLog.Error(err)
 		}
 		return false
 	}
 
-	if len(s.Items[cn]) == 0 {
+	if newItems[cn].IsEmpty() {
 		if valueLog != nil {
 			valueLog.Tracef("removing as it has no active remediations")
 		}
-		delete(s.Items, cn)
+		delete(newItems, cn)
 	}
+
+	// Atomic swap - readers see old or new, never partial
+	s.items.Store(&newItems)
 	return true
 }
 
+// Contains checks if a country code has a decision.
+// This method is completely lock-free - SPOA handlers never block.
 func (s *CNSet) Contains(toCheck string) (remediation.Remediation, string) {
-	s.RLock()
-	defer s.RUnlock()
-
 	// Only build logging fields if trace level is enabled
 	var valueLog *log.Entry
 	if s.logger.Logger.IsLevelEnabled(log.TraceLevel) {
@@ -200,11 +244,15 @@ func (s *CNSet) Contains(toCheck string) (remediation.Remediation, string) {
 	r := remediation.Allow
 	origin := ""
 
-	if v, ok := s.Items[toCheck]; ok {
-		if valueLog != nil {
-			valueLog.Trace("found")
+	// Lock-free read via atomic pointer
+	items := s.items.Load()
+	if items != nil {
+		if v, ok := (*items)[toCheck]; ok {
+			if valueLog != nil {
+				valueLog.Trace("found")
+			}
+			r, origin = v.GetRemediationAndOrigin()
 		}
-		r, origin = v.GetRemediationAndOrigin()
 	}
 	if valueLog != nil {
 		valueLog.Tracef("remediation: %s", r.String())

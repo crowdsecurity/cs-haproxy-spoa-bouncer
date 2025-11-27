@@ -30,7 +30,6 @@ func TestDataSet(t *testing.T) {
 		assert.NotNil(t, dataSet.CNSet)
 		assert.NotNil(t, dataSet.IPMap)
 		assert.NotNil(t, dataSet.RangeSet)
-		assert.IsType(t, map[string]RemediationIdsMap{}, dataSet.CNSet.Items)
 	})
 	tests := []struct {
 		name     string

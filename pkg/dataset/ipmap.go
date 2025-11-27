@@ -9,16 +9,31 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// ipEntry wraps RemediationIdsMap with an atomic pointer for lock-free reads.
+// This ensures SPOA handlers never block when checking IPs, even during updates.
+// - Readers load the atomic pointer (instant, never blocks)
+// - Writers clone, modify, and swap (readers see old or new, never partial state)
+type ipEntry struct {
+	data atomic.Pointer[RemediationIdsMap]
+}
+
 // IPMap provides efficient storage for individual IP addresses.
-// Uses sync.Map for concurrent access with O(1) lookups.
+// Uses sync.Map with atomic pointers per entry for lock-free reads.
 // This is much more memory efficient than BART for individual IPs
 // since it doesn't require the radix trie overhead.
+//
+// Concurrency model:
+// - Reads are completely lock-free (atomic pointer load)
+// - Writes use copy-on-write (clone, modify, swap)
+// - SPOA handlers never block, even during batch updates
 type IPMap struct {
 	// IPv4 addresses stored by their 4-byte representation
-	ipv4 sync.Map // map[netip.Addr]RemediationIdsMap
+	ipv4 sync.Map // map[netip.Addr]*ipEntry
 	// IPv6 addresses stored by their 16-byte representation
-	ipv6   sync.Map // map[netip.Addr]RemediationIdsMap
-	logger *log.Entry
+	ipv6 sync.Map // map[netip.Addr]*ipEntry
+	// Write mutex to serialize modifications (prevents lost updates)
+	writeMu sync.Mutex
+	logger  *log.Entry
 	// Counters for monitoring
 	ipv4Count atomic.Int64
 	ipv6Count atomic.Int64
@@ -55,13 +70,17 @@ func (m *IPMap) AddBatch(operations []IPAddOp) {
 		return
 	}
 
+	// Hold write lock for entire batch to prevent interleaving
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+
 	for _, op := range operations {
-		m.add(op)
+		m.addLocked(op)
 	}
 }
 
-// add adds a single IP to the appropriate map
-func (m *IPMap) add(op IPAddOp) {
+// addLocked adds a single IP (caller must hold writeMu)
+func (m *IPMap) addLocked(op IPAddOp) {
 	var valueLog *log.Entry
 	if m.logger.Logger.IsLevelEnabled(log.TraceLevel) {
 		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R.String())
@@ -78,26 +97,40 @@ func (m *IPMap) add(op IPAddOp) {
 
 	// Try to load existing entry first
 	if existing, ok := ipMap.Load(op.IP); ok {
-		if data, ok := existing.(RemediationIdsMap); ok {
-			// Clone before modifying to avoid race with concurrent readers (Contains)
-			cloned := data.Clone()
-			cloned.AddID(valueLog, op.R, op.ID, op.Origin)
-			ipMap.Store(op.IP, cloned)
+		if entry, ok := existing.(*ipEntry); ok {
+			// Clone current data, modify, and swap atomically
+			current := entry.data.Load()
+			var newData RemediationIdsMap
+			if current != nil {
+				newData = current.Clone()
+			} else {
+				newData = make(RemediationIdsMap)
+			}
+			newData.AddID(valueLog, op.R, op.ID, op.Origin)
+			entry.data.Store(&newData)
 			return
 		}
 	}
 
-	// Create new entry
-	data := make(RemediationIdsMap)
-	data.AddID(valueLog, op.R, op.ID, op.Origin)
+	// Create new entry with data
+	newData := make(RemediationIdsMap)
+	newData.AddID(valueLog, op.R, op.ID, op.Origin)
+	entry := &ipEntry{}
+	entry.data.Store(&newData)
 
-	// Use LoadOrStore to handle race conditions
-	if actual, loaded := ipMap.LoadOrStore(op.IP, data); loaded {
-		// Another goroutine beat us, clone and merge into existing
-		if existingData, ok := actual.(RemediationIdsMap); ok {
-			cloned := existingData.Clone()
-			cloned.AddID(valueLog, op.R, op.ID, op.Origin)
-			ipMap.Store(op.IP, cloned)
+	// Use LoadOrStore to handle race with other writers
+	if actual, loaded := ipMap.LoadOrStore(op.IP, entry); loaded {
+		// Another writer beat us, update existing entry
+		if existingEntry, ok := actual.(*ipEntry); ok {
+			current := existingEntry.data.Load()
+			var updatedData RemediationIdsMap
+			if current != nil {
+				updatedData = current.Clone()
+			} else {
+				updatedData = make(RemediationIdsMap)
+			}
+			updatedData.AddID(valueLog, op.R, op.ID, op.Origin)
+			existingEntry.data.Store(&updatedData)
 		}
 	} else {
 		// We stored a new entry, increment counter
@@ -112,18 +145,21 @@ func (m *IPMap) RemoveBatch(operations []IPRemoveOp) []*IPRemoveOp {
 		return nil
 	}
 
+	// Hold write lock for entire batch to prevent interleaving
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+
 	results := make([]*IPRemoveOp, len(operations))
 	for i, op := range operations {
-		if m.remove(op) {
+		if m.removeLocked(op) {
 			results[i] = &operations[i]
 		}
 	}
 	return results
 }
 
-// remove removes a single IP from the appropriate map
-// Returns true if the ID was successfully removed
-func (m *IPMap) remove(op IPRemoveOp) bool {
+// removeLocked removes a single IP (caller must hold writeMu)
+func (m *IPMap) removeLocked(op IPRemoveOp) bool {
 	var valueLog *log.Entry
 	if m.logger.Logger.IsLevelEnabled(log.TraceLevel) {
 		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R.String())
@@ -146,14 +182,22 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 		return false
 	}
 
-	data, ok := existing.(RemediationIdsMap)
+	entry, ok := existing.(*ipEntry)
 	if !ok {
 		return false
 	}
 
-	// Clone before modifying to avoid race with concurrent readers (Contains)
-	cloned := data.Clone()
-	err := cloned.RemoveID(valueLog, op.R, op.ID)
+	current := entry.data.Load()
+	if current == nil {
+		if valueLog != nil {
+			valueLog.Trace("IP entry has no data")
+		}
+		return false
+	}
+
+	// Clone, modify, and swap
+	newData := current.Clone()
+	err := newData.RemoveID(valueLog, op.R, op.ID)
 	if err != nil {
 		if valueLog != nil {
 			valueLog.Trace("ID not found for IP")
@@ -162,14 +206,14 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 	}
 
 	// Check if entry is now empty
-	if cloned.IsEmpty() {
+	if newData.IsEmpty() {
 		ipMap.Delete(op.IP)
 		counter.Add(-1)
 		if valueLog != nil {
 			valueLog.Trace("removed IP entirely")
 		}
 	} else {
-		ipMap.Store(op.IP, cloned)
+		entry.data.Store(&newData)
 		if valueLog != nil {
 			valueLog.Trace("removed ID from IP")
 		}
@@ -180,6 +224,7 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 
 // Contains checks if an IP address exists in the map
 // Returns the remediation and origin if found
+// This method is completely lock-free - SPOA handlers never block
 func (m *IPMap) Contains(ip netip.Addr) (remediation.Remediation, string, bool) {
 	var valueLog *log.Entry
 	if m.logger.Logger.IsLevelEnabled(log.TraceLevel) {
@@ -201,10 +246,17 @@ func (m *IPMap) Contains(ip netip.Addr) (remediation.Remediation, string, bool) 
 		return remediation.Allow, "", false
 	}
 
-	data, ok := existing.(RemediationIdsMap)
+	entry, ok := existing.(*ipEntry)
 	if !ok {
 		return remediation.Allow, "", false
 	}
+
+	// Lock-free read via atomic pointer
+	data := entry.data.Load()
+	if data == nil {
+		return remediation.Allow, "", false
+	}
+
 	r, origin := data.GetRemediationAndOrigin()
 	if valueLog != nil {
 		valueLog.Tracef("found IP with remediation: %s", r.String())

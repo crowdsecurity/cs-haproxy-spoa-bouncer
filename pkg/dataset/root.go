@@ -24,10 +24,8 @@ type DataSet struct {
 }
 
 func New() *DataSet {
-	CNSet := CNSet{}
-	CNSet.Init("CNSet")
 	return &DataSet{
-		CNSet:    &CNSet,
+		CNSet:    NewCNSet("CNSet"),
 		IPMap:    NewIPMap("IPMap"),
 		RangeSet: NewBartRangeSet("RangeSet"),
 	}
