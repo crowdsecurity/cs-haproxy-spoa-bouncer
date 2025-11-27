@@ -113,29 +113,13 @@ func (m *IPMap) addLocked(op IPAddOp) {
 	}
 
 	// Create new entry with data
+	// Since we hold writeMu, no race is possible - use Store directly
 	newData := make(RemediationIdsMap)
 	newData.AddID(valueLog, op.R, op.ID, op.Origin)
 	entry := &ipEntry{}
 	entry.data.Store(&newData)
-
-	// Use LoadOrStore to handle race with other writers
-	if actual, loaded := ipMap.LoadOrStore(op.IP, entry); loaded {
-		// Another writer beat us, update existing entry
-		if existingEntry, ok := actual.(*ipEntry); ok {
-			current := existingEntry.data.Load()
-			var updatedData RemediationIdsMap
-			if current != nil {
-				updatedData = current.Clone()
-			} else {
-				updatedData = make(RemediationIdsMap)
-			}
-			updatedData.AddID(valueLog, op.R, op.ID, op.Origin)
-			existingEntry.data.Store(&updatedData)
-		}
-	} else {
-		// We stored a new entry, increment counter
-		counter.Add(1)
-	}
+	ipMap.Store(op.IP, entry)
+	counter.Add(1)
 }
 
 // RemoveBatch removes multiple IPs from the map
