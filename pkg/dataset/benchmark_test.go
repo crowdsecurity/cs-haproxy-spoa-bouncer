@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"fmt"
 	"math/rand"
 	"net/netip"
 	"testing"
@@ -185,43 +186,45 @@ func TestCorrectness(t *testing.T) {
 	}
 }
 
-// TestLongestPrefixMatch tests that the trie correctly implements longest prefix matching
+// TestLongestPrefixMatch tests that the hybrid storage correctly handles individual IPs vs ranges
 func TestLongestPrefixMatch(t *testing.T) {
 	dataset := New()
 
-	// Add prefixes and IPs using unified batch method (IPs converted to /32 prefix)
-	dataset.BartUnifiedIPSet.AddBatch([]BartAddOp{
+	// Add individual IP to IPMap and ranges to RangeSet
+	dataset.IPMap.AddBatch([]IPAddOp{
+		{IP: netip.MustParseAddr("192.168.1.1"), Origin: "test", R: remediation.Allow, ID: 3, IPType: "ipv4"},
+	})
+	dataset.RangeSet.AddBatch([]BartAddOp{
 		{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Origin: "test", R: remediation.Ban, ID: 1, IPType: "ipv4", Scope: "range"},
 		{Prefix: netip.MustParsePrefix("192.168.1.0/24"), Origin: "test", R: remediation.Captcha, ID: 2, IPType: "ipv4", Scope: "range"},
-		{Prefix: netip.PrefixFrom(netip.MustParseAddr("192.168.1.1"), 32), Origin: "test", R: remediation.Allow, ID: 3, IPType: "ipv4", Scope: "ip"},
 	})
 
-	// Test that we get the most specific match (Allow should win over Ban)
+	// Test that individual IP from IPMap wins (checked first before RangeSet)
 	ip1 := netip.MustParseAddr("192.168.1.1")
 	result, _, _ := dataset.CheckIP(ip1)
 	if result != remediation.Allow {
-		t.Errorf("Expected Allow for 192.168.1.1, got %v", result)
+		t.Errorf("Expected Allow for 192.168.1.1 (from IPMap), got %v", result)
 	}
 
-	// Test that we get the next most specific match (Captcha should win over Ban)
+	// Test that we get the LPM from RangeSet (Captcha /24 wins over Ban /16)
 	ip2 := netip.MustParseAddr("192.168.1.2")
 	result, _, _ = dataset.CheckIP(ip2)
 	if result != remediation.Captcha {
-		t.Errorf("Expected Captcha for 192.168.1.2, got %v", result)
+		t.Errorf("Expected Captcha for 192.168.1.2 (LPM from RangeSet), got %v", result)
 	}
 
-	// Test that we get the broadest match
+	// Test that we get the broadest match from RangeSet
 	ip3 := netip.MustParseAddr("192.168.2.1")
 	result, _, _ = dataset.CheckIP(ip3)
 	if result != remediation.Ban {
-		t.Errorf("Expected Ban for 192.168.2.1, got %v", result)
+		t.Errorf("Expected Ban for 192.168.2.1 (from RangeSet), got %v", result)
 	}
 
 	// Test that we get no match
 	ip4 := netip.MustParseAddr("10.0.0.1")
 	result, _, _ = dataset.CheckIP(ip4)
 	if result != remediation.Allow {
-		t.Errorf("Expected Allow for 10.0.0.1, got %v", result)
+		t.Errorf("Expected Allow for 10.0.0.1 (no match), got %v", result)
 	}
 }
 
@@ -299,4 +302,127 @@ func BenchmarkBartRemove(b *testing.B) {
 		dataset.Remove(decisions)
 		dataset.Add(decisions)
 	}
+}
+
+// BenchmarkHybridVsBartOnly compares memory allocation of hybrid vs BART-only storage
+func BenchmarkHybridVsBartOnly(b *testing.B) {
+	// Generate test IPs (individual addresses, not ranges)
+	generateIPDecisions := func(count int) models.GetDecisionsResponse {
+		decisions := make(models.GetDecisionsResponse, 0, count)
+		for i := range count {
+			ip := netip.AddrFrom4([4]byte{
+				byte(10 + i/16777216%246),
+				byte(i / 65536 % 256),
+				byte(i / 256 % 256),
+				byte(i % 256),
+			})
+			decisions = append(decisions, &models.Decision{
+				Scope:  ptr.Of("ip"),
+				Value:  ptr.Of(ip.String()),
+				Type:   ptr.Of("ban"),
+				Origin: ptr.Of("test"),
+				ID:     int64(i + 1),
+			})
+		}
+		return decisions
+	}
+
+	sizes := []int{1000, 10000, 50000}
+
+	for _, size := range sizes {
+		b.Run(fmt.Sprintf("Hybrid_%d_IPs", size), func(b *testing.B) {
+			decisions := generateIPDecisions(size)
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for range b.N {
+				dataset := New()
+				dataset.Add(decisions)
+			}
+		})
+
+		b.Run(fmt.Sprintf("BartOnly_%d_IPs", size), func(b *testing.B) {
+			// Generate the same IPs but convert to prefix batch for BART
+			decisions := generateIPDecisions(size)
+			ops := make([]BartAddOp, 0, size)
+			for _, d := range decisions {
+				ip, _ := netip.ParseAddr(*d.Value)
+				prefixLen := 32
+				if ip.Is6() {
+					prefixLen = 128
+				}
+				ops = append(ops, BartAddOp{
+					Prefix: netip.PrefixFrom(ip, prefixLen),
+					Origin: *d.Origin,
+					R:      remediation.Ban,
+					ID:     d.ID,
+					IPType: "ipv4",
+					Scope:  "ip",
+				})
+			}
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for range b.N {
+				bartSet := NewBartUnifiedIPSet("test")
+				bartSet.AddBatch(ops)
+			}
+		})
+	}
+}
+
+// BenchmarkLookupHybrid benchmarks lookup in the hybrid storage
+func BenchmarkLookupHybrid(b *testing.B) {
+	dataset := New()
+
+	// Add individual IPs to IPMap
+	for i := range 10000 {
+		ip := netip.AddrFrom4([4]byte{
+			byte(10),
+			byte(i / 65536 % 256),
+			byte(i / 256 % 256),
+			byte(i % 256),
+		})
+		dataset.IPMap.AddBatch([]IPAddOp{
+			{IP: ip, Origin: "test", R: remediation.Ban, ID: int64(i), IPType: "ipv4"},
+		})
+	}
+
+	// Add some ranges to RangeSet
+	dataset.RangeSet.AddBatch([]BartAddOp{
+		{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Origin: "test", R: remediation.Ban, ID: 1, IPType: "ipv4", Scope: "range"},
+	})
+
+	// Test IPs - some in IPMap, some in RangeSet, some not found
+	testIPs := []netip.Addr{
+		netip.MustParseAddr("10.0.0.1"),      // In IPMap
+		netip.MustParseAddr("10.0.39.15"),    // In IPMap  
+		netip.MustParseAddr("192.168.1.100"), // In RangeSet
+		netip.MustParseAddr("8.8.8.8"),       // Not found
+	}
+
+	b.Run("IPMap_hit", func(b *testing.B) {
+		ip := testIPs[0]
+		b.ResetTimer()
+		for range b.N {
+			_, _, _ = dataset.CheckIP(ip)
+		}
+	})
+
+	b.Run("RangeSet_hit", func(b *testing.B) {
+		ip := testIPs[2]
+		b.ResetTimer()
+		for range b.N {
+			_, _, _ = dataset.CheckIP(ip)
+		}
+	})
+
+	b.Run("No_match", func(b *testing.B) {
+		ip := testIPs[3]
+		b.ResetTimer()
+		for range b.N {
+			_, _, _ = dataset.CheckIP(ip)
+		}
+	})
 }

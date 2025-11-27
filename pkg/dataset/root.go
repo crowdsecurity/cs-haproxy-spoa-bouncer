@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
@@ -14,17 +15,21 @@ import (
 
 type DataSet struct {
 	CNSet *CNSet
-	// CIDR-based trie implementation using bart library
-	BartUnifiedIPSet *BartUnifiedIPSet
+	// Individual IP addresses - uses sync.Map for O(1) lookups
+	// Much more memory efficient than BART for individual IPs
+	IPMap *IPMap
+	// Range-based trie implementation using bart library
+	// Only used for CIDR ranges that need Longest Prefix Match (LPM)
+	RangeSet *BartUnifiedIPSet
 }
 
 func New() *DataSet {
 	CNSet := CNSet{}
 	CNSet.Init("CNSet")
-	BartUnifiedIPSet := NewBartUnifiedIPSet("BartUnifiedIPSet")
 	return &DataSet{
-		CNSet:            &CNSet,
-		BartUnifiedIPSet: BartUnifiedIPSet,
+		CNSet:    &CNSet,
+		IPMap:    NewIPMap("IPMap"),
+		RangeSet: NewBartUnifiedIPSet("RangeSet"),
 	}
 }
 
@@ -35,18 +40,20 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 	log.Infof("Processing %d new decisions", len(decisions))
 
 	// Batch operations for better performance, especially during initial load
-	// Convert IPs to prefixes immediately so we can use a single unified batch
 	type cnOp struct {
 		cn     string
 		origin string
 		r      remediation.Remediation
 		id     int64
 	}
-	// Pre-allocate with estimated capacity for better performance
-	prefixOps := make([]BartAddOp, 0, len(decisions))
+
+	// Separate operations by type:
+	// - Individual IPs go to IPMap (memory efficient, O(1) lookup)
+	// - Ranges go to RangeSet/BART (needed for LPM)
+	ipOps := make([]IPAddOp, 0, len(decisions))
+	rangeOps := make([]BartAddOp, 0)
 	cnOps := make([]cnOp, 0)
 
-	// Collect all operations, converting IPs to prefixes immediately
 	for _, decision := range decisions {
 		origin := *decision.Origin
 		if origin == "lists" && decision.Scenario != nil {
@@ -63,16 +70,12 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				log.Errorf("Error parsing IP address %s: %s", *decision.Value, err.Error())
 				continue
 			}
-			// Convert IP to prefix immediately
-			prefixLen := 32
 			ipType := "ipv4"
 			if ip.Is6() {
-				prefixLen = 128
 				ipType = "ipv6"
 			}
-			prefix := netip.PrefixFrom(ip, prefixLen)
-			prefixOps = append(prefixOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, ID: decision.ID, IPType: ipType, Scope: "ip"})
-			// Increment metrics immediately - all operations always succeed
+			// Individual IPs go to IPMap for memory efficiency
+			ipOps = append(ipOps, IPAddOp{IP: ip, Origin: origin, R: r, ID: decision.ID, IPType: ipType})
 			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Inc()
 		case "range":
 			prefix, err := netip.ParsePrefix(*decision.Value)
@@ -84,8 +87,8 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			if prefix.Addr().Is6() {
 				ipType = "ipv6"
 			}
-			prefixOps = append(prefixOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, ID: decision.ID, IPType: ipType, Scope: "range"})
-			// Increment metrics immediately - all operations always succeed
+			// Ranges go to BART for LPM support
+			rangeOps = append(rangeOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, ID: decision.ID, IPType: ipType, Scope: "range"})
 			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
 		case "country":
 			cnOps = append(cnOps, cnOp{cn: *decision.Value, origin: origin, r: r, id: decision.ID})
@@ -94,19 +97,38 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 		}
 	}
 
-	// Execute unified batch for all prefixes (IPs and ranges)
-	// Metrics already incremented during batch creation since all operations always succeed
-	d.BartUnifiedIPSet.AddBatch(prefixOps)
-	log.Infof("Finished processing %d decisions", len(decisions))
-	// CN operations are handled individually (they use a different data structure)
-	// Only increment metrics for successful additions
-	for _, op := range cnOps {
-		if err := d.addCN(op.cn, op.origin, op.r, op.id); err != nil {
-			log.Errorf("Error adding CN decision: %s", err.Error())
-			continue
-		}
-		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.origin, "ip_type": "", "scope": "country"}).Inc()
+	// Execute batches in parallel using sync.WaitGroup.Go (Go 1.24+)
+	var wg sync.WaitGroup
+
+	// IPMap batch (individual IPs)
+	if len(ipOps) > 0 {
+		wg.Go(func() {
+			d.IPMap.AddBatch(ipOps)
+		})
 	}
+
+	// RangeSet batch (CIDR ranges)
+	if len(rangeOps) > 0 {
+		wg.Go(func() {
+			d.RangeSet.AddBatch(rangeOps)
+		})
+	}
+
+	// CN operations batch
+	if len(cnOps) > 0 {
+		wg.Go(func() {
+			for _, op := range cnOps {
+				if err := d.addCN(op.cn, op.origin, op.r, op.id); err != nil {
+					log.Errorf("Error adding CN decision: %s", err.Error())
+					continue
+				}
+				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.origin, "ip_type": "", "scope": "country"}).Inc()
+			}
+		})
+	}
+
+	wg.Wait()
+	log.Infof("Finished processing %d decisions", len(decisions))
 }
 
 func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
@@ -114,8 +136,7 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 		return
 	}
 	log.Infof("Processing %d deleted decisions", len(decisions))
-	// Batch operations for better performance
-	// Convert IPs to prefixes immediately so we can use a single unified batch
+
 	type cnOp struct {
 		cn     string
 		r      remediation.Remediation
@@ -123,11 +144,11 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 		origin string
 	}
 
-	// Pre-allocate with estimated capacity for better performance
-	prefixOps := make([]BartRemoveOp, 0, len(decisions))
+	// Separate operations by type
+	ipOps := make([]IPRemoveOp, 0, len(decisions))
+	rangeOps := make([]BartRemoveOp, 0)
 	cnOps := make([]cnOp, 0)
 
-	// Collect all operations, converting IPs to prefixes immediately
 	for _, decision := range decisions {
 		origin := *decision.Origin
 		if origin == "lists" && decision.Scenario != nil {
@@ -144,15 +165,11 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 				log.Errorf("Error parsing IP address %s: %s", *decision.Value, err.Error())
 				continue
 			}
-			// Convert IP to prefix immediately
-			prefixLen := 32
 			ipType := "ipv4"
 			if ip.Is6() {
-				prefixLen = 128
 				ipType = "ipv6"
 			}
-			prefix := netip.PrefixFrom(ip, prefixLen)
-			prefixOps = append(prefixOps, BartRemoveOp{Prefix: prefix, R: r, ID: decision.ID, Origin: origin, IPType: ipType, Scope: "ip"})
+			ipOps = append(ipOps, IPRemoveOp{IP: ip, R: r, ID: decision.ID, Origin: origin, IPType: ipType})
 		case "range":
 			prefix, err := netip.ParsePrefix(*decision.Value)
 			if err != nil {
@@ -163,7 +180,7 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 			if prefix.Addr().Is6() {
 				ipType = "ipv6"
 			}
-			prefixOps = append(prefixOps, BartRemoveOp{Prefix: prefix, R: r, ID: decision.ID, Origin: origin, IPType: ipType, Scope: "range"})
+			rangeOps = append(rangeOps, BartRemoveOp{Prefix: prefix, R: r, ID: decision.ID, Origin: origin, IPType: ipType, Scope: "range"})
 		case "country":
 			cnOps = append(cnOps, cnOp{cn: *decision.Value, r: r, id: decision.ID, origin: origin})
 		default:
@@ -171,34 +188,72 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 		}
 	}
 
-	// Execute unified batch for all prefixes (IPs and ranges)
-	// Only decrement metrics for successful removals
-	results := d.BartUnifiedIPSet.RemoveBatch(prefixOps)
-	for _, op := range results {
+	// Execute batches in parallel using sync.WaitGroup.Go (Go 1.24+)
+	var wg sync.WaitGroup
+
+	// Variables to collect results for metrics
+	var ipResults []*IPRemoveOp
+	var rangeResults []*BartRemoveOp
+
+	// IPMap batch (individual IPs)
+	if len(ipOps) > 0 {
+		wg.Go(func() {
+			ipResults = d.IPMap.RemoveBatch(ipOps)
+		})
+	}
+
+	// RangeSet batch (CIDR ranges)
+	if len(rangeOps) > 0 {
+		wg.Go(func() {
+			rangeResults = d.RangeSet.RemoveBatch(rangeOps)
+		})
+	}
+
+	// CN operations batch
+	if len(cnOps) > 0 {
+		wg.Go(func() {
+			for _, op := range cnOps {
+				removed, err := d.removeCN(op.cn, op.r, op.id)
+				if err != nil {
+					log.Errorf("Error removing CN decision: %s", err.Error())
+					continue
+				}
+				if removed {
+					metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.origin, "ip_type": "", "scope": "country"}).Dec()
+				}
+			}
+		})
+	}
+
+	wg.Wait()
+
+	// Update metrics for IP and Range removals (after goroutines complete)
+	for _, op := range ipResults {
+		if op != nil {
+			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.Origin, "ip_type": op.IPType, "scope": "ip"}).Dec()
+		}
+	}
+	for _, op := range rangeResults {
 		if op != nil {
 			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.Origin, "ip_type": op.IPType, "scope": op.Scope}).Dec()
 		}
 	}
+
 	log.Infof("Finished processing %d deleted decisions", len(decisions))
-	// CN operations are handled individually (they use a different data structure)
-	// Only decrement metrics for successful removals
-	for _, op := range cnOps {
-		removed, err := d.removeCN(op.cn, op.r, op.id)
-		if err != nil {
-			log.Errorf("Error removing CN decision: %s", err.Error())
-			continue
-		}
-		if removed {
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.origin, "ip_type": "", "scope": "country"}).Dec()
-		}
-	}
 }
 
 func (d *DataSet) CheckIP(ip netip.Addr) (remediation.Remediation, string, error) {
 	if !ip.IsValid() {
 		return remediation.Allow, "", fmt.Errorf("invalid IP address")
 	}
-	r, origin := d.BartUnifiedIPSet.Contains(ip)
+
+	// First check the IPMap for exact IP match (O(1) lookup)
+	if r, origin, found := d.IPMap.Contains(ip); found {
+		return r, origin, nil
+	}
+
+	// Fall back to RangeSet (BART) for LPM on ranges
+	r, origin := d.RangeSet.Contains(ip)
 	return r, origin, nil
 }
 
