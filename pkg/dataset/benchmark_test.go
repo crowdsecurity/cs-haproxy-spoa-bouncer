@@ -365,7 +365,7 @@ func BenchmarkHybridVsBartOnly(b *testing.B) {
 			b.ReportAllocs()
 
 			for range b.N {
-				bartSet := NewBartUnifiedIPSet("test")
+				bartSet := NewBartRangeSet("test")
 				bartSet.AddBatch(ops)
 			}
 		})

@@ -30,21 +30,21 @@ type BartRemoveOp struct {
 	Scope  string
 }
 
-// BartUnifiedIPSet provides a unified interface for IP and CIDR operations using bart library.
+// BartRangeSet provides a unified interface for IP and CIDR operations using bart library.
 // Uses atomic pointer for lock-free reads and mutex-protected writes
 // following the pattern recommended in bart's documentation.
-type BartUnifiedIPSet struct {
+type BartRangeSet struct {
 	tableAtomicPtr atomic.Pointer[bart.Table[RemediationIdsMap]]
 	writeMutex     sync.Mutex // Protects writers only
 	logger         *log.Entry
 }
 
-// NewBartUnifiedIPSet creates a new BartUnifiedIPSet
+// NewBartRangeSet creates a new BartRangeSet
 // The table starts as nil and will be created on first use for better memory efficiency
 // Initialize with nil; the table will be allocated during the first AddBatch operation.
 // This approach enables using Insert for the initial table population, which is more memory efficient than incremental updates.
-func NewBartUnifiedIPSet(logAlias string) *BartUnifiedIPSet {
-	return &BartUnifiedIPSet{
+func NewBartRangeSet(logAlias string) *BartRangeSet {
+	return &BartRangeSet{
 		logger: log.WithField("alias", logAlias),
 	}
 }
@@ -55,7 +55,7 @@ func NewBartUnifiedIPSet(logAlias string) *BartUnifiedIPSet {
 // For the initial load (when table is nil), uses Insert for better memory efficiency.
 // For subsequent updates, uses ModifyPersist for incremental changes.
 // All operations always succeed (duplicates are merged, new entries are created).
-func (s *BartUnifiedIPSet) AddBatch(operations []BartAddOp) {
+func (s *BartRangeSet) AddBatch(operations []BartAddOp) {
 	if len(operations) == 0 {
 		return
 	}
@@ -80,7 +80,7 @@ func (s *BartUnifiedIPSet) AddBatch(operations []BartAddOp) {
 // This is more memory efficient than using ModifyPersist for the initial load.
 // Handles duplicate prefixes by merging IDs before inserting.
 // All operations always succeed.
-func (s *BartUnifiedIPSet) initializeBatch(operations []BartAddOp) {
+func (s *BartRangeSet) initializeBatch(operations []BartAddOp) {
 	// Create a new table for the initial load
 	next := &bart.Table[RemediationIdsMap]{}
 
@@ -126,7 +126,7 @@ func (s *BartUnifiedIPSet) initializeBatch(operations []BartAddOp) {
 // updateBatch updates an existing table with the given operations using ModifyPersist.
 // This handles incremental updates efficiently.
 // All operations always succeed.
-func (s *BartUnifiedIPSet) updateBatch(cur *bart.Table[RemediationIdsMap], operations []BartAddOp) {
+func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationIdsMap], operations []BartAddOp) {
 	// Process all operations, chaining the table updates
 	next := cur
 	for _, op := range operations {
@@ -168,7 +168,7 @@ func (s *BartUnifiedIPSet) updateBatch(cur *bart.Table[RemediationIdsMap], opera
 // Returns a slice of pointers to successfully removed operations (nil for failures).
 // This allows callers to access operation metadata (Origin, IPType, Scope) for metrics.
 // IPs should be converted to /32 or /128 prefixes before calling this method.
-func (s *BartUnifiedIPSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
+func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 	if len(operations) == 0 {
 		return nil
 	}
@@ -244,7 +244,7 @@ func (s *BartUnifiedIPSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveO
 // Contains checks if an IP address matches any prefix in the bart table.
 // Returns the longest matching prefix's remediation and origin.
 // This method uses lock-free reads via atomic pointer for optimal performance.
-func (s *BartUnifiedIPSet) Contains(ip netip.Addr) (remediation.Remediation, string) {
+func (s *BartRangeSet) Contains(ip netip.Addr) (remediation.Remediation, string) {
 	// Lock-free read: atomically load the current table pointer
 	table := s.tableAtomicPtr.Load()
 

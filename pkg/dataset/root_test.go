@@ -26,7 +26,7 @@ func TestDataSet(t *testing.T) {
 		assert.NotNil(t, dataSet)
 		assert.IsType(t, &CNSet{}, dataSet.CNSet)
 		assert.IsType(t, &IPMap{}, dataSet.IPMap)
-		assert.IsType(t, &BartUnifiedIPSet{}, dataSet.RangeSet)
+		assert.IsType(t, &BartRangeSet{}, dataSet.RangeSet)
 		assert.NotNil(t, dataSet.CNSet)
 		assert.NotNil(t, dataSet.IPMap)
 		assert.NotNil(t, dataSet.RangeSet)

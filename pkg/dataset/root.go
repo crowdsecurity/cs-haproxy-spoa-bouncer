@@ -20,7 +20,7 @@ type DataSet struct {
 	IPMap *IPMap
 	// Range-based trie implementation using bart library
 	// Only used for CIDR ranges that need Longest Prefix Match (LPM)
-	RangeSet *BartUnifiedIPSet
+	RangeSet *BartRangeSet
 }
 
 func New() *DataSet {
@@ -29,7 +29,7 @@ func New() *DataSet {
 	return &DataSet{
 		CNSet:    &CNSet,
 		IPMap:    NewIPMap("IPMap"),
-		RangeSet: NewBartUnifiedIPSet("RangeSet"),
+		RangeSet: NewBartRangeSet("RangeSet"),
 	}
 }
 
