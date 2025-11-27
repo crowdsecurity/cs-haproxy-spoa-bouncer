@@ -78,7 +78,8 @@
 <body>
   <div class="container">
     <h1>Access Denied</h1>
-    <p class="info-text">Your request has been blocked by CrowdSec security.</p><a href="%[var(txn.crowdsec.contact_us_url)]" style="display: inline-block; margin-top: 20px; padding: 10px 20px; background: #f38020; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">Contact Us</a><p class="info-text"></p>
+    <p class="info-text">Your request has been blocked.</p>
+    <p class="info-text" style="text-align: center;"><a href="%[var(txn.crowdsec.contact_us_url)]" style="display: inline-block; margin-top: 20px; padding: 10px 20px; background: #f38020; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">Contact Us</a></p>
     <div class="footer">
       <div class="footer-brand">
         <span>Protected by</span>

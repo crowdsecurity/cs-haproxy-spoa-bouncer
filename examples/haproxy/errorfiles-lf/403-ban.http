@@ -78,7 +78,7 @@
 <body>
   <div class="container">
     <h1>Access Denied</h1>
-    <p class="info-text">Your request has been blocked by CrowdSec security.</p>
+    <p class="info-text">Your request has been blocked.</p>
     <div class="footer">
       <div class="footer-brand">
         <span>Protected by</span>
