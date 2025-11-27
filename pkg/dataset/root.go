@@ -52,7 +52,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 		// This allows GC to reclaim the DecisionsStreamResponse after processing
 		var origin string
 		if *decision.Origin == "lists" && decision.Scenario != nil {
-			origin = strings.Clone(*decision.Origin + ":" + *decision.Scenario)
+			origin = *decision.Origin + ":" + *decision.Scenario
 		} else {
 			origin = strings.Clone(*decision.Origin)
 		}
