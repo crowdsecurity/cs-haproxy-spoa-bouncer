@@ -77,8 +77,9 @@ func BenchmarkInternString(b *testing.B) {
 			uniqueStrings[i] = "test" + string(rune('a'+i%26)) + string(rune('0'+i/26%10))
 		}
 
-		b.ResetTimer()
+		// Clear pool before timing starts
 		stringInternPool = sync.Map{}
+		b.ResetTimer()
 		for i := range b.N {
 			internString(uniqueStrings[i%numUnique])
 		}

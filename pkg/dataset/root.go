@@ -52,10 +52,11 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 		// 1. Break reference to Decision struct memory (allows GC of DecisionsStreamResponse)
 		// 2. Deduplicate repeated origins (memory efficiency - origins have low cardinality)
 		var origin string
-		if *decision.Origin == "lists" && decision.Scenario != nil {
-			origin = internString(*decision.Origin + ":" + *decision.Scenario)
+		originStr := *decision.Origin
+		if originStr == "lists" && decision.Scenario != nil {
+			origin = internString(originStr + ":" + *decision.Scenario)
 		} else {
-			origin = internString(*decision.Origin)
+			origin = internString(originStr)
 		}
 
 		scope := strings.ToLower(*decision.Scope)
@@ -138,10 +139,11 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 		// Intern origin string to break reference to Decision struct memory
 		// (allows GC of DecisionsStreamResponse)
 		var origin string
-		if *decision.Origin == "lists" && decision.Scenario != nil {
-			origin = internString(*decision.Origin + ":" + *decision.Scenario)
+		originStr := *decision.Origin
+		if originStr == "lists" && decision.Scenario != nil {
+			origin = internString(originStr + ":" + *decision.Scenario)
 		} else {
-			origin = internString(*decision.Origin)
+			origin = internString(originStr)
 		}
 
 		scope := strings.ToLower(*decision.Scope)
