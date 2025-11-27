@@ -43,13 +43,9 @@ linters:
     - tagliatelle           # Checks the struct tags.
     - varnamelen            # checks that the length of a variable's name matches its scope
     - prealloc
-    - forcetypeassert  # !!!
 
     - depguard
     - nonamedreturns
-
-    - noctx   # !!!
-    - perfsprint # !!!
 
 
   settings:
@@ -64,18 +60,14 @@ linters:
       disabled-checks:
         - paramTypeCombine
         - todoCommentWithoutDetail
-        - emptyStringTest # !!!
-        - exposedSyncMutex # !!!
         - commentedOutCode
         - unnamedResult
-        - importShadow # !!!
         - commentFormatting
         - whyNoLint
 
     govet:
       disable:
         - fieldalignment
-        - shadow # !!!
       enable-all: true
 
     maintidx:
@@ -87,9 +79,7 @@ linters:
 
     modernize:
       disable:
-        - any   # !!!
         - bloop
-        - testingcontext  # !!!
 
     nestif:
       # lower this after refactoring
@@ -113,8 +103,6 @@ linters:
       rules:
         - name: add-constant
           disabled: true
-        - name: bool-literal-in-expr
-          disabled: true   # !!!
         - name: cognitive-complexity
           arguments:
             # lower this after refactoring
@@ -127,8 +115,6 @@ linters:
             - 33
         - name: enforce-switch-style
           disabled: true
-        - name: context-as-argument
-          disabled: true  # !!!
         - name: empty-lines
           disabled: true
         - name: function-length
@@ -138,8 +124,6 @@ linters:
             - 233
         - name: import-alias-naming
           disabled: true
-        - name: import-shadowing
-          disabled: true  # !!!
         - name: line-length-limit
           arguments:
             # lower this after refactoring
@@ -148,37 +132,10 @@ linters:
           arguments:
             # lower this after refactoring
             - 6
-        - name: if-return
-          disabled: true   # !!!
-        - name: package-directory-mismatch
-          disabled: true  # !!!
-        - name: struct-tag
-          disabled: true   # !!!
-        - name: var-naming
-          disabled: true   # !!!
-        - name: exported
-          disabled: true   # !!!
-        - name: indent-error-flow
-          disabled: true   # !!!
-        - name: unexported-naming
-          disabled: true  # !!!
-        - name: unnecessary-format
-          disabled: true  # !!!
-        - name: unused-parameter
-          disabled: true   # !!!
-        - name: use-any
-          disabled: true   # !!!
-        - name: use-errors-new
-          disabled: true   # !!!
-        - name: unused-receiver
-          disabled: true   # !!!
-        - name: var-declaration
-          disabled: true   # !!!
 
     staticcheck:
       checks:
         - all
-        - -ST1003   # !!!
 
   exclusions:
     presets:
