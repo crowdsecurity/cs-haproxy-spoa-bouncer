@@ -21,7 +21,6 @@ import (
 	"github.com/negasus/haproxy-spoe-go/agent"
 	"github.com/negasus/haproxy-spoe-go/message"
 	"github.com/negasus/haproxy-spoe-go/request"
-	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -240,16 +239,13 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 				ipTypeLabel = "ipv6"
 			}
 
-			// Count processed request
-			metrics.TotalProcessedRequests.With(prometheus.Labels{"ip_type": ipTypeLabel}).Inc()
+			// Count processed request - use WithLabelValues to avoid map allocation on hot path
+			metrics.TotalProcessedRequests.WithLabelValues(ipTypeLabel).Inc()
 
 			// Count blocked request if remediation applied
 			if r > remediation.Unknown {
-				metrics.TotalBlockedRequests.With(prometheus.Labels{
-					"ip_type":     ipTypeLabel,
-					"origin":      origin,
-					"remediation": r.String(),
-				}).Inc()
+				// Label order: origin, ip_type, remediation (as defined in metrics.go)
+				metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, r.String()).Inc()
 			}
 		}
 	}()
@@ -678,19 +674,16 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 		ipTypeLabel = "ipv6"
 	}
 
-	// Count processed requests
-	metrics.TotalProcessedRequests.With(prometheus.Labels{"ip_type": ipTypeLabel}).Inc()
+	// Count processed requests - use WithLabelValues to avoid map allocation on hot path
+	metrics.TotalProcessedRequests.WithLabelValues(ipTypeLabel).Inc()
 
 	// Check IP directly against dataset
 	r, origin := s.getIPRemediation(req, ipAddr)
 
 	// Count blocked requests
 	if r > remediation.Unknown {
-		metrics.TotalBlockedRequests.With(prometheus.Labels{
-			"ip_type":     ipTypeLabel,
-			"origin":      origin,
-			"remediation": r.String(),
-		}).Inc()
+		// Label order: origin, ip_type, remediation (as defined in metrics.go)
+		metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, r.String()).Inc()
 	}
 
 	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())

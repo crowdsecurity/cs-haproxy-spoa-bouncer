@@ -8,7 +8,6 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
 	"github.com/crowdsecurity/crowdsec/pkg/models"
-	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -77,7 +76,8 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			prefix := netip.PrefixFrom(ip, prefixLen)
 			prefixOps = append(prefixOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, ID: decision.ID, IPType: ipType, Scope: "ip"})
 			// Increment metrics immediately - all operations always succeed
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Inc()
+			// Label order: origin, ip_type, scope (as defined in metrics.go)
+			metrics.TotalActiveDecisions.WithLabelValues(origin, ipType, "ip").Inc()
 		case "range":
 			prefix, err := netip.ParsePrefix(*decision.Value)
 			if err != nil {
@@ -90,7 +90,8 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			}
 			prefixOps = append(prefixOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, ID: decision.ID, IPType: ipType, Scope: "range"})
 			// Increment metrics immediately - all operations always succeed
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
+			// Label order: origin, ip_type, scope (as defined in metrics.go)
+			metrics.TotalActiveDecisions.WithLabelValues(origin, ipType, "range").Inc()
 		case "country":
 			// Clone country code to break reference to Decision struct memory
 			cnOps = append(cnOps, cnOp{cn: strings.Clone(*decision.Value), origin: origin, r: r, id: decision.ID})
@@ -110,7 +111,8 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			log.Errorf("Error adding CN decision: %s", err.Error())
 			continue
 		}
-		metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.origin, "ip_type": "", "scope": "country"}).Inc()
+		// Label order: origin, ip_type, scope (as defined in metrics.go)
+		metrics.TotalActiveDecisions.WithLabelValues(op.origin, "", "country").Inc()
 	}
 }
 
@@ -184,9 +186,10 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	// Execute unified batch for all prefixes (IPs and ranges)
 	// Only decrement metrics for successful removals
 	results := d.BartUnifiedIPSet.RemoveBatch(prefixOps)
+	// Label order: origin, ip_type, scope (as defined in metrics.go)
 	for _, op := range results {
 		if op != nil {
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.Origin, "ip_type": op.IPType, "scope": op.Scope}).Dec()
+			metrics.TotalActiveDecisions.WithLabelValues(op.Origin, op.IPType, op.Scope).Dec()
 		}
 	}
 	log.Infof("Finished processing %d deleted decisions", len(decisions))
@@ -199,7 +202,8 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 			continue
 		}
 		if removed {
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.origin, "ip_type": "", "scope": "country"}).Dec()
+			// Label order: origin, ip_type, scope (as defined in metrics.go)
+			metrics.TotalActiveDecisions.WithLabelValues(op.origin, "", "country").Dec()
 		}
 	}
 }
