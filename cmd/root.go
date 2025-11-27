@@ -138,21 +138,40 @@ func Execute() error {
 	// pprof debug endpoint for runtime profiling (memory, CPU, goroutines)
 	// WARNING: Only enable in development/debugging scenarios
 	if config.PprofConfig.Enabled {
-		go func() {
-			pprofMux := http.NewServeMux()
-			pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
-			pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-			pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-			pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-			pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		pprofMux := http.NewServeMux()
+		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
+		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-			listenOn := net.JoinHostPort(
-				config.PprofConfig.ListenAddress,
-				config.PprofConfig.ListenPort,
-			)
+		listenOn := net.JoinHostPort(
+			config.PprofConfig.ListenAddress,
+			config.PprofConfig.ListenPort,
+		)
+
+		pprofServer := &http.Server{
+			Addr:    listenOn,
+			Handler: pprofMux,
+		}
+
+		g.Go(func() error {
 			log.Warnf("pprof debug endpoint enabled at %s/debug/pprof/ - DO NOT USE IN PRODUCTION", listenOn)
-			log.Error(http.ListenAndServe(listenOn, pprofMux))
-		}()
+			if err := pprofServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("pprof server error: %w", err)
+			}
+			return nil
+		})
+
+		g.Go(func() error {
+			<-ctx.Done()
+			log.Info("Shutting down pprof server...")
+			// Use background context since parent ctx is already canceled
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			//nolint:contextcheck // parent ctx is canceled, need fresh context for shutdown
+			return pprofServer.Shutdown(shutdownCtx)
+		})
 	}
 
 	dataSet := dataset.New()
