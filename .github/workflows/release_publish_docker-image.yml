@@ -24,8 +24,8 @@ jobs:
         name: Prepare
         id: prep
         run: |
-          DOCKER_IMAGE=crowdsecurity/haproxy-spoa-bouncer
-          GHCR_IMAGE=ghcr.io/${{ github.repository_owner }}/haproxy-spoa-bouncer
+          DOCKER_IMAGE=crowdsecurity/spoa-bouncer
+          GHCR_IMAGE=ghcr.io/${{ github.repository_owner }}/spoa-bouncer
           VERSION=edge
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
