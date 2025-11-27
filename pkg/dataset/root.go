@@ -48,9 +48,13 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 
 	// Collect all operations, converting IPs to prefixes immediately
 	for _, decision := range decisions {
-		origin := *decision.Origin
-		if origin == "lists" && decision.Scenario != nil {
+		// Clone origin string to break reference to Decision struct memory
+		// This allows GC to reclaim the DecisionsStreamResponse after processing
+		var origin string
+		if *decision.Origin == "lists" && decision.Scenario != nil {
 			origin = *decision.Origin + ":" + *decision.Scenario
+		} else {
+			origin = strings.Clone(*decision.Origin)
 		}
 
 		scope := strings.ToLower(*decision.Scope)
@@ -88,7 +92,8 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			// Increment metrics immediately - all operations always succeed
 			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
 		case "country":
-			cnOps = append(cnOps, cnOp{cn: *decision.Value, origin: origin, r: r, id: decision.ID})
+			// Clone country code to break reference to Decision struct memory
+			cnOps = append(cnOps, cnOp{cn: strings.Clone(*decision.Value), origin: origin, r: r, id: decision.ID})
 		default:
 			log.Errorf("Unknown scope %s", *decision.Scope)
 		}
@@ -129,9 +134,13 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 
 	// Collect all operations, converting IPs to prefixes immediately
 	for _, decision := range decisions {
-		origin := *decision.Origin
-		if origin == "lists" && decision.Scenario != nil {
+		// Clone origin string to break reference to Decision struct memory
+		// This allows GC to reclaim the DecisionsStreamResponse after processing
+		var origin string
+		if *decision.Origin == "lists" && decision.Scenario != nil {
 			origin = *decision.Origin + ":" + *decision.Scenario
+		} else {
+			origin = strings.Clone(*decision.Origin)
 		}
 
 		scope := strings.ToLower(*decision.Scope)
@@ -165,7 +174,8 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 			}
 			prefixOps = append(prefixOps, BartRemoveOp{Prefix: prefix, R: r, ID: decision.ID, Origin: origin, IPType: ipType, Scope: "range"})
 		case "country":
-			cnOps = append(cnOps, cnOp{cn: *decision.Value, r: r, id: decision.ID, origin: origin})
+			// Clone country code to break reference to Decision struct memory
+			cnOps = append(cnOps, cnOp{cn: strings.Clone(*decision.Value), r: r, id: decision.ID, origin: origin})
 		default:
 			log.Errorf("Unknown scope %s", *decision.Scope)
 		}
