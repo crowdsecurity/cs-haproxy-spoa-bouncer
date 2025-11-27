@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -131,6 +132,26 @@ func Execute() error {
 			)
 			log.Infof("Serving metrics at %s", listenOn+"/metrics")
 			log.Error(http.ListenAndServe(listenOn, nil))
+		}()
+	}
+
+	// pprof debug endpoint for runtime profiling (memory, CPU, goroutines)
+	// WARNING: Only enable in development/debugging scenarios
+	if config.PprofConfig.Enabled {
+		go func() {
+			pprofMux := http.NewServeMux()
+			pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
+			pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+			pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+			pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+			pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+			listenOn := net.JoinHostPort(
+				config.PprofConfig.ListenAddress,
+				config.PprofConfig.ListenPort,
+			)
+			log.Warnf("pprof debug endpoint enabled at %s/debug/pprof/ - DO NOT USE IN PRODUCTION", listenOn)
+			log.Error(http.ListenAndServe(listenOn, pprofMux))
 		}()
 	}
 

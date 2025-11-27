@@ -18,6 +18,15 @@ type PrometheusConfig struct {
 	ListenPort    string `yaml:"listen_port"`
 }
 
+// PprofConfig configures the pprof debug endpoint for runtime profiling.
+// When enabled, exposes Go's pprof endpoints for memory, CPU, and goroutine profiling.
+// WARNING: Only enable in development/debugging scenarios, not in production.
+type PprofConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	ListenAddress string `yaml:"listen_addr"`
+	ListenPort    string `yaml:"listen_port"`
+}
+
 type BouncerConfig struct {
 	Logging          cslogging.LoggingConfig `yaml:",inline"`
 	Hosts            []*host.Host            `yaml:"hosts"`
@@ -26,6 +35,7 @@ type BouncerConfig struct {
 	ListenTCP        string                  `yaml:"listen_tcp"`
 	ListenUnix       string                  `yaml:"listen_unix"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
+	PprofConfig      PprofConfig             `yaml:"pprof"`
 }
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).

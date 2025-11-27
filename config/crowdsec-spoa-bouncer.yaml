@@ -24,3 +24,11 @@ prometheus:
   enabled: false
   listen_addr: 127.0.0.1
   listen_port: 60601
+
+## pprof debug endpoint for runtime profiling
+## WARNING: Only enable for debugging, exposes internal runtime data
+## Endpoints: /debug/pprof/heap, /debug/pprof/profile, /debug/pprof/goroutine, etc.
+#pprof:
+#  enabled: false
+#  listen_addr: 127.0.0.1
+#  listen_port: 6060
