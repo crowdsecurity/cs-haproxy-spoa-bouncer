@@ -57,13 +57,11 @@ func TestInternString(t *testing.T) {
 }
 
 func BenchmarkInternString(b *testing.B) {
-	// Pre-populate with some strings
+	// Pre-populate with the strings we'll look up (only need one call per unique string)
 	stringInternPool = sync.Map{}
-	for range 100 {
-		internString("crowdsec")
-		internString("cscli")
-		internString("lists:crowdsecurity/http-probing")
-	}
+	internString("crowdsec")
+	internString("cscli")
+	internString("lists:crowdsecurity/http-probing")
 
 	b.Run("existing_string", func(b *testing.B) {
 		for range b.N {
@@ -72,11 +70,17 @@ func BenchmarkInternString(b *testing.B) {
 	})
 
 	b.Run("new_string", func(b *testing.B) {
+		// Pre-generate unique strings to avoid measuring string construction overhead
+		const numUnique = 1024
+		uniqueStrings := make([]string, numUnique)
+		for i := range numUnique {
+			uniqueStrings[i] = "test" + string(rune('a'+i%26)) + string(rune('0'+i/26%10))
+		}
+
+		b.ResetTimer()
 		stringInternPool = sync.Map{}
 		for i := range b.N {
-			// Force new string each iteration to measure clone cost
-			s := string([]byte{'t', 'e', 's', 't', byte(i % 256)})
-			internString(s)
+			internString(uniqueStrings[i%numUnique])
 		}
 	})
 }

@@ -35,8 +35,10 @@ func internString(s string) string {
 	cloned := strings.Clone(s)
 
 	// LoadOrStore handles the race where another goroutine might have
-	// stored the same string between our Load and this call
-	if existing, loaded := stringInternPool.LoadOrStore(cloned, cloned); loaded {
+	// stored the same string between our Load and this call.
+	// Use original 's' as key to avoid clone allocation if another goroutine
+	// already stored the string (the clone would be wasted in that case).
+	if existing, loaded := stringInternPool.LoadOrStore(s, cloned); loaded {
 		if str, ok := existing.(string); ok {
 			return str
 		}
@@ -47,6 +49,9 @@ func internString(s string) string {
 
 // InternedPoolSize returns the number of unique strings in the intern pool.
 // Useful for monitoring/debugging.
+//
+// WARNING: This is an O(n) operation that iterates all entries in the pool.
+// Not suitable for frequent calls in hot paths.
 func InternedPoolSize() int {
 	count := 0
 	stringInternPool.Range(func(_, _ any) bool {
