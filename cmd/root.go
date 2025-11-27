@@ -22,6 +22,7 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/httptemplate"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/spoa"
 	csbouncer "github.com/crowdsecurity/go-cs-bouncer"
@@ -171,10 +172,31 @@ func Execute() error {
 		HostManager.AddHost(h)
 	}
 
+	// Create HTTP template server if enabled (after HostManager is created, but before starting)
+	var httpTemplateServer *httptemplate.Server
+	if config.HTTPTemplateServer.Enabled {
+		httpTemplateLogger := log.WithField("component", "http_template_server")
+		var err error
+		httpTemplateServer, err = httptemplate.NewServer(&config.HTTPTemplateServer, HostManager, httpTemplateLogger)
+		if err != nil {
+			return fmt.Errorf("failed to create HTTP template server: %w", err)
+		}
+	}
+
 	if config.HostsDir != "" {
 		if err := HostManager.LoadFromDirectory(config.HostsDir); err != nil {
 			return fmt.Errorf("failed to load hosts from directory: %w", err)
 		}
+	}
+
+	// Start HTTP template server after hosts are loaded to ensure host configurations are available
+	if httpTemplateServer != nil {
+		g.Go(func() error {
+			if err := httpTemplateServer.Serve(ctx); err != nil {
+				return fmt.Errorf("HTTP template server failed: %w", err)
+			}
+			return nil
+		})
 	}
 
 	// Create single SPOA listener - ultra-simplified architecture
@@ -212,13 +234,29 @@ func Execute() error {
 		err = nil
 	}
 
-	// Shutdown SPOA server gracefully after all goroutines finish
-	log.Info("Shutting down SPOA listener")
+	// Shutdown services gracefully in parallel after all goroutines finish
+	// Both services share a single 5-second timeout window
+	log.Info("Shutting down services")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if shutdownErr := singleSpoa.Shutdown(shutdownCtx); shutdownErr != nil {
-		log.Errorf("Failed to shutdown SPOA: %v", shutdownErr)
+	shutdownGroup, shutdownCtx := errgroup.WithContext(shutdownCtx)
+
+	// Shutdown SPOA in parallel
+	shutdownGroup.Go(func() error {
+		return singleSpoa.Shutdown(shutdownCtx)
+	})
+
+	// Shutdown HTTP template server in parallel if it was started
+	if httpTemplateServer != nil {
+		shutdownGroup.Go(func() error {
+			return httpTemplateServer.Shutdown(shutdownCtx)
+		})
+	}
+
+	// Wait for both shutdowns to complete (or timeout)
+	if shutdownErr := shutdownGroup.Wait(); shutdownErr != nil {
+		log.Errorf("Failed to shutdown services gracefully: %v", shutdownErr)
 	}
 
 	return err

@@ -35,3 +35,12 @@ func ValidProvider(provider string) bool {
 	_, ok := providers[provider]
 	return ok
 }
+
+// GetProviderInfo returns the frontend key and JS URL for a given provider
+// Returns empty strings if the provider is not found
+func GetProviderInfo(provider string) (frontendKey, frontendJS string) {
+	if info, ok := providers[provider]; ok {
+		return info.key, info.js
+	}
+	return "", ""
+}

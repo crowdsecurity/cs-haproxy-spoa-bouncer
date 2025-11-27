@@ -1,0 +1,68 @@
+services:
+  spoa:
+    image: crowdsecurity/crowdsec-spoa:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - crowdsec
+    volumes:
+      - sockets:/run/
+      - geodb:/var/lib/crowdsec/data/
+      - ./config/crowdsec-spoa-bouncer.yaml.local:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml.local
+    networks:
+      crowdsec:
+        ipv4_address: 10.5.5.254
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 250M
+
+  whoami:
+    image: traefik/whoami:latest
+    networks:
+      - crowdsec
+    command:
+       - --port=2020
+
+  haproxy:
+    image: haproxy:2.9.7-alpine
+    volumes:
+      - ./config/haproxy-httptemplate.cfg:/usr/local/etc/haproxy/haproxy.cfg
+      - ./config/crowdsec.cfg:/etc/haproxy/crowdsec.cfg
+      - sockets:/run/
+    ports:
+      - "9090:9090"
+    depends_on:
+      - crowdsec
+      - spoa
+      - whoami
+    networks:
+      - crowdsec
+  
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    environment:
+      - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
+      - DISABLE_ONLINE_API=true
+      - CROWDSEC_BYPASS_DB_VOLUME_CHECK=true
+    volumes:
+      - geodb:/staging/var/lib/crowdsec/data/
+    networks:
+      - crowdsec
+
+volumes:
+  sockets:
+    driver: local
+  geodb:
+    driver: local
+
+networks:
+  crowdsec:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: "10.5.5.0/24"
+
