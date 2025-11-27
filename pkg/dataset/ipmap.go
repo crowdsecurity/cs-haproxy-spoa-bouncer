@@ -79,8 +79,10 @@ func (m *IPMap) add(op IPAddOp) {
 	// Try to load existing entry first
 	if existing, ok := ipMap.Load(op.IP); ok {
 		if data, ok := existing.(RemediationIdsMap); ok {
-			data.AddID(valueLog, op.R, op.ID, op.Origin)
-			ipMap.Store(op.IP, data)
+			// Clone before modifying to avoid race with concurrent readers (Contains)
+			cloned := data.Clone()
+			cloned.AddID(valueLog, op.R, op.ID, op.Origin)
+			ipMap.Store(op.IP, cloned)
 			return
 		}
 	}
@@ -91,10 +93,11 @@ func (m *IPMap) add(op IPAddOp) {
 
 	// Use LoadOrStore to handle race conditions
 	if actual, loaded := ipMap.LoadOrStore(op.IP, data); loaded {
-		// Another goroutine beat us, merge into existing
+		// Another goroutine beat us, clone and merge into existing
 		if existingData, ok := actual.(RemediationIdsMap); ok {
-			existingData.AddID(valueLog, op.R, op.ID, op.Origin)
-			ipMap.Store(op.IP, existingData)
+			cloned := existingData.Clone()
+			cloned.AddID(valueLog, op.R, op.ID, op.Origin)
+			ipMap.Store(op.IP, cloned)
 		}
 	} else {
 		// We stored a new entry, increment counter
@@ -147,7 +150,10 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 	if !ok {
 		return false
 	}
-	err := data.RemoveID(valueLog, op.R, op.ID)
+
+	// Clone before modifying to avoid race with concurrent readers (Contains)
+	cloned := data.Clone()
+	err := cloned.RemoveID(valueLog, op.R, op.ID)
 	if err != nil {
 		if valueLog != nil {
 			valueLog.Trace("ID not found for IP")
@@ -156,14 +162,14 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 	}
 
 	// Check if entry is now empty
-	if data.IsEmpty() {
+	if cloned.IsEmpty() {
 		ipMap.Delete(op.IP)
 		counter.Add(-1)
 		if valueLog != nil {
 			valueLog.Trace("removed IP entirely")
 		}
 	} else {
-		ipMap.Store(op.IP, data)
+		ipMap.Store(op.IP, cloned)
 		if valueLog != nil {
 			valueLog.Trace("removed ID from IP")
 		}
@@ -210,4 +216,3 @@ func (m *IPMap) Contains(ip netip.Addr) (remediation.Remediation, string, bool) 
 func (m *IPMap) Count() (ipv4 int64, ipv6 int64) {
 	return m.ipv4Count.Load(), m.ipv6Count.Load()
 }
-

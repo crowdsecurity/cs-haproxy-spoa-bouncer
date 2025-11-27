@@ -397,7 +397,7 @@ func BenchmarkLookupHybrid(b *testing.B) {
 	// Test IPs - some in IPMap, some in RangeSet, some not found
 	testIPs := []netip.Addr{
 		netip.MustParseAddr("10.0.0.1"),      // In IPMap
-		netip.MustParseAddr("10.0.39.15"),    // In IPMap  
+		netip.MustParseAddr("10.0.39.15"),    // In IPMap
 		netip.MustParseAddr("192.168.1.100"), // In RangeSet
 		netip.MustParseAddr("8.8.8.8"),       // Not found
 	}
