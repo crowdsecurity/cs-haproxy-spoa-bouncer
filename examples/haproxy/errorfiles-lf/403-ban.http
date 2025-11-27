@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Access Denied</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: #1a1a1a;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #e5e5e5;
+      padding: 20px;
+    }
+    .container {
+      background: #2a2a2a;
+      border-radius: 4px;
+      padding: 40px;
+      max-width: 500px;
+      width: 100%%;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+    h1 {
+      font-size: 20px;
+      font-weight: 400;
+      margin-bottom: 20px;
+      text-align: center;
+      color: #e5e5e5;
+    }
+    .info-text {
+      font-size: 14px;
+      color: #b3b3b3;
+      text-align: center;
+      margin-top: 20px;
+      line-height: 1.5;
+    }
+    .footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid #404040;
+      font-size: 12px;
+      color: #999;
+      text-align: center;
+    }
+    .footer-brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .footer-brand a {
+      color: #e5e5e5;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .footer-brand a:hover {
+      text-decoration: underline;
+    }
+    .logo {
+      width: 20px;
+      height: 20px;
+      display: inline-block;
+    }
+    .unique-id {
+      font-size: 11px;
+      color: #999;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Access Denied</h1>
+    <p class="info-text">Your request has been blocked by CrowdSec security.</p>
+    <div class="footer">
+      <div class="footer-brand">
+        <span>Protected by</span>
+        <a href="https://crowdsec.net" target="_blank">
+          <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 20" aria-hidden="true">
+            <text x="0" y="15" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="currentColor">CrowdSec</text>
+          </svg>
+          <span>CrowdSec</span>
+        </a>
+      </div>
+      <div class="unique-id">Request ID: %[unique-id]</div>
+    </div>
+  </div>
+</body>
+</html>
