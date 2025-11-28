@@ -9,7 +9,6 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
 	"github.com/crowdsecurity/crowdsec/pkg/models"
-	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -81,11 +80,13 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			// Check if we're overwriting an existing decision with different origin
 			if existingR, existingOrigin, found := d.IPMap.Contains(ip); found && existingR == r && existingOrigin != origin {
 				// Decrement old origin's metric before incrementing new one
-				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": existingOrigin, "ip_type": ipType, "scope": "ip"}).Dec()
+				// Label order: origin, ip_type, scope (as defined in metrics.go)
+				metrics.TotalActiveDecisions.WithLabelValues(existingOrigin, ipType, "ip").Dec()
 			}
 			// Individual IPs go to IPMap for memory efficiency
 			ipOps = append(ipOps, IPAddOp{IP: ip, Origin: origin, R: r, IPType: ipType})
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Inc()
+			// Label order: origin, ip_type, scope (as defined in metrics.go)
+			metrics.TotalActiveDecisions.WithLabelValues(origin, ipType, "ip").Inc()
 		case "range":
 			prefix, err := netip.ParsePrefix(*decision.Value)
 			if err != nil {
@@ -104,11 +105,13 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			// Check if we're overwriting an existing decision with different origin
 			if existingOrigin, found := d.RangeSet.GetOriginForRemediation(prefix, r); found && existingOrigin != origin {
 				// Decrement old origin's metric before incrementing new one
-				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": existingOrigin, "ip_type": ipType, "scope": "range"}).Dec()
+				// Label order: origin, ip_type, scope (as defined in metrics.go)
+				metrics.TotalActiveDecisions.WithLabelValues(existingOrigin, ipType, "range").Dec()
 			}
 			// Ranges go to BART for LPM support
 			rangeOps = append(rangeOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, IPType: ipType, Scope: "range"})
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
+			// Label order: origin, ip_type, scope (as defined in metrics.go)
+			metrics.TotalActiveDecisions.WithLabelValues(origin, ipType, "range").Inc()
 		case "country":
 			cn := *decision.Value
 			// Check for no-op: same country, same remediation, same origin already exists
@@ -119,7 +122,8 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			// Check if we're overwriting an existing decision with different origin
 			if existingR, existingOrigin := d.CNSet.Contains(cn); existingR == r && existingOrigin != "" && existingOrigin != origin {
 				// Decrement old origin's metric before incrementing new one
-				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": existingOrigin, "ip_type": "", "scope": "country"}).Dec()
+				// Label order: origin, ip_type, scope (as defined in metrics.go)
+				metrics.TotalActiveDecisions.WithLabelValues(existingOrigin, "", "country").Dec()
 			}
 			cnOps = append(cnOps, cnOp{cn: cn, origin: origin, r: r})
 		default:
@@ -152,7 +156,8 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 					log.Errorf("Error adding CN decision: %s", err.Error())
 					continue
 				}
-				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.origin, "ip_type": "", "scope": "country"}).Inc()
+				// Label order: origin, ip_type, scope (as defined in metrics.go)
+				metrics.TotalActiveDecisions.WithLabelValues(op.origin, "", "country").Inc()
 			}
 		})
 	}
@@ -250,7 +255,8 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 					continue
 				}
 				if removed {
-					metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.origin, "ip_type": "", "scope": "country"}).Dec()
+					// Label order: origin, ip_type, scope (as defined in metrics.go)
+					metrics.TotalActiveDecisions.WithLabelValues(op.origin, "", "country").Dec()
 				}
 			}
 		})
@@ -261,12 +267,14 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	// Update metrics for IP and Range removals (after goroutines complete)
 	for _, op := range ipResults {
 		if op != nil {
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.Origin, "ip_type": op.IPType, "scope": "ip"}).Dec()
+			// Label order: origin, ip_type, scope (as defined in metrics.go)
+			metrics.TotalActiveDecisions.WithLabelValues(op.Origin, op.IPType, "ip").Dec()
 		}
 	}
 	for _, op := range rangeResults {
 		if op != nil {
-			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": op.Origin, "ip_type": op.IPType, "scope": op.Scope}).Dec()
+			// Label order: origin, ip_type, scope (as defined in metrics.go)
+			metrics.TotalActiveDecisions.WithLabelValues(op.Origin, op.IPType, op.Scope).Dec()
 		}
 	}
 
