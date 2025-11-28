@@ -25,15 +25,14 @@ type ipEntry struct {
 // Concurrency model:
 // - Reads are completely lock-free (atomic pointer load)
 // - Writes use copy-on-write (clone, modify, swap)
+// - Single-writer, multiple-reader: no mutex needed
 // - SPOA handlers never block, even during batch updates
 type IPMap struct {
 	// IPv4 addresses stored by their 4-byte representation
 	ipv4 sync.Map // map[netip.Addr]*ipEntry
 	// IPv6 addresses stored by their 16-byte representation
 	ipv6 sync.Map // map[netip.Addr]*ipEntry
-	// Write mutex to serialize modifications (prevents lost updates)
-	writeMu sync.Mutex
-	logger  *log.Entry
+	logger *log.Entry
 	// Counters for monitoring
 	ipv4Count atomic.Int64
 	ipv6Count atomic.Int64
@@ -65,22 +64,19 @@ type IPRemoveOp struct {
 }
 
 // AddBatch adds multiple IPs to the map
+// Safe for single-writer, multiple-reader scenarios
 func (m *IPMap) AddBatch(operations []IPAddOp) {
 	if len(operations) == 0 {
 		return
 	}
 
-	// Hold write lock for entire batch to prevent interleaving
-	m.writeMu.Lock()
-	defer m.writeMu.Unlock()
-
 	for _, op := range operations {
-		m.addLocked(op)
+		m.add(op)
 	}
 }
 
-// addLocked adds a single IP (caller must hold writeMu)
-func (m *IPMap) addLocked(op IPAddOp) {
+// add adds a single IP
+func (m *IPMap) add(op IPAddOp) {
 	var valueLog *log.Entry
 	if m.logger.Logger.IsLevelEnabled(log.TraceLevel) {
 		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R.String())
@@ -114,7 +110,7 @@ func (m *IPMap) addLocked(op IPAddOp) {
 	}
 
 	// Create new entry with data
-	// Since we hold writeMu, no race is possible - use Store directly
+	// Safe for single-writer scenario - use Store directly
 	newData := make(RemediationMap)
 	newData.Add(valueLog, op.R, op.Origin)
 	entry := &ipEntry{}
@@ -125,26 +121,23 @@ func (m *IPMap) addLocked(op IPAddOp) {
 
 // RemoveBatch removes multiple IPs from the map
 // Returns a slice of pointers to successfully removed operations (nil for failures)
+// Safe for single-writer, multiple-reader scenarios
 func (m *IPMap) RemoveBatch(operations []IPRemoveOp) []*IPRemoveOp {
 	if len(operations) == 0 {
 		return nil
 	}
 
-	// Hold write lock for entire batch to prevent interleaving
-	m.writeMu.Lock()
-	defer m.writeMu.Unlock()
-
 	results := make([]*IPRemoveOp, len(operations))
 	for i, op := range operations {
-		if m.removeLocked(op) {
+		if m.remove(op) {
 			results[i] = &operations[i]
 		}
 	}
 	return results
 }
 
-// removeLocked removes a single IP (caller must hold writeMu)
-func (m *IPMap) removeLocked(op IPRemoveOp) bool {
+// remove removes a single IP
+func (m *IPMap) remove(op IPRemoveOp) bool {
 	var valueLog *log.Entry
 	if m.logger.Logger.IsLevelEnabled(log.TraceLevel) {
 		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R.String())
