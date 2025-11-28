@@ -19,21 +19,20 @@ import (
 type RemediationMap map[remediation.Remediation]string
 
 // Remove removes a remediation entry (deletion means user wants to allow the IP).
-// If the remediation doesn't exist, returns nil (duplicate delete, safely ignored).
-func (rM RemediationMap) Remove(clog *log.Entry, r remediation.Remediation) error {
+// If the remediation doesn't exist, it's a duplicate delete and is safely ignored.
+func (rM RemediationMap) Remove(clog *log.Entry, r remediation.Remediation) {
 	_, ok := rM[r]
 	if !ok {
 		// Remediation not found - duplicate delete, safely ignore
 		if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
 			clog.Tracef("remediation %s not found, ignoring duplicate delete", r.String())
 		}
-		return nil
+		return
 	}
 	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
 		clog.Tracef("removing remediation %s", r.String())
 	}
 	delete(rM, r)
-	return nil
 }
 
 // Add adds or updates a decision for the given remediation type.
@@ -69,6 +68,13 @@ func (rM RemediationMap) GetRemediationAndOrigin() (remediation.Remediation, str
 // IsEmpty returns true if the RemediationMap has no entries
 func (rM RemediationMap) IsEmpty() bool {
 	return len(rM) == 0
+}
+
+// HasRemediationWithOrigin checks if a specific remediation exists with the given origin.
+// Returns true if the remediation exists and has the same origin.
+func (rM RemediationMap) HasRemediationWithOrigin(r remediation.Remediation, origin string) bool {
+	existingOrigin, exists := rM[r]
+	return exists && existingOrigin == origin
 }
 
 // Clone creates a shallow copy of the RemediationMap.
@@ -128,10 +134,15 @@ func (s *CNSet) Add(cn string, origin string, r remediation.Remediation) {
 	if current == nil {
 		// Defensive: should never happen with proper initialization
 		current = &cnItems{}
+		s.items.Store(current)
 	}
 	newItems := make(cnItems, len(*current))
 	for k, v := range *current {
-		newItems[k] = v.Clone()
+		if k == cn {
+			newItems[k] = v.Clone() // Clone only the one we'll modify
+		} else {
+			newItems[k] = v // Shallow copy is safe for unmodified entries
+		}
 	}
 
 	if v, ok := newItems[cn]; ok {
@@ -181,19 +192,15 @@ func (s *CNSet) Remove(cn string, r remediation.Remediation) bool {
 	// Clone the current map
 	newItems := make(cnItems, len(*current))
 	for k, val := range *current {
-		newItems[k] = val.Clone()
+		if k == cn {
+			newItems[k] = val.Clone() // Clone only the one we'll modify
+		} else {
+			newItems[k] = val // Shallow copy is safe for unmodified entries
+		}
 	}
 
 	// Modify the cloned entry
-	// Remove returns nil if remediation doesn't exist (duplicate delete, safely ignored)
-	err := newItems[cn].Remove(valueLog, r)
-	if err != nil {
-		// Should never happen, but handle it gracefully
-		if valueLog != nil {
-			valueLog.Tracef("error removing: %v", err)
-		}
-		return false
-	}
+	newItems[cn].Remove(valueLog, r)
 
 	if newItems[cn].IsEmpty() {
 		if valueLog != nil {
@@ -234,4 +241,19 @@ func (s *CNSet) Contains(toCheck string) (remediation.Remediation, string) {
 		valueLog.Tracef("remediation: %s", r.String())
 	}
 	return r, origin
+}
+
+// HasRemediation checks if a country code has a specific remediation with a specific origin.
+// Returns true if the country code exists and has the given remediation with the given origin.
+func (s *CNSet) HasRemediation(cn string, r remediation.Remediation, origin string) bool {
+	// Lock-free read via atomic pointer
+	items := s.items.Load()
+	if items == nil {
+		return false
+	}
+
+	if v, ok := (*items)[cn]; ok {
+		return v.HasRemediationWithOrigin(r, origin)
+	}
+	return false
 }

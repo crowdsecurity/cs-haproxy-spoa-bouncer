@@ -207,16 +207,8 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 			}
 
 			// bart already cloned via our Cloner interface, modify directly
-			// Remove returns nil if remediation doesn't exist (duplicate delete, safely ignored)
-			err := existingData.Remove(valueLog, op.R)
-			if err != nil {
-				// Should never happen, but handle it gracefully
-				if valueLog != nil {
-					valueLog.Tracef("error removing: %v", err)
-				}
-				results[i] = nil
-				return existingData, false // false = don't delete, keep data unchanged
-			}
+			// Remove handles duplicate deletes gracefully (no-op if not found)
+			existingData.Remove(valueLog, op.R)
 
 			// ID was successfully removed - return pointer to the operation for metadata access
 			// Use index to get pointer to original operation (safe since we don't modify the slice)
@@ -274,4 +266,55 @@ func (s *BartRangeSet) Contains(ip netip.Addr) (remediation.Remediation, string)
 		valueLog.Tracef("bart result: %s (data: %+v)", remediationResult.String(), data)
 	}
 	return remediationResult, origin
+}
+
+// HasRemediation checks if an exact prefix has a specific remediation with a specific origin.
+// Uses Get() for exact prefix lookup (not LPM like Contains/Lookup).
+// Returns true if the exact prefix exists and has the given remediation with the given origin.
+// This method uses lock-free reads via atomic pointer for optimal performance.
+func (s *BartRangeSet) HasRemediation(prefix netip.Prefix, r remediation.Remediation, origin string) bool {
+	// Lock-free read: atomically load the current table pointer
+	table := s.tableAtomicPtr.Load()
+
+	// Check for nil table (not yet initialized)
+	if table == nil {
+		return false
+	}
+
+	// Use Get() for exact prefix lookup (not LPM)
+	maskedPrefix := prefix.Masked()
+	data, found := table.Get(maskedPrefix)
+	if !found {
+		return false
+	}
+
+	return data.HasRemediationWithOrigin(r, origin)
+}
+
+// GetOriginForRemediation returns the origin for a specific remediation on an exact prefix.
+// Uses Get() for exact prefix lookup (not LPM).
+// Returns the origin and true if the exact prefix exists and has the given remediation, false otherwise.
+// This method uses lock-free reads via atomic pointer for optimal performance.
+func (s *BartRangeSet) GetOriginForRemediation(prefix netip.Prefix, r remediation.Remediation) (string, bool) {
+	// Lock-free read: atomically load the current table pointer
+	table := s.tableAtomicPtr.Load()
+
+	// Check for nil table (not yet initialized)
+	if table == nil {
+		return "", false
+	}
+
+	// Use Get() for exact prefix lookup (not LPM)
+	maskedPrefix := prefix.Masked()
+	data, found := table.Get(maskedPrefix)
+	if !found {
+		return "", false
+	}
+
+	// Check if the remediation exists and return its origin
+	if existingOrigin, ok := data[r]; ok {
+		return existingOrigin, true
+	}
+
+	return "", false
 }

@@ -47,7 +47,9 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 	// Separate operations by type:
 	// - Individual IPs go to IPMap (memory efficient, O(1) lookup)
 	// - Ranges go to RangeSet/BART (needed for LPM)
-	ipOps := make([]IPAddOp, 0, len(decisions))
+	// Note: We don't pre-allocate capacity here because many decisions might be no-ops
+	// (duplicates) and would waste allocated memory. Let Go handle dynamic growth.
+	ipOps := make([]IPAddOp, 0)
 	rangeOps := make([]BartAddOp, 0)
 	cnOps := make([]cnOp, 0)
 
@@ -67,9 +69,19 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				log.Errorf("Error parsing IP address %s: %s", *decision.Value, err.Error())
 				continue
 			}
+			// Check for no-op: same IP, same remediation, same origin already exists
+			if d.IPMap.HasRemediation(ip, r, origin) {
+				// Exact duplicate - skip processing (no-op)
+				continue
+			}
 			ipType := "ipv4"
 			if ip.Is6() {
 				ipType = "ipv6"
+			}
+			// Check if we're overwriting an existing decision with different origin
+			if existingR, existingOrigin, found := d.IPMap.Contains(ip); found && existingR == r && existingOrigin != origin {
+				// Decrement old origin's metric before incrementing new one
+				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": existingOrigin, "ip_type": ipType, "scope": "ip"}).Dec()
 			}
 			// Individual IPs go to IPMap for memory efficiency
 			ipOps = append(ipOps, IPAddOp{IP: ip, Origin: origin, R: r, IPType: ipType})
@@ -80,15 +92,36 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				log.Errorf("Error parsing prefix %s: %s", *decision.Value, err.Error())
 				continue
 			}
+			// Check for no-op: same prefix, same remediation, same origin already exists
+			if d.RangeSet.HasRemediation(prefix, r, origin) {
+				// Exact duplicate - skip processing (no-op)
+				continue
+			}
 			ipType := "ipv4"
 			if prefix.Addr().Is6() {
 				ipType = "ipv6"
+			}
+			// Check if we're overwriting an existing decision with different origin
+			if existingOrigin, found := d.RangeSet.GetOriginForRemediation(prefix, r); found && existingOrigin != origin {
+				// Decrement old origin's metric before incrementing new one
+				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": existingOrigin, "ip_type": ipType, "scope": "range"}).Dec()
 			}
 			// Ranges go to BART for LPM support
 			rangeOps = append(rangeOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, IPType: ipType, Scope: "range"})
 			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
 		case "country":
-			cnOps = append(cnOps, cnOp{cn: *decision.Value, origin: origin, r: r})
+			cn := *decision.Value
+			// Check for no-op: same country, same remediation, same origin already exists
+			if d.CNSet.HasRemediation(cn, r, origin) {
+				// Exact duplicate - skip processing (no-op)
+				continue
+			}
+			// Check if we're overwriting an existing decision with different origin
+			if existingR, existingOrigin := d.CNSet.Contains(cn); existingR == r && existingOrigin != "" && existingOrigin != origin {
+				// Decrement old origin's metric before incrementing new one
+				metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": existingOrigin, "ip_type": "", "scope": "country"}).Dec()
+			}
+			cnOps = append(cnOps, cnOp{cn: cn, origin: origin, r: r})
 		default:
 			log.Errorf("Unknown scope %s", *decision.Scope)
 		}
@@ -137,12 +170,13 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	type cnOp struct {
 		cn     string
 		r      remediation.Remediation
-		id     int64
 		origin string
 	}
 
 	// Separate operations by type
-	ipOps := make([]IPRemoveOp, 0, len(decisions))
+	// Note: We don't pre-allocate capacity here because many decisions might be no-ops
+	// (duplicates) and would waste allocated memory. Let Go handle dynamic growth.
+	ipOps := make([]IPRemoveOp, 0)
 	rangeOps := make([]BartRemoveOp, 0)
 	cnOps := make([]cnOp, 0)
 
