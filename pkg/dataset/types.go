@@ -112,7 +112,7 @@ func NewCNSet(logAlias string) *CNSet {
 	return s
 }
 
-func (s *CNSet) Add(cn string, origin string, r remediation.Remediation, id int64) {
+func (s *CNSet) Add(cn string, origin string, r remediation.Remediation) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -129,7 +129,7 @@ func (s *CNSet) Add(cn string, origin string, r remediation.Remediation, id int6
 		// Defensive: should never happen with proper initialization
 		current = &cnItems{}
 	}
-	newItems := make(cnItems, len(*current)+1)
+	newItems := make(cnItems, len(*current))
 	for k, v := range *current {
 		newItems[k] = v.Clone()
 	}
@@ -143,14 +143,15 @@ func (s *CNSet) Add(cn string, origin string, r remediation.Remediation, id int6
 		if valueLog != nil {
 			valueLog.Trace("not found, creating new entry")
 		}
-		newItems[cn] = RemediationMap{r: origin}
+		newItems[cn] = make(RemediationMap)
+		newItems[cn].Add(valueLog, r, origin)
 	}
 
 	// Atomic swap - readers see old or new, never partial
 	s.items.Store(&newItems)
 }
 
-func (s *CNSet) Remove(cn string, r remediation.Remediation, id int64) bool {
+func (s *CNSet) Remove(cn string, r remediation.Remediation) bool {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 

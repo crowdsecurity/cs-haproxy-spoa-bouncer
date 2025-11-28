@@ -78,7 +78,7 @@ func (s *BartRangeSet) AddBatch(operations []BartAddOp) {
 
 // initializeBatch creates a new table and initializes it with the given operations using Insert.
 // This is more memory efficient than using ModifyPersist for the initial load.
-// Handles duplicate prefixes by merging IDs before inserting.
+// Handles duplicate prefixes by merging remediations before inserting.
 // All operations always succeed.
 func (s *BartRangeSet) initializeBatch(operations []BartAddOp) {
 	// Create a new table for the initial load
@@ -144,7 +144,7 @@ func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationMap], operations [
 		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationMap, exists bool) (RemediationMap, bool) {
 			if exists {
 				if valueLog != nil {
-					valueLog.Trace("exact prefix exists, merging IDs")
+					valueLog.Trace("exact prefix exists, merging remediations")
 				}
 				// bart already cloned via our Cloner interface, modify directly
 				existingData.Add(valueLog, op.R, op.Origin)
@@ -231,7 +231,7 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 				return existingData, true // true = delete the prefix (it's now empty)
 			}
 			if valueLog != nil {
-				valueLog.Trace("removed ID from existing prefix")
+				valueLog.Trace("removed remediation from existing prefix")
 			}
 			return existingData, false // false = don't delete, keep modified data
 		})

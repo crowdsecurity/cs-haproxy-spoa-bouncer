@@ -116,7 +116,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 	if len(cnOps) > 0 {
 		wg.Go(func() {
 			for _, op := range cnOps {
-				if err := d.addCN(op.cn, op.origin, op.r, op.id); err != nil {
+				if err := d.addCN(op.cn, op.origin, op.r); err != nil {
 					log.Errorf("Error adding CN decision: %s", err.Error())
 					continue
 				}
@@ -211,7 +211,7 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	if len(cnOps) > 0 {
 		wg.Go(func() {
 			for _, op := range cnOps {
-				removed, err := d.removeCN(op.cn, op.r, op.id)
+				removed, err := d.removeCN(op.cn, op.r)
 				if err != nil {
 					log.Errorf("Error removing CN decision: %s", err.Error())
 					continue
@@ -260,18 +260,18 @@ func (d *DataSet) CheckCN(cn string) (remediation.Remediation, string) {
 }
 
 // Helper method for CN operations (still needed for country scope)
-func (d *DataSet) addCN(cn string, origin string, r remediation.Remediation, id int64) error {
+func (d *DataSet) addCN(cn string, origin string, r remediation.Remediation) error {
 	if cn == "" {
 		return fmt.Errorf("empty CN")
 	}
-	d.CNSet.Add(cn, origin, r, id)
+	d.CNSet.Add(cn, origin, r)
 	return nil
 }
 
-func (d *DataSet) removeCN(cn string, r remediation.Remediation, id int64) (bool, error) {
+func (d *DataSet) removeCN(cn string, r remediation.Remediation) (bool, error) {
 	if cn == "" {
 		return false, fmt.Errorf("empty CN")
 	}
-	removed := d.CNSet.Remove(cn, r, id)
+	removed := d.CNSet.Remove(cn, r)
 	return removed, nil
 }
