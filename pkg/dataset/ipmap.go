@@ -9,12 +9,12 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// ipEntry wraps RemediationIdsMap with an atomic pointer for lock-free reads.
+// ipEntry wraps RemediationMap with an atomic pointer for lock-free reads.
 // This ensures SPOA handlers never block when checking IPs, even during updates.
 // - Readers load the atomic pointer (instant, never blocks)
 // - Writers clone, modify, and swap (readers see old or new, never partial state)
 type ipEntry struct {
-	data atomic.Pointer[RemediationIdsMap]
+	data atomic.Pointer[RemediationMap]
 }
 
 // IPMap provides efficient storage for individual IP addresses.
@@ -98,15 +98,16 @@ func (m *IPMap) addLocked(op IPAddOp) {
 	// Try to load existing entry first
 	if existing, ok := ipMap.Load(op.IP); ok {
 		if entry, ok := existing.(*ipEntry); ok {
-			// Clone current data, modify, and swap atomically
 			current := entry.data.Load()
-			var newData RemediationIdsMap
-			if current != nil {
+			var newData RemediationMap
+			if current != nil && len(*current) > 0 {
+				// Clone only if map has entries (copy-on-write for readers)
 				newData = current.Clone()
 			} else {
-				newData = make(RemediationIdsMap)
+				// Empty or nil - no need to clone, just create new map
+				newData = make(RemediationMap)
 			}
-			newData.AddID(valueLog, op.R, op.ID, op.Origin)
+			newData.Add(valueLog, op.R, op.Origin)
 			entry.data.Store(&newData)
 			return
 		}
@@ -114,8 +115,8 @@ func (m *IPMap) addLocked(op IPAddOp) {
 
 	// Create new entry with data
 	// Since we hold writeMu, no race is possible - use Store directly
-	newData := make(RemediationIdsMap)
-	newData.AddID(valueLog, op.R, op.ID, op.Origin)
+	newData := make(RemediationMap)
+	newData.Add(valueLog, op.R, op.Origin)
 	entry := &ipEntry{}
 	entry.data.Store(&newData)
 	ipMap.Store(op.IP, entry)
@@ -179,12 +180,34 @@ func (m *IPMap) removeLocked(op IPRemoveOp) bool {
 		return false
 	}
 
-	// Clone, modify, and swap
-	newData := current.Clone()
-	err := newData.RemoveID(valueLog, op.R, op.ID)
-	if err != nil {
+	// Optimize: if map only has one entry and we're removing it, no need to clone
+	// We'll delete the IP entry anyway
+	if len(*current) == 1 {
+		if _, exists := (*current)[op.R]; exists {
+			// Removing the only entry - just delete the IP, no clone needed
+			ipMap.Delete(op.IP)
+			counter.Add(-1)
+			if valueLog != nil {
+				valueLog.Trace("removed IP entirely (was only entry)")
+			}
+			return true
+		}
+		// Entry doesn't exist - duplicate delete, safely ignore
 		if valueLog != nil {
-			valueLog.Trace("ID not found for IP")
+			valueLog.Trace("remediation not found, ignoring duplicate delete")
+		}
+		return false
+	}
+
+	// Map has multiple entries - need to clone for copy-on-write
+	newData := current.Clone()
+
+	// Remove returns nil if remediation doesn't exist (duplicate delete, safely ignored)
+	err := newData.Remove(valueLog, op.R)
+	if err != nil {
+		// Should never happen, but handle it gracefully
+		if valueLog != nil {
+			valueLog.Tracef("error removing: %v", err)
 		}
 		return false
 	}
@@ -199,7 +222,7 @@ func (m *IPMap) removeLocked(op IPRemoveOp) bool {
 	} else {
 		entry.data.Store(&newData)
 		if valueLog != nil {
-			valueLog.Trace("removed ID from IP")
+			valueLog.Trace("removed remediation from IP")
 		}
 	}
 

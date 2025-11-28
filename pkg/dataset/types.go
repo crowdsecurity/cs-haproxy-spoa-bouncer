@@ -1,7 +1,6 @@
 package dataset
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -9,82 +8,57 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type RemediationDetails struct {
-	ID     int64
-	Origin string
-}
+// RemediationMap stores one origin string per remediation type.
+// ID is not tracked since LAPI behavior ensures we only have the longest decision.
+//
+// LAPI behavior:
+//   - Startup: Returns the longest duration decision for each IP
+//   - Stream: Only returns NEW decisions if they're LONGER than current
+//   - Deletions: Delete means user wants to allow the IP - just remove the remediation entry.
+//     Duplicate deletes are safely ignored (entry already gone).
+type RemediationMap map[remediation.Remediation]string
 
-type RemediationIdsMap map[remediation.Remediation][]RemediationDetails
-
-func (rM RemediationIdsMap) RemoveID(clog *log.Entry, r remediation.Remediation, id int64) error {
-	ids, ok := rM[r]
+// Remove removes a remediation entry (deletion means user wants to allow the IP).
+// If the remediation doesn't exist, returns nil (duplicate delete, safely ignored).
+func (rM RemediationMap) Remove(clog *log.Entry, r remediation.Remediation) error {
+	_, ok := rM[r]
 	if !ok {
-		return fmt.Errorf("remediation %s not found", r.String())
-	}
-	index, ok := rM.ContainsID(r, id)
-	if !ok {
-		return fmt.Errorf("id %d not found", id)
+		// Remediation not found - duplicate delete, safely ignore
+		if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
+			clog.Tracef("remediation %s not found, ignoring duplicate delete", r.String())
+		}
+		return nil
 	}
 	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
-		clog.Tracef("removing id %d", id)
+		clog.Tracef("removing remediation %s", r.String())
 	}
-	// Optimize removal: swap with last element and truncate (order doesn't matter for RemediationDetails)
-	lastIndex := len(ids) - 1
-	if index != lastIndex {
-		ids[index] = ids[lastIndex]
-	}
-	rM[r] = ids[:lastIndex]
-
-	if len(rM[r]) == 0 {
-		if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
-			clog.Tracef("removing empty remediation %s", r.String())
-		}
-		delete(rM, r)
-	}
-
+	delete(rM, r)
 	return nil
 }
 
-func (rM RemediationIdsMap) ContainsID(r remediation.Remediation, id int64) (int, bool) {
-	if details, ok := rM[r]; ok {
-		for i, v := range details {
-			if v.ID == id {
-				return i, true
-			}
-		}
-	}
-	return -1, false
-}
-
-func (rM RemediationIdsMap) AddID(clog *log.Entry, r remediation.Remediation, id int64, origin string) {
-	ids, ok := rM[r]
-	if !ok {
-		if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
+// Add adds or updates a decision for the given remediation type.
+// If a decision already exists, it's overwritten (since only one decision per remediation+value).
+func (rM RemediationMap) Add(clog *log.Entry, r remediation.Remediation, origin string) {
+	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
+		if _, exists := rM[r]; exists {
+			clog.Tracef("remediation %s found, updating", r.String())
+		} else {
 			clog.Tracef("remediation %s not found, creating", r.String())
 		}
-		// Pre-allocate slice with capacity for multiple IDs per remediation
-		rM[r] = []RemediationDetails{{id, origin}}
-		return
 	}
-	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
-		clog.Tracef("remediation %s found, appending id %d", r.String(), id)
-	}
-	rM[r] = append(ids, RemediationDetails{id, origin})
+	rM[r] = origin
 }
 
-func (rM RemediationIdsMap) GetRemediationAndOrigin() (remediation.Remediation, string) {
-	// Optimize: find max directly without allocating slice
+// GetRemediationAndOrigin returns the highest priority remediation and its origin.
+func (rM RemediationMap) GetRemediationAndOrigin() (remediation.Remediation, string) {
 	var maxRemediation remediation.Remediation
 	var maxOrigin string
 	first := true
 
 	for k, v := range rM {
-		if len(v) == 0 {
-			continue // Skip empty slices (defensive check)
-		}
 		if first || k > maxRemediation {
 			maxRemediation = k
-			maxOrigin = v[0].Origin // We can use [0] here as crowdsec cannot return multiple decisions for the same remediation AND value
+			maxOrigin = v
 			first = false
 		}
 	}
@@ -92,30 +66,28 @@ func (rM RemediationIdsMap) GetRemediationAndOrigin() (remediation.Remediation, 
 	return maxRemediation, maxOrigin
 }
 
-// IsEmpty returns true if the RemediationIdsMap has no entries
-func (rM RemediationIdsMap) IsEmpty() bool {
+// IsEmpty returns true if the RemediationMap has no entries
+func (rM RemediationMap) IsEmpty() bool {
 	return len(rM) == 0
 }
 
-// Clone creates a deep copy of the RemediationIdsMap.
+// Clone creates a shallow copy of the RemediationMap.
 // This is required for bart's InsertPersist/DeletePersist operations
 // which use structural typing to detect the Clone method.
-func (rM RemediationIdsMap) Clone() RemediationIdsMap {
+// Since we only store strings (no pointers), shallow copy is sufficient.
+func (rM RemediationMap) Clone() RemediationMap {
 	if rM == nil {
-		return make(RemediationIdsMap)
+		return make(RemediationMap)
 	}
-	cloned := make(RemediationIdsMap, len(rM))
+	cloned := make(RemediationMap, len(rM))
 	for k, v := range rM {
-		// Deep copy the slice
-		clonedSlice := make([]RemediationDetails, len(v))
-		copy(clonedSlice, v)
-		cloned[k] = clonedSlice
+		cloned[k] = v // String copy is cheap
 	}
 	return cloned
 }
 
 // cnItems is the internal map type for CNSet
-type cnItems map[string]RemediationIdsMap
+type cnItems map[string]RemediationMap
 
 // CNSet stores country code decisions with lock-free reads.
 // Uses atomic pointer for the items map - SPOA handlers never block.
@@ -166,12 +138,12 @@ func (s *CNSet) Add(cn string, origin string, r remediation.Remediation, id int6
 		if valueLog != nil {
 			valueLog.Trace("already exists")
 		}
-		v.AddID(valueLog, r, id, origin)
+		v.Add(valueLog, r, origin)
 	} else {
 		if valueLog != nil {
 			valueLog.Trace("not found, creating new entry")
 		}
-		newItems[cn] = RemediationIdsMap{r: []RemediationDetails{{id, origin}}}
+		newItems[cn] = RemediationMap{r: origin}
 	}
 
 	// Atomic swap - readers see old or new, never partial
@@ -212,9 +184,12 @@ func (s *CNSet) Remove(cn string, r remediation.Remediation, id int64) bool {
 	}
 
 	// Modify the cloned entry
-	if err := newItems[cn].RemoveID(valueLog, r, id); err != nil {
+	// Remove returns nil if remediation doesn't exist (duplicate delete, safely ignored)
+	err := newItems[cn].Remove(valueLog, r)
+	if err != nil {
+		// Should never happen, but handle it gracefully
 		if valueLog != nil {
-			valueLog.Error(err)
+			valueLog.Tracef("error removing: %v", err)
 		}
 		return false
 	}

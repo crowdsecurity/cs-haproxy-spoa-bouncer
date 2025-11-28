@@ -34,7 +34,7 @@ type BartRemoveOp struct {
 // Uses atomic pointer for lock-free reads and mutex-protected writes
 // following the pattern recommended in bart's documentation.
 type BartRangeSet struct {
-	tableAtomicPtr atomic.Pointer[bart.Table[RemediationIdsMap]]
+	tableAtomicPtr atomic.Pointer[bart.Table[RemediationMap]]
 	writeMutex     sync.Mutex // Protects writers only
 	logger         *log.Entry
 }
@@ -82,10 +82,10 @@ func (s *BartRangeSet) AddBatch(operations []BartAddOp) {
 // All operations always succeed.
 func (s *BartRangeSet) initializeBatch(operations []BartAddOp) {
 	// Create a new table for the initial load
-	next := &bart.Table[RemediationIdsMap]{}
+	next := &bart.Table[RemediationMap]{}
 
 	// First, collect all operations by prefix to handle duplicates
-	prefixMap := make(map[netip.Prefix]RemediationIdsMap)
+	prefixMap := make(map[netip.Prefix]RemediationMap)
 	for _, op := range operations {
 		prefix := op.Prefix.Masked()
 
@@ -99,10 +99,10 @@ func (s *BartRangeSet) initializeBatch(operations []BartAddOp) {
 		// Get or create the data for this prefix
 		data, exists := prefixMap[prefix]
 		if !exists {
-			data = RemediationIdsMap{}
+			data = RemediationMap{}
 		}
-		// Add the ID (this handles merging if prefix already seen)
-		data.AddID(valueLog, op.R, op.ID, op.Origin)
+		// Add the remediation (this handles merging if prefix already seen)
+		data.Add(valueLog, op.R, op.Origin)
 		prefixMap[prefix] = data
 	}
 
@@ -126,7 +126,7 @@ func (s *BartRangeSet) initializeBatch(operations []BartAddOp) {
 // updateBatch updates an existing table with the given operations using ModifyPersist.
 // This handles incremental updates efficiently.
 // All operations always succeed.
-func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationIdsMap], operations []BartAddOp) {
+func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationMap], operations []BartAddOp) {
 	// Process all operations, chaining the table updates
 	next := cur
 	for _, op := range operations {
@@ -141,21 +141,21 @@ func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationIdsMap], operation
 
 		// Use ModifyPersist to atomically update or create the prefix entry
 		// This is more efficient than DeletePersist + InsertPersist as it only traverses once
-		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationIdsMap, exists bool) (RemediationIdsMap, bool) {
+		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationMap, exists bool) (RemediationMap, bool) {
 			if exists {
 				if valueLog != nil {
 					valueLog.Trace("exact prefix exists, merging IDs")
 				}
 				// bart already cloned via our Cloner interface, modify directly
-				existingData.AddID(valueLog, op.R, op.ID, op.Origin)
+				existingData.Add(valueLog, op.R, op.Origin)
 				return existingData, false // false = don't delete
 			}
 			if valueLog != nil {
 				valueLog.Trace("creating new entry")
 			}
 			// Create new data
-			newData := make(RemediationIdsMap)
-			newData.AddID(valueLog, op.R, op.ID, op.Origin)
+			newData := make(RemediationMap)
+			newData.Add(valueLog, op.R, op.Origin)
 			return newData, false // false = don't delete
 		})
 	}
@@ -199,7 +199,7 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 
 		// Use ModifyPersist to atomically update or remove the prefix entry
 		// This is more efficient than DeletePersist + InsertPersist as it only traverses once
-		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationIdsMap, exists bool) (RemediationIdsMap, bool) {
+		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationMap, exists bool) (RemediationMap, bool) {
 			if !exists {
 				if valueLog != nil {
 					valueLog.Trace("exact prefix not found")
@@ -209,10 +209,12 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 			}
 
 			// bart already cloned via our Cloner interface, modify directly
-			err := existingData.RemoveID(valueLog, op.R, op.ID)
+			// Remove returns nil if remediation doesn't exist (duplicate delete, safely ignored)
+			err := existingData.Remove(valueLog, op.R)
 			if err != nil {
+				// Should never happen, but handle it gracefully
 				if valueLog != nil {
-					valueLog.Trace("ID not found")
+					valueLog.Tracef("error removing: %v", err)
 				}
 				results[i] = nil
 				return existingData, false // false = don't delete, keep data unchanged
