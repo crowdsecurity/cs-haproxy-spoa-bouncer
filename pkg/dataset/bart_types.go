@@ -210,7 +210,7 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 			// Remove handles duplicate deletes gracefully (no-op if not found)
 			existingData.Remove(valueLog, op.R)
 
-			// ID was successfully removed - return pointer to the operation for metadata access
+			// Remediation was successfully removed - return pointer to the operation for metadata access
 			// Use index to get pointer to original operation (safe since we don't modify the slice)
 			results[i] = &operations[i]
 
