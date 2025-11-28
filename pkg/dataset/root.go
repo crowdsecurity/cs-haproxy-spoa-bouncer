@@ -53,9 +53,13 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 	cnOps := make([]cnOp, 0)
 
 	for _, decision := range decisions {
-		origin := *decision.Origin
-		if origin == "lists" && decision.Scenario != nil {
+		// Clone origin string to break reference to Decision struct memory
+		// This allows GC to reclaim the DecisionsStreamResponse after processing
+		var origin string
+		if *decision.Origin == "lists" && decision.Scenario != nil {
 			origin = *decision.Origin + ":" + *decision.Scenario
+		} else {
+			origin = strings.Clone(*decision.Origin)
 		}
 
 		scope := strings.ToLower(*decision.Scope)
@@ -113,7 +117,8 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			// Label order: origin, ip_type, scope (as defined in metrics.go)
 			metrics.TotalActiveDecisions.WithLabelValues(origin, ipType, "range").Inc()
 		case "country":
-			cn := *decision.Value
+			// Clone country code to break reference to Decision struct memory
+			cn := strings.Clone(*decision.Value)
 			// Check for no-op: same country, same remediation, same origin already exists
 			if d.CNSet.HasRemediation(cn, r, origin) {
 				// Exact duplicate - skip processing (no-op)
@@ -186,9 +191,13 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	cnOps := make([]cnOp, 0)
 
 	for _, decision := range decisions {
-		origin := *decision.Origin
-		if origin == "lists" && decision.Scenario != nil {
+		// Clone origin string to break reference to Decision struct memory
+		// This allows GC to reclaim the DecisionsStreamResponse after processing
+		var origin string
+		if *decision.Origin == "lists" && decision.Scenario != nil {
 			origin = *decision.Origin + ":" + *decision.Scenario
+		} else {
+			origin = strings.Clone(*decision.Origin)
 		}
 
 		scope := strings.ToLower(*decision.Scope)
@@ -218,7 +227,8 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 			}
 			rangeOps = append(rangeOps, BartRemoveOp{Prefix: prefix, R: r, Origin: origin, IPType: ipType, Scope: "range"})
 		case "country":
-			cnOps = append(cnOps, cnOp{cn: *decision.Value, r: r, origin: origin})
+			// Clone country code to break reference to Decision struct memory
+			cnOps = append(cnOps, cnOp{cn: strings.Clone(*decision.Value), r: r, origin: origin})
 		default:
 			log.Errorf("Unknown scope %s", *decision.Scope)
 		}
@@ -265,15 +275,14 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	wg.Wait()
 
 	// Update metrics for IP and Range removals (after goroutines complete)
+	// Label order: origin, ip_type, scope (as defined in metrics.go)
 	for _, op := range ipResults {
 		if op != nil {
-			// Label order: origin, ip_type, scope (as defined in metrics.go)
 			metrics.TotalActiveDecisions.WithLabelValues(op.Origin, op.IPType, "ip").Dec()
 		}
 	}
 	for _, op := range rangeResults {
 		if op != nil {
-			// Label order: origin, ip_type, scope (as defined in metrics.go)
 			metrics.TotalActiveDecisions.WithLabelValues(op.Origin, op.IPType, op.Scope).Dec()
 		}
 	}
