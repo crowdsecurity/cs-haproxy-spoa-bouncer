@@ -1,12 +1,16 @@
 package dataset
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	log "github.com/sirupsen/logrus"
 )
+
+// ErrRemediationNotFound is returned when attempting to remove a remediation that doesn't exist.
+var ErrRemediationNotFound = errors.New("remediation not found")
 
 // RemediationMap stores one origin string per remediation type.
 // ID is not tracked since LAPI behavior ensures we only have the longest decision.
@@ -19,20 +23,21 @@ import (
 type RemediationMap map[remediation.Remediation]string
 
 // Remove removes a remediation entry (deletion means user wants to allow the IP).
-// If the remediation doesn't exist, it's a duplicate delete and is safely ignored.
-func (rM RemediationMap) Remove(clog *log.Entry, r remediation.Remediation) {
+// Returns ErrRemediationNotFound if the remediation doesn't exist (duplicate delete).
+func (rM RemediationMap) Remove(clog *log.Entry, r remediation.Remediation) error {
 	_, ok := rM[r]
 	if !ok {
-		// Remediation not found - duplicate delete, safely ignore
+		// Remediation not found - duplicate delete
 		if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
-			clog.Tracef("remediation %s not found, ignoring duplicate delete", r.String())
+			clog.Tracef("remediation %s not found, duplicate delete", r.String())
 		}
-		return
+		return ErrRemediationNotFound
 	}
 	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
 		clog.Tracef("removing remediation %s", r.String())
 	}
 	delete(rM, r)
+	return nil
 }
 
 // Add adds or updates a decision for the given remediation type.
@@ -200,7 +205,15 @@ func (s *CNSet) Remove(cn string, r remediation.Remediation) bool {
 	}
 
 	// Modify the cloned entry
-	newItems[cn].Remove(valueLog, r)
+	// Remove returns an error if remediation doesn't exist (duplicate delete)
+	err := newItems[cn].Remove(valueLog, r)
+	if errors.Is(err, ErrRemediationNotFound) {
+		// Duplicate delete - remediation not found, nothing to remove
+		if valueLog != nil {
+			valueLog.Trace("remediation not found, duplicate delete")
+		}
+		return false
+	}
 
 	if newItems[cn].IsEmpty() {
 		if valueLog != nil {

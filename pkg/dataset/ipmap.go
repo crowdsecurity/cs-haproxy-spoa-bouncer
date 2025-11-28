@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"errors"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -108,7 +109,7 @@ func (m *IPMap) add(op IPAddOp) {
 	}
 
 	// Create new entry with data
-	// Safe for single-writer scenario - use Store directly
+	// Store directly (no LoadOrStore race needed since application uses single writer)
 	newData := make(RemediationMap)
 	newData.Add(valueLog, op.R, op.Origin)
 	entry := &ipEntry{}
@@ -193,12 +194,12 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 	// Map has multiple entries - need to clone for copy-on-write
 	newData := current.Clone()
 
-	// Remove returns nil if remediation doesn't exist (duplicate delete, safely ignored)
+	// Remove returns an error if remediation doesn't exist (duplicate delete)
 	err := newData.Remove(valueLog, op.R)
-	if err != nil {
-		// Should never happen, but handle it gracefully
+	if errors.Is(err, ErrRemediationNotFound) {
+		// Duplicate delete - remediation not found, nothing to remove
 		if valueLog != nil {
-			valueLog.Tracef("error removing: %v", err)
+			valueLog.Trace("remediation not found, duplicate delete")
 		}
 		return false
 	}
@@ -265,4 +266,32 @@ func (m *IPMap) Contains(ip netip.Addr) (remediation.Remediation, string, bool) 
 // Count returns the number of IPs stored (for monitoring)
 func (m *IPMap) Count() (ipv4 int64, ipv6 int64) {
 	return m.ipv4Count.Load(), m.ipv6Count.Load()
+}
+
+// HasRemediation checks if an IP has a specific remediation with a specific origin.
+// Returns true if the IP exists and has the given remediation with the given origin.
+func (m *IPMap) HasRemediation(ip netip.Addr, r remediation.Remediation, origin string) bool {
+	// Select the appropriate map based on IP version
+	ipMap := &m.ipv4
+	if ip.Is6() {
+		ipMap = &m.ipv6
+	}
+
+	existing, ok := ipMap.Load(ip)
+	if !ok {
+		return false
+	}
+
+	entry, ok := existing.(*ipEntry)
+	if !ok {
+		return false
+	}
+
+	// Lock-free read via atomic pointer
+	data := entry.data.Load()
+	if data == nil {
+		return false
+	}
+
+	return data.HasRemediationWithOrigin(r, origin)
 }

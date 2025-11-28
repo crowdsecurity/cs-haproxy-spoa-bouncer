@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"errors"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -163,8 +164,9 @@ func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationMap], operations [
 }
 
 // RemoveBatch removes multiple prefixes from the bart table in a single atomic operation.
-// Returns a slice of pointers to successfully removed operations (nil for failures).
+// Returns a slice of pointers to actually removed operations (nil for duplicate deletes or non-existent prefixes).
 // This allows callers to access operation metadata (Origin, IPType, Scope) for metrics.
+// Since Remove() never fails, we only return the operation pointer if the remediation actually existed.
 // IPs should be converted to /32 or /128 prefixes before calling this method.
 func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 	if len(operations) == 0 {
@@ -207,12 +209,16 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 			}
 
 			// bart already cloned via our Cloner interface, modify directly
-			// Remove handles duplicate deletes gracefully (no-op if not found)
-			existingData.Remove(valueLog, op.R)
-
-			// Remediation was successfully removed - return pointer to the operation for metadata access
-			// Use index to get pointer to original operation (safe since we don't modify the slice)
-			results[i] = &operations[i]
+			// Remove returns an error if remediation doesn't exist (duplicate delete)
+			err := existingData.Remove(valueLog, op.R)
+			if errors.Is(err, ErrRemediationNotFound) {
+				// Duplicate delete - don't return operation pointer (no metrics update)
+				results[i] = nil
+			} else {
+				// Remediation was successfully removed - return pointer for metrics
+				// Use index to get pointer to original operation (safe since we don't modify the slice)
+				results[i] = &operations[i]
+			}
 
 			if existingData.IsEmpty() {
 				if valueLog != nil {
