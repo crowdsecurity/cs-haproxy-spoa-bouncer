@@ -107,6 +107,7 @@ func TestMetrics_IPMap_AddAndDelete(t *testing.T) {
 		assert.InDelta(t, float64(len(decisions))+before, after, 0.001, "metric should increment by number of decisions added")
 	})
 
+	//nolint:dupl // Similar test structure for different data types is acceptable
 	t.Run("Same IP different remediation counts as separate decisions", func(t *testing.T) {
 		banDecision := models.GetDecisionsResponse{
 			{
@@ -136,7 +137,6 @@ func TestMetrics_IPMap_AddAndDelete(t *testing.T) {
 		assert.InDelta(t, float64(len(captchaDecision))+afterBan, afterCaptcha, 0.001, "metric should increment after adding captcha for same IP")
 	})
 
-	//nolint:dupl // Similar test structure for different data types is acceptable
 	t.Run("Overwriting decision with same IP and remediation updates metric correctly", func(t *testing.T) {
 		differentOrigin := "different-origin"
 		decision1 := models.GetDecisionsResponse{
@@ -276,6 +276,7 @@ func TestMetrics_BartRangeSet_AddAndDelete(t *testing.T) {
 		assert.InDelta(t, float64(len(decisions))+before, after, 0.001, "metric should increment by number of decisions added")
 	})
 
+	//nolint:dupl // Similar test structure for different data types is acceptable
 	t.Run("Same prefix different remediation counts as separate decisions", func(t *testing.T) {
 		// Add ban decision
 		banDecision := models.GetDecisionsResponse{
@@ -452,6 +453,7 @@ func TestMetrics_CNSet_AddAndDelete(t *testing.T) {
 		assert.InDelta(t, float64(len(decisions))+before, after, 0.001, "metric should increment by number of decisions added")
 	})
 
+	//nolint:dupl // Similar test structure for different data types is acceptable
 	t.Run("Same country different remediation counts as separate decisions", func(t *testing.T) {
 		// Add ban decision
 		banDecision := models.GetDecisionsResponse{
