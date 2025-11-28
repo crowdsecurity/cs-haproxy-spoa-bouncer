@@ -192,11 +192,11 @@ func TestLongestPrefixMatch(t *testing.T) {
 
 	// Add individual IP to IPMap and ranges to RangeSet
 	dataset.IPMap.AddBatch([]IPAddOp{
-		{IP: netip.MustParseAddr("192.168.1.1"), Origin: "test", R: remediation.Allow, ID: 3, IPType: "ipv4"},
+		{IP: netip.MustParseAddr("192.168.1.1"), Origin: "test", R: remediation.Allow, IPType: "ipv4"},
 	})
 	dataset.RangeSet.AddBatch([]BartAddOp{
-		{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Origin: "test", R: remediation.Ban, ID: 1, IPType: "ipv4", Scope: "range"},
-		{Prefix: netip.MustParsePrefix("192.168.1.0/24"), Origin: "test", R: remediation.Captcha, ID: 2, IPType: "ipv4", Scope: "range"},
+		{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Origin: "test", R: remediation.Ban, IPType: "ipv4", Scope: "range"},
+		{Prefix: netip.MustParsePrefix("192.168.1.0/24"), Origin: "test", R: remediation.Captcha, IPType: "ipv4", Scope: "range"},
 	})
 
 	// Test that individual IP from IPMap wins (checked first before RangeSet)
@@ -355,7 +355,6 @@ func BenchmarkHybridVsBartOnly(b *testing.B) {
 					Prefix: netip.PrefixFrom(ip, prefixLen),
 					Origin: *d.Origin,
 					R:      remediation.Ban,
-					ID:     d.ID,
 					IPType: "ipv4",
 					Scope:  "ip",
 				})
@@ -385,13 +384,13 @@ func BenchmarkLookupHybrid(b *testing.B) {
 			byte(i % 256),
 		})
 		dataset.IPMap.AddBatch([]IPAddOp{
-			{IP: ip, Origin: "test", R: remediation.Ban, ID: int64(i), IPType: "ipv4"},
+			{IP: ip, Origin: "test", R: remediation.Ban, IPType: "ipv4"},
 		})
 	}
 
 	// Add some ranges to RangeSet
 	dataset.RangeSet.AddBatch([]BartAddOp{
-		{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Origin: "test", R: remediation.Ban, ID: 1, IPType: "ipv4", Scope: "range"},
+		{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Origin: "test", R: remediation.Ban, IPType: "ipv4", Scope: "range"},
 	})
 
 	// Test IPs - some in IPMap, some in RangeSet, some not found

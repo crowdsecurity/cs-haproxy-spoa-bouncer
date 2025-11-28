@@ -31,7 +31,7 @@ type IPMap struct {
 	// IPv4 addresses stored by their 4-byte representation
 	ipv4 sync.Map // map[netip.Addr]*ipEntry
 	// IPv6 addresses stored by their 16-byte representation
-	ipv6 sync.Map // map[netip.Addr]*ipEntry
+	ipv6   sync.Map // map[netip.Addr]*ipEntry
 	logger *log.Entry
 	// Counters for monitoring
 	ipv4Count atomic.Int64
@@ -50,7 +50,6 @@ type IPAddOp struct {
 	IP     netip.Addr
 	Origin string
 	R      remediation.Remediation
-	ID     int64
 	IPType string
 }
 
@@ -58,7 +57,6 @@ type IPAddOp struct {
 type IPRemoveOp struct {
 	IP     netip.Addr
 	R      remediation.Remediation
-	ID     int64
 	Origin string
 	IPType string
 }

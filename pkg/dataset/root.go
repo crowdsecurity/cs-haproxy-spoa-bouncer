@@ -42,7 +42,6 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 		cn     string
 		origin string
 		r      remediation.Remediation
-		id     int64
 	}
 
 	// Separate operations by type:
@@ -73,7 +72,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				ipType = "ipv6"
 			}
 			// Individual IPs go to IPMap for memory efficiency
-			ipOps = append(ipOps, IPAddOp{IP: ip, Origin: origin, R: r, ID: decision.ID, IPType: ipType})
+			ipOps = append(ipOps, IPAddOp{IP: ip, Origin: origin, R: r, IPType: ipType})
 			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "ip"}).Inc()
 		case "range":
 			prefix, err := netip.ParsePrefix(*decision.Value)
@@ -86,10 +85,10 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				ipType = "ipv6"
 			}
 			// Ranges go to BART for LPM support
-			rangeOps = append(rangeOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, ID: decision.ID, IPType: ipType, Scope: "range"})
+			rangeOps = append(rangeOps, BartAddOp{Prefix: prefix, Origin: origin, R: r, IPType: ipType, Scope: "range"})
 			metrics.TotalActiveDecisions.With(prometheus.Labels{"origin": origin, "ip_type": ipType, "scope": "range"}).Inc()
 		case "country":
-			cnOps = append(cnOps, cnOp{cn: *decision.Value, origin: origin, r: r, id: decision.ID})
+			cnOps = append(cnOps, cnOp{cn: *decision.Value, origin: origin, r: r})
 		default:
 			log.Errorf("Unknown scope %s", *decision.Scope)
 		}
@@ -167,7 +166,7 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 			if ip.Is6() {
 				ipType = "ipv6"
 			}
-			ipOps = append(ipOps, IPRemoveOp{IP: ip, R: r, ID: decision.ID, Origin: origin, IPType: ipType})
+			ipOps = append(ipOps, IPRemoveOp{IP: ip, R: r, Origin: origin, IPType: ipType})
 		case "range":
 			prefix, err := netip.ParsePrefix(*decision.Value)
 			if err != nil {
@@ -178,9 +177,9 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 			if prefix.Addr().Is6() {
 				ipType = "ipv6"
 			}
-			rangeOps = append(rangeOps, BartRemoveOp{Prefix: prefix, R: r, ID: decision.ID, Origin: origin, IPType: ipType, Scope: "range"})
+			rangeOps = append(rangeOps, BartRemoveOp{Prefix: prefix, R: r, Origin: origin, IPType: ipType, Scope: "range"})
 		case "country":
-			cnOps = append(cnOps, cnOp{cn: *decision.Value, r: r, id: decision.ID, origin: origin})
+			cnOps = append(cnOps, cnOp{cn: *decision.Value, r: r, origin: origin})
 		default:
 			log.Errorf("Unknown scope %s", *decision.Scope)
 		}

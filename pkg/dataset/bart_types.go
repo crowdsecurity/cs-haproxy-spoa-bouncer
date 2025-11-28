@@ -15,7 +15,6 @@ type BartAddOp struct {
 	Prefix netip.Prefix
 	Origin string
 	R      remediation.Remediation
-	ID     int64
 	IPType string
 	Scope  string
 }
@@ -24,7 +23,6 @@ type BartAddOp struct {
 type BartRemoveOp struct {
 	Prefix netip.Prefix
 	R      remediation.Remediation
-	ID     int64
 	Origin string
 	IPType string
 	Scope  string
