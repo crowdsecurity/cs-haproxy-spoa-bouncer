@@ -34,6 +34,55 @@ if [ -d "/etc/haproxy" ]; then
     cp /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
 fi
 
+# Selective restart logic for upgrades
+# Only attempt restart for patch upgrades (same major.minor version)
+STATE_DIR="/var/lib/$DPKG_MAINTSCRIPT_PACKAGE"
+OLD_VERSION_FILE="${STATE_DIR}/old-version"
+SHOULD_RESTART=0
+
+if [ "$1" = "configure" ] && [ -n "${2:-}" ]; then
+    # This is an upgrade (configure with old-version)
+    OLD_VERSION="${2}"
+    
+    # If we have the old version from preinst, use it (more reliable)
+    if [ -f "$OLD_VERSION_FILE" ]; then
+        OLD_VERSION=$(cat "$OLD_VERSION_FILE")
+        rm -f "$OLD_VERSION_FILE"
+    fi
+    
+    # Get current version from dpkg
+    CURRENT_VERSION=$(dpkg-query -W -f='${Version}' "$DPKG_MAINTSCRIPT_PACKAGE" 2>/dev/null || echo "")
+    
+    if [ -n "$OLD_VERSION" ] && [ -n "$CURRENT_VERSION" ]; then
+        # Extract major.minor.patch from versions (strip debian revision if present)
+        OLD_BASE=$(echo "$OLD_VERSION" | cut -d'-' -f1)
+        CURRENT_BASE=$(echo "$CURRENT_VERSION" | cut -d'-' -f1)
+        
+        # Extract major.minor from both versions
+        OLD_MAJOR_MINOR=$(echo "$OLD_BASE" | cut -d'.' -f1-2)
+        CURRENT_MAJOR_MINOR=$(echo "$CURRENT_BASE" | cut -d'.' -f1-2)
+        
+        # If major.minor are the same, this is a patch upgrade
+        if [ "$OLD_MAJOR_MINOR" = "$CURRENT_MAJOR_MINOR" ]; then
+            SHOULD_RESTART=1
+        fi
+    fi
+fi
+
+# Attempt to restart service if it's a patch upgrade and service was running
+if [ "$SHOULD_RESTART" -eq 1 ]; then
+    # Check if service was active before upgrade (prerm would have stopped it)
+    # We'll try to restart it regardless if it was enabled
+    if systemctl --quiet is-enabled "$SERVICE" 2>/dev/null; then
+        echo "Patch upgrade detected, attempting to restart service..."
+        if systemctl restart "$SERVICE" 2>/dev/null; then
+            echo "Service restarted successfully."
+        else
+            echo "⚠ Failed to restart service. Please start manually: systemctl start $SERVICE"
+        fi
+    fi
+fi
+
 echo ""
 echo "=========================================="
 echo "CrowdSec HAProxy SPOA Bouncer installed"
