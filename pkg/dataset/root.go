@@ -136,7 +136,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 		}
 	}
 
-	// Execute batches in parallel using sync.WaitGroup.Go (Go 1.23+)
+	// Execute batches in parallel using sync.WaitGroup.Go (Go 1.22+)
 	var wg sync.WaitGroup
 
 	// IPMap batch (individual IPs)
@@ -234,7 +234,7 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 		}
 	}
 
-	// Execute batches in parallel using sync.WaitGroup.Go (Go 1.23+)
+	// Execute batches in parallel using sync.WaitGroup.Go (Go 1.22+)
 	var wg sync.WaitGroup
 
 	// Variables to collect results for metrics

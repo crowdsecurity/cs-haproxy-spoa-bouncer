@@ -836,3 +836,84 @@ func TestMetrics_NoOp_DuplicateDecisions(t *testing.T) {
 		assert.InDelta(t, beforeCaptcha+1, afterCaptcha, 0.001, "metric should increment when adding different remediation")
 	})
 }
+
+func TestMetrics_OriginOverwriteAndDelete(t *testing.T) {
+	dataSet := New()
+
+	origin := "CAPI"
+	ipType := "ipv4"
+	scope := "ip"
+	testIP := "192.168.100.1"
+
+	t.Run("Delete ban after same origin adds captcha should decrement metric correctly", func(t *testing.T) {
+		// Step 1: Add ban from CAPI
+		banDecision := models.GetDecisionsResponse{
+			{
+				Scope:  ptr.Of("IP"),
+				Value:  ptr.Of(testIP),
+				Type:   ptr.Of("ban"),
+				Origin: ptr.Of(origin),
+			},
+		}
+
+		beforeBan := getActiveDecisionsMetric(origin, ipType, scope)
+		dataSet.Add(banDecision)
+		afterBan := getActiveDecisionsMetric(origin, ipType, scope)
+		assert.InDelta(t, beforeBan+1, afterBan, 0.001, "metric should increment after adding ban")
+
+		// Verify IP has ban
+		ip, err := netip.ParseAddr(testIP)
+		require.NoError(t, err)
+		r, storedOrigin, found := dataSet.IPMap.Contains(ip)
+		assert.True(t, found, "IP should exist")
+		assert.Equal(t, remediation.Ban, r, "IP should have ban remediation")
+		assert.Equal(t, origin, storedOrigin, "IP should have CAPI origin")
+
+		// Step 2: Add captcha from same CAPI origin (overwrites ban)
+		captchaDecision := models.GetDecisionsResponse{
+			{
+				Scope:  ptr.Of("IP"),
+				Value:  ptr.Of(testIP),
+				Type:   ptr.Of("captcha"),
+				Origin: ptr.Of(origin),
+			},
+		}
+
+		beforeCaptcha := getActiveDecisionsMetric(origin, ipType, scope)
+		dataSet.Add(captchaDecision)
+		afterCaptcha := getActiveDecisionsMetric(origin, ipType, scope)
+		// Metric should increment because we're adding a new remediation type (captcha)
+		// The IP now has both ban and captcha, but ban is highest priority (ban > captcha in enum)
+		assert.InDelta(t, beforeCaptcha+1, afterCaptcha, 0.001, "metric should increment after adding captcha")
+
+		// Verify IP now has ban (highest priority - ban > captcha in enum order)
+		// Both ban and captcha exist in the map, but ban is returned as highest priority
+		r2, storedOrigin2, found2 := dataSet.IPMap.Contains(ip)
+		assert.True(t, found2, "IP should still exist")
+		assert.Equal(t, remediation.Ban, r2, "IP should have ban remediation (highest priority, ban > captcha)")
+		assert.Equal(t, origin, storedOrigin2, "IP should still have CAPI origin")
+
+		// Step 3: Delete ban from CAPI
+		// Ban should still exist with CAPI origin, so removal should succeed
+		deleteBanDecision := models.GetDecisionsResponse{
+			{
+				Scope:  ptr.Of("IP"),
+				Value:  ptr.Of(testIP),
+				Type:   ptr.Of("ban"),
+				Origin: ptr.Of(origin),
+			},
+		}
+
+		beforeDelete := getActiveDecisionsMetric(origin, ipType, scope)
+		dataSet.Remove(deleteBanDecision)
+		afterDelete := getActiveDecisionsMetric(origin, ipType, scope)
+		// Metric should decrement because ban exists with matching CAPI origin
+		assert.InDelta(t, beforeDelete-1, afterDelete, 0.001, "metric should decrement when deleting ban with matching origin")
+
+		// Verify IP now has captcha (ban was removed, captcha is now active)
+		r3, storedOrigin3, found3 := dataSet.IPMap.Contains(ip)
+		assert.True(t, found3, "IP should still exist")
+		assert.Equal(t, remediation.Captcha, r3, "IP should now have captcha remediation (ban was removed)")
+		assert.Equal(t, origin, storedOrigin3, "IP should still have CAPI origin")
+	})
+}
