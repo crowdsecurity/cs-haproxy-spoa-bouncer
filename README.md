@@ -26,6 +26,7 @@ sequenceDiagram
     participant SPOA as SPOA Bouncer
     participant Dataset as Decision Dataset
     participant CrowdSec as CrowdSec LAPI
+    participant AppSec as CrowdSec AppSec
     participant Backend
 
     Note over HAProxy,SPOA: Client Connection Established
@@ -36,8 +37,19 @@ sequenceDiagram
     
     Note over HAProxy,SPOA: HTTP Request Received
     HAProxy->>SPOA: crowdsec-http message<br/>(on-frontend-http-request)
-    SPOA->>Dataset: Check IP + Host + AppSec rules
-    Dataset-->>SPOA: Final remediation + metadata
+    SPOA->>Dataset: Check IP + Host
+    Dataset-->>SPOA: IP remediation + metadata
+    
+    alt AppSec Enabled & Remediation = allow
+        SPOA->>AppSec: Forward HTTP request data<br/>(URL, Method, Headers, Body)
+        AppSec->>AppSec: Analyze request (WAF rules)
+        alt AppSec Detects Threat
+            AppSec-->>SPOA: Override remediation = ban
+        else AppSec Allows
+            AppSec-->>SPOA: Keep remediation = allow
+        end
+    end
+    
     SPOA-->>HAProxy: Set remediation + isocode + captcha_status
     
     alt Remediation = ban
@@ -61,6 +73,9 @@ sequenceDiagram
     Note over SPOA,CrowdSec: Background: Stream Decisions
     CrowdSec->>SPOA: New/Deleted decisions (stream)
     SPOA->>Dataset: Update dataset (parallel batch)
+    
+    Note over SPOA,AppSec: Background: AppSec Updates
+    AppSec->>SPOA: WAF rules & signatures (if applicable)
 ```
 
 ### Request Flow Details
@@ -74,8 +89,11 @@ sequenceDiagram
    - HAProxy sends `crowdsec-http` message with full HTTP request details
    - SPOA performs additional checks:
      - Host-based remediation customization
-     - AppSec/WAF rules (if enabled)
      - Captcha cookie validation
+   - If AppSec is enabled and remediation is allow:
+     - SPOA forwards HTTP request data (URL, method, headers, body) to CrowdSec AppSec
+     - AppSec analyzes the request using WAF rules
+     - AppSec can override remediation to ban if threats are detected
    - Sets additional variables: `isocode`, `captcha_status`, `redirect`
 
 3. **Remediation Handling**:
