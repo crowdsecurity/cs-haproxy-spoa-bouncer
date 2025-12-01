@@ -40,7 +40,7 @@ sequenceDiagram
     SPOA->>Dataset: Check IP + Host
     Dataset-->>SPOA: IP remediation + metadata
     
-    alt AppSec Enabled & Remediation = allow
+    alt AppSec Enabled & (Remediation = allow || AlwaysSend = true)
         SPOA->>AppSec: Forward HTTP request data<br/>(URL, Method, Headers, Body)
         AppSec->>AppSec: Analyze request (WAF rules)
         alt AppSec Detects Threat
@@ -90,7 +90,7 @@ sequenceDiagram
    - SPOA performs additional checks:
      - Host-based remediation customization
      - Captcha cookie validation
-   - If AppSec is enabled and remediation is allow:
+   - If AppSec is enabled and (remediation = allow OR AlwaysSend = true):
      - SPOA forwards HTTP request data (URL, method, headers, body) to CrowdSec AppSec
      - AppSec analyzes the request using WAF rules
      - AppSec can override remediation to ban if threats are detected
