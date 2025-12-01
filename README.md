@@ -29,13 +29,16 @@ sequenceDiagram
     participant AppSec as CrowdSec AppSec
     participant Backend
 
+    Note over Client,HAProxy: Client Initiates Request
+    Client->>HAProxy: HTTP Request
+    
     Note over HAProxy,SPOA: Client Connection Established
     HAProxy->>SPOA: crowdsec-ip message<br/>(on-client-session)
     SPOA->>Dataset: Check IP remediation
     Dataset-->>SPOA: remediation (ban/allow/captcha)
     SPOA-->>HAProxy: Set txn.crowdsec.remediation
     
-    Note over HAProxy,SPOA: HTTP Request Received
+    Note over HAProxy,SPOA: HTTP Request Processing
     HAProxy->>SPOA: crowdsec-http message<br/>(on-frontend-http-request)
     SPOA->>Dataset: Check IP + Host
     Dataset-->>SPOA: IP remediation + metadata
