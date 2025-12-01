@@ -8,7 +8,7 @@ A high-performance [HAProxy SPOE](https://www.haproxy.com/blog/extending-haproxy
 ## 🚀 Features
 
 - **⚡ High Performance**: Lock-free reads with atomic pointers for zero-blocking SPOA handlers
-- **💾 Memory Efficient**: Hybrid storage system using `sync.Map` for individual IPs and BART (Binary Adaptive Radix Tree) for CIDR ranges
+- **💾 Memory Efficient**: Hybrid storage system using `sync.Map` for individual IPs and [BART](https://github.com/gaissmai/bart) (Binary Adaptive Radix Tree) for CIDR ranges
 - **🔄 Real-time Updates**: Streams decisions from CrowdSec Local API with parallel batch processing
 - **🛡️ Multiple Remediations**: Supports ban, captcha, and allow decisions with host-based customization
 - **🌍 GeoIP Support**: Optional GeoIP2 database integration for country-based blocking
@@ -113,7 +113,7 @@ sequenceDiagram
 The bouncer uses a hybrid storage approach optimized for real-world workloads:
 
 - **Individual IPs**: Stored in `sync.Map` with atomic pointers for O(1) lookups
-- **CIDR Ranges**: Stored in BART (Binary Adaptive Radix Tree) for efficient longest prefix match
+- **CIDR Ranges**: Stored in [BART](https://github.com/gaissmai/bart) (Binary Adaptive Radix Tree) for efficient longest prefix match
 - **Copy-on-Write**: All updates use copy-on-write pattern ensuring readers never block
 - **Parallel Processing**: Add/Remove operations use `sync.WaitGroup.Go()` for concurrent batch processing
 
@@ -255,6 +255,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- [CrowdSec](https://www.crowdsec.net/) for the amazing security platform
 - [HAProxy](https://www.haproxy.org/) for the powerful load balancer and SPOE protocol
 - [BART](https://github.com/gaissmai/bart) for the efficient radix tree implementation
