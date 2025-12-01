@@ -208,11 +208,32 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 				return existingData, false // false = don't delete (prefix doesn't exist anyway)
 			}
 
+			// Check if the remediation exists with the matching origin before removing
+			// This prevents removing decisions when the origin has been overwritten (e.g., by CAPI)
+			if !existingData.HasRemediationWithOrigin(op.R, op.Origin) {
+				// Origin doesn't match - this decision was likely overwritten by another origin
+				// Don't remove it, as it's not the decision we're trying to delete
+				if valueLog != nil {
+					storedOrigin, exists := existingData[op.R]
+					if exists {
+						valueLog.Tracef("remediation exists but origin mismatch (stored: %s, requested: %s), skipping removal", storedOrigin, op.Origin)
+					} else {
+						valueLog.Tracef("remediation not found, skipping removal")
+					}
+				}
+				results[i] = nil
+				return existingData, false // false = don't delete, keep existing data
+			}
+
 			// bart already cloned via our Cloner interface, modify directly
 			// Remove returns an error if remediation doesn't exist (duplicate delete)
+			// We already checked origin above, so this should succeed
 			err := existingData.Remove(valueLog, op.R)
 			if errors.Is(err, ErrRemediationNotFound) {
-				// Duplicate delete - don't return operation pointer (no metrics update)
+				// This shouldn't happen since we checked above, but handle it gracefully
+				if valueLog != nil {
+					valueLog.Trace("remediation not found after origin check, duplicate delete")
+				}
 				results[i] = nil
 			} else {
 				// Remediation was successfully removed - return pointer for metrics

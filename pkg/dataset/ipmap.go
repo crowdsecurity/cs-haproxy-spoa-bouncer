@@ -172,46 +172,48 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 		return false
 	}
 
-	// Optimize: if map only has one entry and we're removing it, no need to clone
-	// We'll delete the IP entry anyway
-	if len(*current) == 1 {
-		if _, exists := (*current)[op.R]; exists {
-			// Removing the only entry - just delete the IP, no clone needed
-			ipMap.Delete(op.IP)
-			counter.Add(-1)
-			if valueLog != nil {
-				valueLog.Trace("removed IP entirely (was only entry)")
-			}
-			return true
-		}
-		// Entry doesn't exist - duplicate delete, safely ignore
+	// Check if the remediation exists with the matching origin before removing
+	// This prevents removing decisions when the origin has been overwritten (e.g., by CAPI)
+	if !current.HasRemediationWithOrigin(op.R, op.Origin) {
+		// Origin doesn't match - this decision was likely overwritten by another origin
+		// Don't remove it, as it's not the decision we're trying to delete
 		if valueLog != nil {
-			valueLog.Trace("remediation not found, ignoring duplicate delete")
+			storedOrigin, exists := (*current)[op.R]
+			if exists {
+				valueLog.Tracef("remediation exists but origin mismatch (stored: %s, requested: %s), skipping removal", storedOrigin, op.Origin)
+			} else {
+				valueLog.Tracef("remediation not found, skipping removal")
+			}
 		}
 		return false
 	}
 
-	// Map has multiple entries - need to clone for copy-on-write
+	// Always clone for copy-on-write, even if this is the only remediation
+	// This ensures consistency and handles edge cases where the same origin might
+	// change remediation types (e.g., ban -> captcha) in separate stream messages
 	newData := current.Clone()
 
 	// Remove returns an error if remediation doesn't exist (duplicate delete)
+	// We already checked origin above, so this should succeed
 	err := newData.Remove(valueLog, op.R)
 	if errors.Is(err, ErrRemediationNotFound) {
-		// Duplicate delete - remediation not found, nothing to remove
+		// This shouldn't happen since we checked above, but handle it gracefully
 		if valueLog != nil {
-			valueLog.Trace("remediation not found, duplicate delete")
+			valueLog.Trace("remediation not found after origin check, duplicate delete")
 		}
 		return false
 	}
 
-	// Check if entry is now empty
+	// Check if entry is now empty after removal
 	if newData.IsEmpty() {
+		// No remediations left - delete the IP entry entirely
 		ipMap.Delete(op.IP)
 		counter.Add(-1)
 		if valueLog != nil {
 			valueLog.Trace("removed IP entirely")
 		}
 	} else {
+		// Still has other remediations - update the entry with the modified map
 		entry.data.Store(&newData)
 		if valueLog != nil {
 			valueLog.Trace("removed remediation from IP")
