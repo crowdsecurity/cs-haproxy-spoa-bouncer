@@ -30,7 +30,7 @@ sequenceDiagram
     participant Backend
 
     Note over Client,HAProxy: Client Initiates Request
-    Client->>HAProxy: HTTP Request
+    Client->>HAProxy: HTTP or TCP Request
     
     Note over HAProxy,SPOA: Client Connection Established
     HAProxy->>SPOA: crowdsec-ip message<br/>(on-client-session)
@@ -38,22 +38,32 @@ sequenceDiagram
     Dataset-->>SPOA: remediation (ban/allow/captcha)
     SPOA-->>HAProxy: Set txn.crowdsec.remediation
     
-    Note over HAProxy,SPOA: HTTP Request Processing
-    HAProxy->>SPOA: crowdsec-http message<br/>(on-frontend-http-request)
-    SPOA->>Dataset: Check IP + Host
-    Dataset-->>SPOA: IP remediation + metadata
-    
-    alt AppSec Enabled & (Remediation = allow || AlwaysSend = true)
-        SPOA->>AppSec: Forward HTTP request data<br/>(URL, Method, Headers, Body)
-        AppSec->>AppSec: Analyze request (WAF rules)
-        alt AppSec Detects Threat
-            AppSec-->>SPOA: Override remediation = ban
-        else AppSec Allows
-            AppSec-->>SPOA: Keep remediation = allow
-        end
+    Note over HAProxy,SPOA: Request Processing
+    alt HTTP Request
+        HAProxy->>SPOA: crowdsec-http message<br/>(on-frontend-http-request)
+    else TCP Request
+        HAProxy->>SPOA: crowdsec-tcp message<br/>(on-frontend-tcp-request)
     end
-    
-    SPOA-->>HAProxy: Set remediation + isocode + captcha_status
+    alt HTTP Request
+        SPOA->>Dataset: Check IP + Host
+        Dataset-->>SPOA: IP remediation + metadata
+        
+        alt AppSec Enabled & (Remediation = allow || AlwaysSend = true)
+            SPOA->>AppSec: Forward HTTP request data<br/>(URL, Method, Headers, Body)
+            AppSec->>AppSec: Analyze request (WAF rules)
+            alt AppSec Detects Threat
+                AppSec-->>SPOA: Override remediation = ban
+            else AppSec Allows
+                AppSec-->>SPOA: Keep remediation = allow
+            end
+        end
+        
+        SPOA-->>HAProxy: Set remediation + isocode + captcha_status
+    else TCP Request
+        SPOA->>Dataset: Check IP remediation
+        Dataset-->>SPOA: IP remediation
+        SPOA-->>HAProxy: Set remediation
+    end
     
     alt Remediation = ban
         HAProxy->>HAProxy: Render ban page (Lua)
