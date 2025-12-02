@@ -59,28 +59,35 @@ sequenceDiagram
         end
         
         SPOA-->>HAProxy: Set remediation + isocode + captcha_status
+        
+        alt Remediation = ban
+            HAProxy->>HAProxy: Render ban page (Lua)
+            HAProxy-->>Client: 403 Forbidden
+        else Remediation = captcha
+            HAProxy->>HAProxy: Render captcha page (Lua)
+            HAProxy-->>Client: 200 OK (captcha page)
+            alt Captcha Valid
+                HAProxy->>SPOA: Validate captcha cookie
+                SPOA-->>HAProxy: Set remediation = allow
+                Note over HAProxy: Falls through to Remediation = allow
+            else Captcha Invalid/Pending
+                HAProxy-->>Client: Captcha challenge
+            end
+        else Remediation = allow
+            HAProxy->>Backend: Forward request
+            Backend-->>Client: 200 OK
+        end
     else TCP Request
         SPOA->>Dataset: Check IP remediation
         Dataset-->>SPOA: IP remediation
         SPOA-->>HAProxy: Set remediation
-    end
-    
-    alt Remediation = ban
-        HAProxy->>HAProxy: Render ban page (Lua)
-        HAProxy-->>Client: 403 Forbidden
-    else Remediation = captcha
-        HAProxy->>HAProxy: Render captcha page (Lua)
-        HAProxy-->>Client: 200 OK (captcha page)
-        alt Captcha Valid
-            HAProxy->>SPOA: Validate captcha cookie
-            SPOA-->>HAProxy: Set remediation = allow
-            Note over HAProxy: Falls through to Remediation = allow
-        else Captcha Invalid/Pending
-            HAProxy-->>Client: Captcha challenge
+        
+        alt Remediation = ban
+            HAProxy-->>Client: Close connection
+        else Remediation = allow
+            HAProxy->>Backend: Forward connection
+            Backend-->>Client: Connection established
         end
-    else Remediation = allow
-        HAProxy->>Backend: Forward request
-        Backend-->>Client: 200 OK
     end
     
     Note over SPOA,CrowdSec: Background: Stream Decisions (polled every X seconds)
