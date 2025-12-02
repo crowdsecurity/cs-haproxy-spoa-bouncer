@@ -617,9 +617,6 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 // getIPRemediation performs IP and geo/country remediation checks
 // Returns the final remediation and origin
 func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediation.Remediation, string) {
-	var origin string
-	var r remediation.Remediation
-
 	// Check IP directly against dataset - timing is handled inside CheckIP
 	r, origin, err := s.dataset.CheckIP(ip)
 	if err != nil {
