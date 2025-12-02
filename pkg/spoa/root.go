@@ -21,6 +21,7 @@ import (
 	"github.com/negasus/haproxy-spoe-go/agent"
 	"github.com/negasus/haproxy-spoe-go/message"
 	"github.com/negasus/haproxy-spoe-go/request"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -698,12 +699,19 @@ func handlerWrapper(s *Spoa) func(req *request.Request) {
 				continue
 			}
 			s.logger.Trace("Received message: ", messageName)
+			
+			// Track duration for this message type - using WithLabelValues to avoid allocations
+			timer := prometheus.NewTimer(metrics.MessageDuration.WithLabelValues(messageName))
+			
 			switch messageName {
 			case "crowdsec-http":
 				s.handleHTTPRequest(req, mes)
 			case "crowdsec-ip":
 				s.handleIPRequest(req, mes)
 			}
+			
+			// Observe duration immediately after processing (allocation-free)
+			timer.ObserveDuration()
 		}
 	}
 }
