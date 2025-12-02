@@ -76,9 +76,6 @@ sequenceDiagram
     Note over SPOA,CrowdSec: Background: Stream Decisions
     CrowdSec->>SPOA: New/Deleted decisions (stream)
     SPOA->>Dataset: Update dataset (parallel batch)
-    
-    Note over SPOA,AppSec: Background: AppSec Updates
-    AppSec->>SPOA: WAF rules & signatures (if applicable)
 ```
 
 ### Request Flow Details
