@@ -30,21 +30,26 @@ var TotalActiveDecisions = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 
 // IPCheckDuration tracks the duration of IP/remediation checks
 // Labels: lookup_type (ip, range, country)
-// Buckets optimized for 0-500ms timeout threshold (10 buckets max)
+//   - "ip": Individual IP address lookup in IPMap (O(1)) - typically ~100μs
+//   - "range": CIDR range lookup in RangeSet/BART (LPM) - typically ~100μs
+//   - "country": Country code lookup in CNSet
+//
+// Buckets optimized for microsecond-level granularity (IP/range lookups ~100μs)
+// while still covering 0-500ms timeout threshold (10 buckets max)
 var IPCheckDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name: IPCheckDurationMetricName,
 	Help: "Duration of IP check operations in seconds",
 	Buckets: []float64{
-		0.001, // 1ms - very fast
-		0.01,  // 10ms - fast
-		0.05,  // 50ms - normal
-		0.1,   // 100ms - getting slower
-		0.2,   // 200ms - approaching timeout
-		0.3,   // 300ms - close to timeout
-		0.4,   // 400ms - very close to timeout
-		0.5,   // 500ms - timeout threshold
-		1.0,   // 1s - exceeded timeout
-		2.0,   // 2s - way over timeout
+		0.0001, // 100μs - very fast IP/range lookups
+		0.0005, // 500μs - fast
+		0.001,  // 1ms - still fast
+		0.005,  // 5ms - normal
+		0.01,   // 10ms - getting slower
+		0.05,   // 50ms - slower
+		0.1,    // 100ms - approaching timeout
+		0.2,    // 200ms - close to timeout
+		0.5,    // 500ms - timeout threshold
+		1.0,    // 1s - exceeded timeout
 	},
 }, []string{"lookup_type"})
 

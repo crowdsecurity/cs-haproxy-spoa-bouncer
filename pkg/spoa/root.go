@@ -618,17 +618,16 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 // Returns the final remediation and origin
 func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediation.Remediation, string) {
 	var origin string
+	var r remediation.Remediation
 
-	// Check IP directly against dataset - track duration
-	timer := prometheus.NewTimer(metrics.IPCheckDuration.WithLabelValues("ip_or_range"))
+	// Check IP directly against dataset - timing is handled inside CheckIP
 	r, origin, err := s.dataset.CheckIP(ip)
-	timer.ObserveDuration()
 	if err != nil {
 		s.logger.WithFields(log.Fields{
 			"ip":    ip.String(),
 			"error": err,
 		}).Error("Failed to get IP remediation")
-		return remediation.Allow, "" // Safe default
+		return remediation.Allow, ""
 	}
 
 	// Always try to get and set ISO code if geo database is available
