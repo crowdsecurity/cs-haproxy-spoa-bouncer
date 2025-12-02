@@ -60,6 +60,7 @@ sequenceDiagram
         HAProxy-->>Client: 403 Forbidden
     else Remediation = captcha
         HAProxy->>HAProxy: Render captcha page (Lua)
+        HAProxy-->>Client: 200 OK (captcha page)
         alt Captcha Valid
             HAProxy->>SPOA: Validate captcha cookie
             SPOA-->>HAProxy: Set remediation = allow
