@@ -583,8 +583,10 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 
 		httpData.Body = body
 
-		// Validate captcha
+		// Validate captcha - track duration
+		captchaTimer := prometheus.NewTimer(metrics.CaptchaValidationDuration)
 		isValid, err := matchedHost.Captcha.Validate(context.Background(), uuid, string(*body))
+		captchaTimer.ObserveDuration()
 		if err != nil {
 			s.logger.WithFields(log.Fields{
 				"host":    matchedHost.Host,
@@ -613,11 +615,14 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 }
 
 // getIPRemediation performs IP and geo/country remediation checks
-// Returns the final remediation after checking IP, geo, and country
+// Returns the final remediation and origin
 func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediation.Remediation, string) {
 	var origin string
-	// Check IP directly against dataset
+
+	// Check IP directly against dataset - track duration
+	timer := prometheus.NewTimer(metrics.IPCheckDuration.WithLabelValues("ip_or_range"))
 	r, origin, err := s.dataset.CheckIP(ip)
+	timer.ObserveDuration()
 	if err != nil {
 		s.logger.WithFields(log.Fields{
 			"ip":    ip.String(),
@@ -629,7 +634,9 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediatio
 	// Always try to get and set ISO code if geo database is available
 	// This allows upstream services to use the ISO code regardless of remediation status
 	if s.geoDatabase.IsValid() {
+		geoTimer := prometheus.NewTimer(metrics.GeoLookupDuration)
 		record, err := s.geoDatabase.GetCity(ip)
+		geoTimer.ObserveDuration()
 		if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
 			s.logger.WithFields(log.Fields{
 				"ip":    ip.String(),
@@ -643,7 +650,9 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediatio
 
 				// If no IP-specific remediation, check country-based remediation
 				if r < remediation.Unknown {
+					cnTimer := prometheus.NewTimer(metrics.IPCheckDuration.WithLabelValues("country"))
 					cnR, cnOrigin := s.dataset.CheckCN(iso)
+					cnTimer.ObserveDuration()
 					if cnR > remediation.Unknown {
 						r = cnR
 						origin = cnOrigin
@@ -700,19 +709,12 @@ func handlerWrapper(s *Spoa) func(req *request.Request) {
 			}
 			s.logger.Trace("Received message: ", messageName)
 
-			// Track duration for this message type - using WithLabelValues to avoid allocations
-			timer := prometheus.NewTimer(metrics.MessageDuration.WithLabelValues(messageName))
-
 			switch messageName {
 			case "crowdsec-http":
 				s.handleHTTPRequest(req, mes)
 			case "crowdsec-ip":
 				s.handleIPRequest(req, mes)
 			}
-
-			// Observe duration immediately after processing (allocation-free)
-			// Note: If handler panics, duration won't be recorded, but panics are extremely rare in this path
-			timer.ObserveDuration()
 		}
 	}
 }

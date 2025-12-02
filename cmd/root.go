@@ -120,7 +120,16 @@ func Execute() error {
 		return metricsProvider.Run(ctx)
 	})
 
-	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests, metrics.MessageDuration)
+	prometheus.MustRegister(
+		csbouncer.TotalLAPICalls,
+		csbouncer.TotalLAPIError,
+		metrics.TotalActiveDecisions,
+		metrics.TotalBlockedRequests,
+		metrics.TotalProcessedRequests,
+		metrics.IPCheckDuration,
+		metrics.CaptchaValidationDuration,
+		metrics.GeoLookupDuration,
+	)
 
 	if config.PrometheusConfig.Enabled {
 		go func() {
