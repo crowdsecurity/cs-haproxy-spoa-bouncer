@@ -73,8 +73,9 @@ sequenceDiagram
         Backend-->>Client: 200 OK
     end
     
-    Note over SPOA,CrowdSec: Background: Stream Decisions
-    CrowdSec->>SPOA: New/Deleted decisions (stream)
+    Note over SPOA,CrowdSec: Background: Stream Decisions (polled every X seconds)
+    SPOA->>CrowdSec: Poll for decisions
+    CrowdSec-->>SPOA: New/Deleted decisions (stream)
     SPOA->>Dataset: Update dataset (parallel batch)
 ```
 
