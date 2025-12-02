@@ -9,6 +9,7 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
 	"github.com/crowdsecurity/crowdsec/pkg/models"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -295,13 +296,18 @@ func (d *DataSet) CheckIP(ip netip.Addr) (remediation.Remediation, string, error
 		return remediation.Allow, "", fmt.Errorf("invalid IP address")
 	}
 
-	// First check the IPMap for exact IP match (O(1) lookup)
-	if r, origin, found := d.IPMap.Contains(ip); found {
+	// First check the IPMap for exact IP match (O(1) lookup) - track duration
+	ipTimer := prometheus.NewTimer(metrics.IPCheckDuration.WithLabelValues("ip"))
+	r, origin, found := d.IPMap.Contains(ip)
+	ipTimer.ObserveDuration()
+	if found {
 		return r, origin, nil
 	}
 
-	// Fall back to RangeSet (BART) for LPM on ranges
-	r, origin := d.RangeSet.Contains(ip)
+	// Fall back to RangeSet (BART) for LPM on ranges - track duration
+	rangeTimer := prometheus.NewTimer(metrics.IPCheckDuration.WithLabelValues("range"))
+	r, origin = d.RangeSet.Contains(ip)
+	rangeTimer.ObserveDuration()
 	return r, origin, nil
 }
 

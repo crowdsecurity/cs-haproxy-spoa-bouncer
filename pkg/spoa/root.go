@@ -21,6 +21,7 @@ import (
 	"github.com/negasus/haproxy-spoe-go/agent"
 	"github.com/negasus/haproxy-spoe-go/message"
 	"github.com/negasus/haproxy-spoe-go/request"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -582,8 +583,10 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 
 		httpData.Body = body
 
-		// Validate captcha
+		// Validate captcha - track duration
+		captchaTimer := prometheus.NewTimer(metrics.CaptchaValidationDuration)
 		isValid, err := matchedHost.Captcha.Validate(context.Background(), uuid, string(*body))
+		captchaTimer.ObserveDuration()
 		if err != nil {
 			s.logger.WithFields(log.Fields{
 				"host":    matchedHost.Host,
@@ -612,23 +615,24 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 }
 
 // getIPRemediation performs IP and geo/country remediation checks
-// Returns the final remediation after checking IP, geo, and country
+// Returns the final remediation and origin
 func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediation.Remediation, string) {
-	var origin string
-	// Check IP directly against dataset
+	// Check IP directly against dataset - timing is handled inside CheckIP
 	r, origin, err := s.dataset.CheckIP(ip)
 	if err != nil {
 		s.logger.WithFields(log.Fields{
 			"ip":    ip.String(),
 			"error": err,
 		}).Error("Failed to get IP remediation")
-		return remediation.Allow, "" // Safe default
+		return remediation.Allow, ""
 	}
 
 	// Always try to get and set ISO code if geo database is available
 	// This allows upstream services to use the ISO code regardless of remediation status
 	if s.geoDatabase.IsValid() {
+		geoTimer := prometheus.NewTimer(metrics.GeoLookupDuration)
 		record, err := s.geoDatabase.GetCity(ip)
+		geoTimer.ObserveDuration()
 		if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
 			s.logger.WithFields(log.Fields{
 				"ip":    ip.String(),
@@ -642,7 +646,9 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediatio
 
 				// If no IP-specific remediation, check country-based remediation
 				if r < remediation.Unknown {
+					cnTimer := prometheus.NewTimer(metrics.IPCheckDuration.WithLabelValues("country"))
 					cnR, cnOrigin := s.dataset.CheckCN(iso)
+					cnTimer.ObserveDuration()
 					if cnR > remediation.Unknown {
 						r = cnR
 						origin = cnOrigin
@@ -698,6 +704,7 @@ func handlerWrapper(s *Spoa) func(req *request.Request) {
 				continue
 			}
 			s.logger.Trace("Received message: ", messageName)
+
 			switch messageName {
 			case "crowdsec-http":
 				s.handleHTTPRequest(req, mes)
