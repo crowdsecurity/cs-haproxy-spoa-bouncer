@@ -701,9 +701,7 @@ func handlerWrapper(s *Spoa) func(req *request.Request) {
 			s.logger.Trace("Received message: ", messageName)
 
 			// Track duration for this message type - using WithLabelValues to avoid allocations
-			// Use defer to ensure duration is always recorded, even if handler panics or returns early
 			timer := prometheus.NewTimer(metrics.MessageDuration.WithLabelValues(messageName))
-			defer timer.ObserveDuration()
 
 			switch messageName {
 			case "crowdsec-http":
@@ -711,6 +709,10 @@ func handlerWrapper(s *Spoa) func(req *request.Request) {
 			case "crowdsec-ip":
 				s.handleIPRequest(req, mes)
 			}
+
+			// Observe duration immediately after processing (allocation-free)
+			// Note: If handler panics, duration won't be recorded, but panics are extremely rare in this path
+			timer.ObserveDuration()
 		}
 	}
 }
