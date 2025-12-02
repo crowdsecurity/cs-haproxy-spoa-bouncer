@@ -63,8 +63,7 @@ sequenceDiagram
         alt Captcha Valid
             HAProxy->>SPOA: Validate captcha cookie
             SPOA-->>HAProxy: Set remediation = allow
-            HAProxy->>Backend: Forward request
-            Backend-->>Client: 200 OK
+            Note over HAProxy: Falls through to Remediation = allow
         else Captcha Invalid/Pending
             HAProxy-->>Client: Captcha challenge
         end
