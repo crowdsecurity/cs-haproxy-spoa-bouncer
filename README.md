@@ -38,13 +38,9 @@ sequenceDiagram
     Dataset-->>SPOA: remediation (ban/allow/captcha)
     SPOA-->>HAProxy: Set txn.crowdsec.remediation
     
-    Note over HAProxy,SPOA: Request Processing
     alt HTTP Request
+        Note over HAProxy,SPOA: HTTP Request Processing
         HAProxy->>SPOA: crowdsec-http message<br/>(on-frontend-http-request)
-    else TCP Request
-        HAProxy->>SPOA: crowdsec-tcp message<br/>(on-frontend-tcp-request)
-    end
-    alt HTTP Request
         SPOA->>Dataset: Check IP + Host
         Dataset-->>SPOA: IP remediation + metadata
         
@@ -78,6 +74,8 @@ sequenceDiagram
             Backend-->>Client: 200 OK
         end
     else TCP Request
+        Note over HAProxy,SPOA: TCP Request Processing
+        HAProxy->>SPOA: crowdsec-tcp message<br/>(on-frontend-tcp-request)
         SPOA->>Dataset: Check IP remediation
         Dataset-->>SPOA: IP remediation
         SPOA-->>HAProxy: Set remediation
