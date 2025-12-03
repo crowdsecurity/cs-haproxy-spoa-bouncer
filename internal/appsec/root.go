@@ -43,19 +43,12 @@ type AppSec struct {
 	logger     *log.Entry `yaml:"-"`
 }
 
-func (a *AppSec) Init(logger *log.Entry, globalURL, globalAPIKey string) error {
+func (a *AppSec) Init(logger *log.Entry) error {
 	a.InitLogger(logger)
 
-	// Use host-specific config if provided, otherwise fall back to global
+	// Use only host-specific config (no global fallback - global AppSec is handled at SPOA level)
 	url := a.URL
-	if url == "" {
-		url = globalURL
-	}
-
 	apiKey := a.APIKey
-	if apiKey == "" {
-		apiKey = globalAPIKey
-	}
 
 	// Only create client if URL is configured
 	if url != "" {
@@ -82,7 +75,7 @@ func (a *AppSec) Init(logger *log.Entry, globalURL, globalAPIKey string) error {
 			"api_key_set": apiKey != "",
 		}).Debug("AppSec client initialized")
 	} else {
-		a.logger.Debug("AppSec URL not configured, AppSec validation will be skipped")
+		a.logger.Debug("AppSec override not configured for host; AppSec validation will default to global (if set)")
 	}
 
 	return nil
@@ -98,13 +91,9 @@ func (a *AppSec) InitLogger(logger *log.Entry) {
 
 // ValidateRequest sends the HTTP request to the AppSec engine and returns the remediation
 func (a *AppSec) ValidateRequest(ctx context.Context, req *AppSecRequest) (remediation.Remediation, error) {
-	if a.Client == nil {
-		a.logger.Debug("AppSec client not initialized, allowing request")
-		return remediation.Allow, nil
-	}
-
-	if a.Client.URL == "" {
-		a.logger.Debug("AppSec URL not configured, allowing request")
+	// Use IsValid() which checks both Client and URL
+	if !a.IsValid() {
+		a.logger.Debug("AppSec not configured, allowing request")
 		return remediation.Allow, nil
 	}
 
@@ -121,11 +110,19 @@ func (a *AppSec) ValidateRequest(ctx context.Context, req *AppSecRequest) (remed
 		a.logger.Errorf("Failed to send request to AppSec engine: %v", err)
 		return remediation.Allow, err
 	}
+	// resp is guaranteed to be non-nil when err is nil (per http.Client.Do contract)
 	defer resp.Body.Close()
 
 	// Ensure response body is fully read for proper connection reuse
 	// This allows the connection to be reused via keep-alive
-	_, _ = io.Copy(io.Discard, resp.Body)
+	// Limit read to prevent memory exhaustion from maliciously large responses
+	// AppSec responses should be small (just status codes), so 64KB is more than enough
+	const maxResponseSize = 64 * 1024 // 64KB
+	limitedReader := io.LimitReader(resp.Body, maxResponseSize)
+	if _, err := io.Copy(io.Discard, limitedReader); err != nil {
+		// Log but don't fail - connection reuse is best-effort
+		a.logger.WithError(err).Debug("Failed to fully read AppSec response body for connection reuse")
+	}
 
 	// Process response based on HTTP status code
 	return a.processAppSecResponse(resp)
@@ -177,21 +174,15 @@ func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) 
 	}).Debug("Created AppSec request with headers")
 
 	// Set HTTP version from the request (set by HAProxy SPOE)
+	// Convert version format from HAProxy (e.g., "1.1", "2.0") to our format (e.g., "11", "20")
 	httpVersion := "11" // Default to HTTP/1.1
 	if req.Version != "" {
-		// Convert version format from HAProxy (e.g., "1.1", "2.0") to our format (e.g., "11", "20")
-		switch req.Version {
-		case "1.0":
-			httpVersion = "10"
-		case "1.1":
-			httpVersion = "11"
-		case "2.0":
-			httpVersion = "20"
-		case "3.0":
-			httpVersion = "30"
-		default:
-			// For any other version, just strip the dots
+		// For known versions, use explicit mapping; otherwise strip dots
+		if strings.Contains(req.Version, ".") {
 			httpVersion = strings.ReplaceAll(req.Version, ".", "")
+		} else {
+			// Already in correct format or invalid, use as-is
+			httpVersion = req.Version
 		}
 	}
 	httpReq.Header.Set("X-Crowdsec-Appsec-Http-Version", httpVersion)

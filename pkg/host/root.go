@@ -25,11 +25,9 @@ type Host struct {
 }
 
 type Manager struct {
-	Hosts             []*Host
-	Logger            *log.Entry
-	cache             sync.Map // map[string]*Host - thread-safe cache for matched hosts
-	GlobalAppSecURL   string   // Global AppSec URL (can be overridden per-host)
-	GlobalAppSecAPIKey string   // Global AppSec API key (can be overridden per-host)
+	Hosts  []*Host
+	Logger *log.Entry
+	cache  sync.Map // map[string]*Host - thread-safe cache for matched hosts
 }
 
 const t = `
@@ -56,12 +54,6 @@ func NewManager(l *log.Entry) *Manager {
 		Logger: l,
 		// cache is a sync.Map, zero value is ready to use
 	}
-}
-
-// SetGlobalAppSecConfig sets the global AppSec configuration for the host manager
-func (h *Manager) SetGlobalAppSecConfig(appSecURL, apiKey string) {
-	h.GlobalAppSecURL = appSecURL
-	h.GlobalAppSecAPIKey = apiKey
 }
 
 func (h *Manager) MatchFirstHost(toMatch string) *Host {
@@ -194,7 +186,9 @@ func (h *Manager) AddHost(host *Host) {
 	if err := host.Ban.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
-	if err := host.AppSec.Init(host.logger, h.GlobalAppSecURL, h.GlobalAppSecAPIKey); err != nil {
+	// Initialize AppSec with only host-specific config (no global fallback)
+	// Global AppSec is handled at SPOA level
+	if err := host.AppSec.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
 
