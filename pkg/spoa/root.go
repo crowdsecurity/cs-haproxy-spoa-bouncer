@@ -392,11 +392,16 @@ func (s *Spoa) validateWithAppSec(mes *message.Message, matchedHost *host.Host, 
 		}
 	}
 
-	// Always return AppSec remediation when validation succeeds
-	if appSecRemediation == remediation.Ban && matchedHost == nil {
-		logger.Warn("AppSec returned ban but no host matched - remediation set but ban values not injected")
+	// Return the more restrictive remediation (never downgrade security)
+	// Higher remediation values are more restrictive: Allow(0) < Unknown(1) < Captcha(2) < Ban(3)
+	if appSecRemediation > currentRemediation {
+		if appSecRemediation == remediation.Ban && matchedHost == nil {
+			logger.Warn("AppSec returned ban but no host matched - remediation set but ban values not injected")
+		}
+		return appSecRemediation
 	}
-	return appSecRemediation
+	// Current remediation is more restrictive, keep it
+	return currentRemediation
 }
 
 // extractAppSecData extracts all data needed for AppSec validation from the message
