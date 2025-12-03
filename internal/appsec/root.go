@@ -113,22 +113,21 @@ func (a *AppSec) ValidateRequest(ctx context.Context, req *AppSecRequest) (remed
 	// resp is guaranteed to be non-nil when err is nil (per http.Client.Do contract)
 	defer resp.Body.Close()
 
-	// Ensure response body is fully read for proper connection reuse
+	// Discard response body for proper connection reuse
 	// This allows the connection to be reused via keep-alive
-	// Limit read to prevent memory exhaustion from maliciously large responses
-	// AppSec responses should be small (just status codes), so 64KB is more than enough
-	const maxResponseSize = 64 * 1024 // 64KB
-	limitedReader := io.LimitReader(resp.Body, maxResponseSize)
-	if _, err := io.Copy(io.Discard, limitedReader); err != nil {
-		// Log but don't fail - connection reuse is best-effort
-		a.logger.WithError(err).Debug("Failed to fully read AppSec response body for connection reuse")
-	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	// Process response based on HTTP status code
 	return a.processAppSecResponse(resp)
 }
 
 func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) {
+	// Ensure we have a valid API key first (fail fast before processing headers)
+	if a.Client.APIKey == "" {
+		a.logger.Error("AppSec API key is empty")
+		return nil, fmt.Errorf("appsec API key is not configured")
+	}
+
 	var httpReq *http.Request
 	var err error
 
@@ -155,12 +154,6 @@ func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) 
 	httpReq.Header.Set("X-Crowdsec-Appsec-Host", req.Host)
 	httpReq.Header.Set("X-Crowdsec-Appsec-Verb", req.Method)
 
-	// Ensure we have a valid API key
-	if a.Client.APIKey == "" {
-		a.logger.Error("AppSec API key is empty")
-		return nil, fmt.Errorf("AppSec API key is not configured")
-	}
-
 	httpReq.Header.Set("X-Crowdsec-Appsec-Api-Key", a.Client.APIKey)
 	httpReq.Header.Set("X-Crowdsec-Appsec-User-Agent", req.UserAgent)
 
@@ -177,12 +170,17 @@ func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) 
 	// Convert version format from HAProxy (e.g., "1.1", "2.0") to our format (e.g., "11", "20")
 	httpVersion := "11" // Default to HTTP/1.1
 	if req.Version != "" {
-		// For known versions, use explicit mapping; otherwise strip dots
-		if strings.Contains(req.Version, ".") {
+		// Use explicit mapping for known versions to handle edge cases correctly
+		switch req.Version {
+		case "1.0":
+			httpVersion = "10"
+		case "1.1":
+			httpVersion = "11"
+		case "2.0", "2":
+			httpVersion = "20"
+		default:
+			// For unknown formats, strip dots
 			httpVersion = strings.ReplaceAll(req.Version, ".", "")
-		} else {
-			// Already in correct format or invalid, use as-is
-			httpVersion = req.Version
 		}
 	}
 	httpReq.Header.Set("X-Crowdsec-Appsec-Http-Version", httpVersion)
