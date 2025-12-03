@@ -69,7 +69,7 @@ func (a *AppSec) Init(logger *log.Entry, globalURL, globalAPIKey string) error {
 
 		a.Client = &AppSecClient{
 			HTTPClient: &http.Client{
-				Timeout:   5 * time.Second,
+				// No timeout here - rely on context timeout for request-level control
 				Transport: transport,
 			},
 			APIKey: apiKey,
@@ -135,7 +135,8 @@ func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) 
 	var httpReq *http.Request
 	var err error
 
-	// Determine HTTP method based on whether there's a body
+	// AppSec API only supports GET or POST methods
+	// POST is used only when there's a body, otherwise GET
 	if len(req.Body) > 0 {
 		httpReq, err = http.NewRequest(http.MethodPost, a.Client.URL, bytes.NewReader(req.Body))
 	} else {

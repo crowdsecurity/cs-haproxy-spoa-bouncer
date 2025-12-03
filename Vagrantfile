@@ -107,7 +107,7 @@ EOF
 appsec_config: crowdsecurity/appsec-default
 labels:
   type: appsec
-listen_addr: 0.0.0.0:4241
+listen_addr: 0.0.0.0:7422
 source: appsec
 EOF
 

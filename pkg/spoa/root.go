@@ -311,7 +311,8 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	}
 
 	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
-	if r > remediation.Unknown && !matchedHost.AppSec.AlwaysSend {
+	// Use >= Captcha to make intent explicit: skip AppSec for restrictive remediations (Captcha/Ban)
+	if r >= remediation.Captcha && !matchedHost.AppSec.AlwaysSend {
 		return
 	}
 
@@ -364,7 +365,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	if version != nil {
 		appSecReq.Version = *version
 	}
-	if httpData.Body != nil {
+	if httpData.Body != nil && len(*httpData.Body) > 0 {
 		appSecReq.Body = *httpData.Body
 	}
 
@@ -385,11 +386,8 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			ipTypeLabel = "ipv6"
 		}
 
-		metrics.TotalBlockedRequests.With(prometheus.Labels{
-			"ip_type":     ipTypeLabel,
-			"origin":      "appsec",
-			"remediation": appSecRemediation.String(),
-		}).Inc()
+		// Label order: origin, ip_type, remediation (as defined in metrics.go)
+		metrics.TotalBlockedRequests.WithLabelValues("appsec", ipTypeLabel, appSecRemediation.String()).Inc()
 	}
 
 	// If AppSec returns a more restrictive remediation, use it (defer will handle setting it)
@@ -841,11 +839,16 @@ func readHeaders(headers string) (http.Header, error) {
 			// Check if this looks like an HTTP request line (starts with HTTP method)
 			parts := strings.Fields(header)
 			if len(parts) >= 3 {
-				// Check if third part looks like HTTP version (e.g., "HTTP/1.1")
+				// Verify the third part exactly matches HTTP version pattern (e.g., "HTTP/1.1")
 				// Format: "METHOD PATH HTTP/VERSION"
-				if strings.HasPrefix(parts[2], "HTTP/") {
-					// This is the request line, skip it
-					continue
+				if strings.HasPrefix(parts[2], "HTTP/") && len(parts[2]) == 8 {
+					// Verify the first field matches a known HTTP method
+					method := parts[0]
+					if method == "GET" || method == "POST" || method == "PUT" || method == "DELETE" ||
+						method == "HEAD" || method == "OPTIONS" || method == "PATCH" || method == "TRACE" || method == "CONNECT" {
+						// This is the request line, skip it
+						continue
+					}
 				}
 			}
 		}
@@ -853,6 +856,8 @@ func readHeaders(headers string) (http.Header, error) {
 		kv := strings.SplitN(header, ":", 2)
 		if len(kv) != 2 {
 			// Skip lines without colon (might be continuation or malformed)
+			// Log debug message to aid in debugging HAProxy configuration issues
+			log.WithField("header", header).Debug("Skipping malformed header line without colon separator")
 			continue
 		}
 
