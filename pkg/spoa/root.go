@@ -827,30 +827,10 @@ func readHeaders(headers string) (http.Header, error) {
 		return nil, fmt.Errorf("no headers found")
 	}
 
-	for i, header := range hs {
+	for _, header := range hs {
 		header = strings.TrimSpace(header)
 		if header == "" {
 			continue
-		}
-
-		// Skip the HTTP request line if present (first line that looks like "METHOD PATH HTTP/VERSION")
-		// HAProxy's req.hdrs may include the request line at the beginning
-		if i == 0 {
-			// Check if this looks like an HTTP request line (starts with HTTP method)
-			parts := strings.Fields(header)
-			if len(parts) >= 3 {
-				// Verify the third part exactly matches HTTP version pattern (e.g., "HTTP/1.1")
-				// Format: "METHOD PATH HTTP/VERSION"
-				if strings.HasPrefix(parts[2], "HTTP/") && len(parts[2]) == 8 {
-					// Verify the first field matches a known HTTP method
-					method := parts[0]
-					if method == "GET" || method == "POST" || method == "PUT" || method == "DELETE" ||
-						method == "HEAD" || method == "OPTIONS" || method == "PATCH" || method == "TRACE" || method == "CONNECT" {
-						// This is the request line, skip it
-						continue
-					}
-				}
-			}
 		}
 
 		kv := strings.SplitN(header, ":", 2)
