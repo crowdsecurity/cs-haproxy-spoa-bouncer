@@ -218,7 +218,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	// defer a function that always add the remediation to the request at end of processing
 	defer func() {
-		if matchedHost == nil && r.String() == "captcha" {
+		if matchedHost == nil && r.IsEqual(remediation.Captcha) {
 			s.logger.Warn("remediation is captcha, no matching host was found cannot issue captcha remediation reverting to ban")
 			r = remediation.Ban
 		}
@@ -267,8 +267,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	var httpData HTTPRequestData
 
-	switch r.String() {
-	case "allow":
+	if r.IsEqual(remediation.Allow) {
 		// If user has a captcha cookie but decision is Allow, generate unset cookie
 		// We don't set captcha_status, so HAProxy knows to clear the cookie
 		cookieB64, err := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
@@ -305,16 +304,16 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 		// Parse HTTP data for AppSec processing
 		httpData = parseHTTPData(s.logger, mes)
-	case "ban":
+	} else if r.IsEqual(remediation.Ban) {
 		//Handle ban
 		matchedHost.Ban.InjectKeyValues(&req.Actions)
 		// Parse HTTP data for AppSec processing
 		httpData = parseHTTPData(s.logger, mes)
-	case "captcha":
+	} else if r.IsEqual(remediation.Captcha) {
 		r, httpData = s.handleCaptchaRemediation(req, mes, matchedHost)
 		// If remediation changed to fallback, return early
 		// If it became Allow, continue for AppSec processing
-		if r.String() != "captcha" && r.String() != "allow" {
+		if !r.IsEqual(remediation.Captcha) && !r.IsEqual(remediation.Allow) {
 			return
 		}
 	}
