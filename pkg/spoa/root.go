@@ -890,20 +890,25 @@ func readHeaders(headers []byte) (http.Header, error) {
 		return nil, fmt.Errorf("no headers found")
 	}
 
-	// Split by \r\n
-	hs := strings.Split(string(headers), "\r\n")
+	// Split by \r\n using bytes.Split to avoid converting entire slice to string
+	headerLines := bytes.Split(headers, []byte("\r\n"))
 
-	for _, header := range hs {
-		if header == "" {
+	for _, headerLine := range headerLines {
+		if len(headerLine) == 0 {
 			continue
 		}
 
-		kv := strings.SplitN(header, ":", 2)
-		if len(kv) != 2 {
-			return nil, fmt.Errorf("invalid header: %q", header)
+		// Find colon separator in byte slice
+		colonIdx := bytes.IndexByte(headerLine, ':')
+		if colonIdx == -1 {
+			return nil, fmt.Errorf("invalid header: %q", string(headerLine))
 		}
 
-		h.Add(strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]))
+		// Convert only the key and value parts to strings (not the entire header)
+		key := strings.TrimSpace(string(headerLine[:colonIdx]))
+		value := strings.TrimSpace(string(headerLine[colonIdx+1:]))
+
+		h.Add(key, value)
 	}
 	return h, nil
 }
