@@ -881,11 +881,6 @@ func (s *Spoa) handleIPRequest(ctx context.Context, writer *encoding.ActionWrite
 	_ = writer.SetString(encoding.VarScopeTransaction, "remediation", r.String())
 }
 
-var (
-	ErrMessageKeyNotFound     = errors.New("message key not found")
-	ErrMessageKeyTypeMismatch = errors.New("message key type mismatch")
-)
-
 func readHeaders(headers []byte) (http.Header, error) {
 	h := http.Header{}
 	if len(headers) == 0 {
