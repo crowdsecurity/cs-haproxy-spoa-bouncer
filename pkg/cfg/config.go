@@ -57,6 +57,9 @@ type BouncerConfig struct {
 	// its weight will be used for ordering and severity. Custom remediations can slot between built-in
 	// ones by choosing an appropriate weight value.
 	//
+	// Tie-breaking: If two remediations have the same weight, alphabetical order of the remediation
+	// name is used as a deterministic tie-breaker when determining priority.
+	//
 	// Note: Custom weights for built-in remediations (allow, unknown, captcha, ban) must be set
 	// before package initialization. After init(), package-level constants already have cached weights.
 	RemediationWeights map[string]int `yaml:"remediation_weights,omitempty"`

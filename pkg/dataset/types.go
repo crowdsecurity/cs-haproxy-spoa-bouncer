@@ -59,16 +59,31 @@ func (rM RemediationMap) Add(clog *log.Entry, r remediation.Remediation, origin 
 
 // GetRemediationAndOrigin returns the highest priority remediation and its origin.
 // Priority is determined by comparing weights using remediation.Compare().
+// If two remediations have the same weight, alphabetical order of the name is used as a tie-breaker
+// to ensure deterministic behavior.
 func (rM RemediationMap) GetRemediationAndOrigin() (remediation.Remediation, string) {
 	var maxRemediation remediation.Remediation
 	var maxOrigin string
 	first := true
 
 	for r, origin := range rM {
-		if first || r.IsHigher(maxRemediation) {
+		if first {
 			maxRemediation = r
 			maxOrigin = origin
 			first = false
+			continue
+		}
+
+		// Compare by weight first
+		if r.IsHigher(maxRemediation) {
+			maxRemediation = r
+			maxOrigin = origin
+		} else if r.HasSameWeight(maxRemediation) {
+			// Tie-breaker: use alphabetical order of name for deterministic behavior
+			if r.String() < maxRemediation.String() {
+				maxRemediation = r
+				maxOrigin = origin
+			}
 		}
 	}
 

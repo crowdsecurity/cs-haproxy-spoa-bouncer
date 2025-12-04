@@ -166,6 +166,14 @@ func (r Remediation) IsEqual(other Remediation) bool {
 	return r.name == other.name && r.weight == other.weight
 }
 
+// HasSameWeight returns true if r has the same weight as other.
+// This is useful for checking if two different remediations have the same priority.
+// Note: Two remediations with the same weight will be compared by name (alphabetical)
+// as a tie-breaker when determining priority.
+func (r Remediation) HasSameWeight(other Remediation) bool {
+	return r.weight == other.weight
+}
+
 // IsWeighted returns true if r is not Allow (has weight > Allow)
 // This is useful for checking if a remediation should be applied
 func (r Remediation) IsWeighted() bool {
