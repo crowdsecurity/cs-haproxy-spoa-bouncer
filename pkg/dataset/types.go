@@ -65,7 +65,7 @@ func (rM RemediationMap) GetRemediationAndOrigin() (remediation.Remediation, str
 	first := true
 
 	for r, origin := range rM {
-		if first || r.Compare(maxRemediation) > 0 {
+		if first || r.IsHigher(maxRemediation) {
 			maxRemediation = r
 			maxOrigin = origin
 			first = false
