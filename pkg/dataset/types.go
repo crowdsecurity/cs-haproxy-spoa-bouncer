@@ -12,7 +12,7 @@ import (
 // ErrRemediationNotFound is returned when attempting to remove a remediation that doesn't exist.
 var ErrRemediationNotFound = errors.New("remediation not found")
 
-// RemediationMap stores one origin string per remediation type (using string keys).
+// RemediationMap stores one origin string per remediation type (using Remediation as keys).
 // ID is not tracked since LAPI behavior ensures we only have the longest decision.
 //
 // LAPI behavior:
@@ -21,55 +21,53 @@ var ErrRemediationNotFound = errors.New("remediation not found")
 //   - Deletions: Delete means user wants to allow the IP - just remove the remediation entry.
 //     Duplicate deletes are safely ignored (entry already gone).
 //
-// Keys are strings (remediation names) to support custom remediations.
-// Weight comparison is done via remediation.GetWeight() when determining priority.
-type RemediationMap map[string]string
+// Keys are remediation.Remediation types, which use deduplicated string pointers internally.
+// This automatically benefits from string deduplication without extra complexity.
+// Weight comparison is done via remediation.Compare() when determining priority.
+type RemediationMap map[remediation.Remediation]string
 
 // Remove removes a remediation entry (deletion means user wants to allow the IP).
 // Returns ErrRemediationNotFound if the remediation doesn't exist (duplicate delete).
-func (rM RemediationMap) Remove(clog *log.Entry, remediationName string) error {
-	_, ok := rM[remediationName]
+func (rM RemediationMap) Remove(clog *log.Entry, r remediation.Remediation) error {
+	_, ok := rM[r]
 	if !ok {
 		// Remediation not found - duplicate delete
 		if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
-			clog.Tracef("remediation %s not found, duplicate delete", remediationName)
+			clog.Tracef("remediation %s not found, duplicate delete", r.String())
 		}
 		return ErrRemediationNotFound
 	}
 	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
-		clog.Tracef("removing remediation %s", remediationName)
+		clog.Tracef("removing remediation %s", r.String())
 	}
-	delete(rM, remediationName)
+	delete(rM, r)
 	return nil
 }
 
 // Add adds or updates a decision for the given remediation type.
 // If a decision already exists, it's overwritten (since only one decision per remediation+value).
-func (rM RemediationMap) Add(clog *log.Entry, remediationName string, origin string) {
+func (rM RemediationMap) Add(clog *log.Entry, r remediation.Remediation, origin string) {
 	if clog != nil && clog.Logger.IsLevelEnabled(log.TraceLevel) {
-		if _, exists := rM[remediationName]; exists {
-			clog.Tracef("remediation %s found, updating", remediationName)
+		if _, exists := rM[r]; exists {
+			clog.Tracef("remediation %s found, updating", r.String())
 		} else {
-			clog.Tracef("remediation %s not found, creating", remediationName)
+			clog.Tracef("remediation %s not found, creating", r.String())
 		}
 	}
-	rM[remediationName] = origin
+	rM[r] = origin
 }
 
 // GetRemediationAndOrigin returns the highest priority remediation and its origin.
-// Priority is determined by comparing weights using remediation.GetWeight().
-func (rM RemediationMap) GetRemediationAndOrigin() (string, string) {
-	var maxRemediation string
+// Priority is determined by comparing weights using remediation.Compare().
+func (rM RemediationMap) GetRemediationAndOrigin() (remediation.Remediation, string) {
+	var maxRemediation remediation.Remediation
 	var maxOrigin string
-	var maxWeight int
 	first := true
 
-	for remediationName, origin := range rM {
-		weight := remediation.GetWeight(remediationName)
-		if first || weight > maxWeight {
-			maxRemediation = remediationName
+	for r, origin := range rM {
+		if first || r.Compare(maxRemediation) > 0 {
+			maxRemediation = r
 			maxOrigin = origin
-			maxWeight = weight
 			first = false
 		}
 	}
@@ -84,8 +82,8 @@ func (rM RemediationMap) IsEmpty() bool {
 
 // HasRemediationWithOrigin checks if a specific remediation exists with the given origin.
 // Returns true if the remediation exists and has the same origin.
-func (rM RemediationMap) HasRemediationWithOrigin(remediationName string, origin string) bool {
-	existingOrigin, exists := rM[remediationName]
+func (rM RemediationMap) HasRemediationWithOrigin(r remediation.Remediation, origin string) bool {
+	existingOrigin, exists := rM[r]
 	return exists && existingOrigin == origin
 }
 
@@ -130,14 +128,14 @@ func NewCNSet(logAlias string) *CNSet {
 	return s
 }
 
-func (s *CNSet) Add(cn string, origin string, remediationName string) {
+func (s *CNSet) Add(cn string, origin string, r remediation.Remediation) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
 	// Only build logging fields if trace level is enabled
 	var valueLog *log.Entry
 	if s.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-		valueLog = s.logger.WithField("value", cn).WithField("remediation", remediationName)
+		valueLog = s.logger.WithField("value", cn).WithField("remediation", r.String())
 		valueLog.Trace("adding")
 	}
 
@@ -161,27 +159,27 @@ func (s *CNSet) Add(cn string, origin string, remediationName string) {
 		if valueLog != nil {
 			valueLog.Trace("already exists")
 		}
-		v.Add(valueLog, remediationName, origin)
+		v.Add(valueLog, r, origin)
 	} else {
 		if valueLog != nil {
 			valueLog.Trace("not found, creating new entry")
 		}
 		newItems[cn] = make(RemediationMap)
-		newItems[cn].Add(valueLog, remediationName, origin)
+		newItems[cn].Add(valueLog, r, origin)
 	}
 
 	// Atomic swap - readers see old or new, never partial
 	s.items.Store(&newItems)
 }
 
-func (s *CNSet) Remove(cn string, remediationName string) bool {
+func (s *CNSet) Remove(cn string, r remediation.Remediation) bool {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
 	// Only build logging fields if trace level is enabled
 	var valueLog *log.Entry
 	if s.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-		valueLog = s.logger.WithField("value", cn).WithField("remediation", remediationName)
+		valueLog = s.logger.WithField("value", cn).WithField("remediation", r.String())
 	}
 
 	current := s.items.Load()
@@ -213,7 +211,7 @@ func (s *CNSet) Remove(cn string, remediationName string) bool {
 
 	// Modify the cloned entry
 	// Remove returns an error if remediation doesn't exist (duplicate delete)
-	err := newItems[cn].Remove(valueLog, remediationName)
+	err := newItems[cn].Remove(valueLog, r)
 	if errors.Is(err, ErrRemediationNotFound) {
 		// Duplicate delete - remediation not found, nothing to remove
 		if valueLog != nil {
@@ -236,7 +234,7 @@ func (s *CNSet) Remove(cn string, remediationName string) bool {
 
 // Contains checks if a country code has a decision.
 // This method is completely lock-free - SPOA handlers never block.
-func (s *CNSet) Contains(toCheck string) (string, string) {
+func (s *CNSet) Contains(toCheck string) (remediation.Remediation, string) {
 	// Only build logging fields if trace level is enabled
 	var valueLog *log.Entry
 	if s.logger.Logger.IsLevelEnabled(log.TraceLevel) {
@@ -244,7 +242,7 @@ func (s *CNSet) Contains(toCheck string) (string, string) {
 		valueLog.Trace("checking value")
 	}
 
-	remediationName := "allow"
+	r := remediation.Allow
 	origin := ""
 
 	// Lock-free read via atomic pointer
@@ -254,18 +252,18 @@ func (s *CNSet) Contains(toCheck string) (string, string) {
 			if valueLog != nil {
 				valueLog.Trace("found")
 			}
-			remediationName, origin = v.GetRemediationAndOrigin()
+			r, origin = v.GetRemediationAndOrigin()
 		}
 	}
 	if valueLog != nil {
-		valueLog.Tracef("remediation: %s", remediationName)
+		valueLog.Tracef("remediation: %s", r.String())
 	}
-	return remediationName, origin
+	return r, origin
 }
 
 // HasRemediation checks if a country code has a specific remediation with a specific origin.
 // Returns true if the country code exists and has the given remediation with the given origin.
-func (s *CNSet) HasRemediation(cn string, remediationName string, origin string) bool {
+func (s *CNSet) HasRemediation(cn string, r remediation.Remediation, origin string) bool {
 	// Lock-free read via atomic pointer
 	items := s.items.Load()
 	if items == nil {
@@ -273,7 +271,7 @@ func (s *CNSet) HasRemediation(cn string, remediationName string, origin string)
 	}
 
 	if v, ok := (*items)[cn]; ok {
-		return v.HasRemediationWithOrigin(remediationName, origin)
+		return v.HasRemediationWithOrigin(r, origin)
 	}
 	return false
 }

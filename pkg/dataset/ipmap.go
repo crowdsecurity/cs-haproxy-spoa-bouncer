@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -101,7 +102,7 @@ func (m *IPMap) add(op IPAddOp) {
 				// Empty or nil - no need to clone, just create new map
 				newData = make(RemediationMap)
 			}
-			newData.Add(valueLog, op.R, op.Origin)
+			newData.Add(valueLog, remediation.FromString(op.R), op.Origin)
 			entry.data.Store(&newData)
 			return
 		}
@@ -110,7 +111,7 @@ func (m *IPMap) add(op IPAddOp) {
 	// Create new entry with data
 	// Store directly (no LoadOrStore race needed since application uses single writer)
 	newData := make(RemediationMap)
-	newData.Add(valueLog, op.R, op.Origin)
+	newData.Add(valueLog, remediation.FromString(op.R), op.Origin)
 	entry := &ipEntry{}
 	entry.data.Store(&newData)
 	ipMap.Store(op.IP, entry)
@@ -173,11 +174,12 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 
 	// Check if the remediation exists with the matching origin before removing
 	// This prevents removing decisions when the origin has been overwritten (e.g., by CAPI)
-	if !current.HasRemediationWithOrigin(op.R, op.Origin) {
+	if !current.HasRemediationWithOrigin(remediation.FromString(op.R), op.Origin) {
 		// Origin doesn't match - this decision was likely overwritten by another origin
 		// Don't remove it, as it's not the decision we're trying to delete
 		if valueLog != nil {
-			storedOrigin, exists := (*current)[op.R]
+			r := remediation.FromString(op.R)
+			storedOrigin, exists := (*current)[r]
 			if exists {
 				valueLog.Tracef("remediation exists but origin mismatch (stored: %s, requested: %s), skipping removal", storedOrigin, op.Origin)
 			} else {
@@ -194,7 +196,7 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 
 	// Remove returns an error if remediation doesn't exist (duplicate delete)
 	// We already checked origin above, so this should succeed
-	err := newData.Remove(valueLog, op.R)
+	err := newData.Remove(valueLog, remediation.FromString(op.R))
 	if errors.Is(err, ErrRemediationNotFound) {
 		// This shouldn't happen since we checked above, but handle it gracefully
 		if valueLog != nil {
@@ -225,7 +227,7 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 // Contains checks if an IP address exists in the map
 // Returns the remediation and origin if found
 // This method is completely lock-free - SPOA handlers never block
-func (m *IPMap) Contains(ip netip.Addr) (string, string, bool) {
+func (m *IPMap) Contains(ip netip.Addr) (remediation.Remediation, string, bool) {
 	var valueLog *log.Entry
 	if m.logger.Logger.IsLevelEnabled(log.TraceLevel) {
 		valueLog = m.logger.WithField("ip", ip.String())
@@ -243,23 +245,23 @@ func (m *IPMap) Contains(ip netip.Addr) (string, string, bool) {
 		if valueLog != nil {
 			valueLog.Trace("IP not found in map")
 		}
-		return "allow", "", false
+		return remediation.Allow, "", false
 	}
 
 	entry, ok := existing.(*ipEntry)
 	if !ok {
-		return "allow", "", false
+		return remediation.Allow, "", false
 	}
 
 	// Lock-free read via atomic pointer
 	data := entry.data.Load()
 	if data == nil {
-		return "allow", "", false
+		return remediation.Allow, "", false
 	}
 
 	r, origin := data.GetRemediationAndOrigin()
 	if valueLog != nil {
-		valueLog.Tracef("found IP with remediation: %s", r)
+		valueLog.Tracef("found IP with remediation: %s", r.String())
 	}
 	return r, origin, true
 }
@@ -271,7 +273,7 @@ func (m *IPMap) Count() (ipv4 int64, ipv6 int64) {
 
 // HasRemediation checks if an IP has a specific remediation with a specific origin.
 // Returns true if the IP exists and has the given remediation with the given origin.
-func (m *IPMap) HasRemediation(ip netip.Addr, remediationName string, origin string) bool {
+func (m *IPMap) HasRemediation(ip netip.Addr, r remediation.Remediation, origin string) bool {
 	// Select the appropriate map based on IP version
 	ipMap := &m.ipv4
 	if ip.Is6() {
@@ -294,5 +296,5 @@ func (m *IPMap) HasRemediation(ip netip.Addr, remediationName string, origin str
 		return false
 	}
 
-	return data.HasRemediationWithOrigin(remediationName, origin)
+	return data.HasRemediationWithOrigin(r, origin)
 }

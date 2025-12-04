@@ -185,7 +185,7 @@ type HTTPRequestData struct {
 // First stage is to check the host header and determine if the remediation from handleIpRequest is still valid
 // Second stage is to check if AppSec is enabled and then forward to the component if needed
 func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
-	r := "allow" // Default to allow
+	r := remediation.Allow // Default to allow
 	var origin string
 	shouldCountMetrics := false
 
@@ -208,7 +208,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	}
 
 	if rstring != nil {
-		r = *rstring // Use string directly
+		r = remediation.FromString(*rstring) // Convert to Remediation type
 		// Remediation came from IP check, already counted
 	}
 
@@ -218,11 +218,11 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	// defer a function that always add the remediation to the request at end of processing
 	defer func() {
-		if matchedHost == nil && r == "captcha" {
+		if matchedHost == nil && r.String() == "captcha" {
 			s.logger.Warn("remediation is captcha, no matching host was found cannot issue captcha remediation reverting to ban")
-			r = "ban"
+			r = remediation.Ban
 		}
-		req.Actions.SetVar(action.ScopeTransaction, "remediation", r)
+		req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
 
 		// Count metrics if this is the only handler (upstream proxy mode)
 		if shouldCountMetrics {
@@ -241,11 +241,11 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			// Count processed request - use WithLabelValues to avoid map allocation on hot path
 			metrics.TotalProcessedRequests.WithLabelValues(ipTypeLabel).Inc()
 
-			// Count blocked request if remediation applied (check weight > Allow weight)
+			// Count blocked request if remediation applied (not Allow)
 			// This includes Unknown, Captcha, Ban, and any custom remediations
-			if remediation.GetWeight(r) > remediation.WeightAllow {
+			if r.IsWeighted() {
 				// Label order: origin, ip_type, remediation (as defined in metrics.go)
-				metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, r).Inc()
+				metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, r.String()).Inc()
 			}
 		}
 	}()
@@ -267,7 +267,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	var httpData HTTPRequestData
 
-	switch r {
+	switch r.String() {
 	case "allow":
 		// If user has a captcha cookie but decision is Allow, generate unset cookie
 		// We don't set captcha_status, so HAProxy knows to clear the cookie
@@ -314,14 +314,14 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		r, httpData = s.handleCaptchaRemediation(req, mes, matchedHost)
 		// If remediation changed to fallback, return early
 		// If it became Allow, continue for AppSec processing
-		if r != "captcha" && r != "allow" {
+		if r.String() != "captcha" && r.String() != "allow" {
 			return
 		}
 	}
 
 	// If remediation is not allow, we dont need to create a request to send to appsec unless always send is on
 	// This includes Unknown, Captcha, Ban, and any custom remediations
-	if remediation.GetWeight(r) > remediation.WeightAllow && !matchedHost.AppSec.AlwaysSend {
+	if r.IsWeighted() && !matchedHost.AppSec.AlwaysSend {
 		return
 	}
 	// !TODO APPSEC STUFF - httpData contains parsed URL, Method, Body, Headers for reuse
@@ -433,9 +433,9 @@ func (s *Spoa) createNewSessionAndCookie(req *request.Request, mes *message.Mess
 // handleCaptchaRemediation handles all captcha-related logic including cookie validation,
 // session management, captcha validation, and status updates.
 // Returns the remediation and parsed HTTP request data for reuse in AppSec processing.
-func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Message, matchedHost *host.Host) (string, HTTPRequestData) {
+func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Message, matchedHost *host.Host) (remediation.Remediation, HTTPRequestData) {
 	if err := matchedHost.Captcha.InjectKeyValues(&req.Actions); err != nil {
-		return matchedHost.Captcha.FallbackRemediation, HTTPRequestData{}
+		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
 	}
 
 	cookieB64, err := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
@@ -471,7 +471,7 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 				"host":  matchedHost.Host,
 				"error": err,
 			}).Error("Failed to create new session and cookie, falling back to fallback remediation")
-			return matchedHost.Captcha.FallbackRemediation, HTTPRequestData{}
+			return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
 		}
 	}
 
@@ -479,7 +479,7 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 		// We should never hit this but safety net
 		// As a fallback we set the remediation to the fallback remediation
 		s.logger.Error("failed to get uuid from cookie")
-		return matchedHost.Captcha.FallbackRemediation, HTTPRequestData{}
+		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
 	}
 
 	// Get the session only if we didn't just create it (i.e., we have an existing cookie)
@@ -500,7 +500,7 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 					"host":  matchedHost.Host,
 					"error": err,
 				}).Error("Failed to create new session after reload, falling back to fallback remediation")
-				return matchedHost.Captcha.FallbackRemediation, HTTPRequestData{}
+				return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
 			}
 		}
 	}
@@ -544,7 +544,7 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 			"key":   "method",
 			"host":  matchedHost.Host,
 		}).Error("failed to read method from message, cannot validate captcha form submission - ensure HAProxy is sending the 'method' variable in crowdsec-http message")
-		return "captcha", HTTPRequestData{URL: url} // Return partial data
+		return remediation.Captcha, HTTPRequestData{URL: url} // Return partial data
 	}
 
 	headersType, err := readKeyFromMessage[string](mes, "headers")
@@ -554,7 +554,7 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 			"key":   "headers",
 			"host":  matchedHost.Host,
 		}).Error("failed to read headers from message, cannot validate captcha form submission - ensure HAProxy is sending the 'headers' variable in crowdsec-http message")
-		return "captcha", HTTPRequestData{URL: url, Method: method} // Return partial data
+		return remediation.Captcha, HTTPRequestData{URL: url, Method: method} // Return partial data
 	}
 
 	headers, err := readHeaders(*headersType)
@@ -578,7 +578,7 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 				"host":    matchedHost.Host,
 				"session": uuid,
 			}).Error("failed to read body from message, cannot validate captcha response - ensure HAProxy is sending the 'body' variable in crowdsec-http message for POST requests")
-			return "captcha", httpData // Return data without body
+			return remediation.Captcha, httpData // Return data without body
 		}
 
 		httpData.Body = body
@@ -606,15 +606,15 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 			// Delete the URI from the session so we dont redirect loop
 			ses.Delete(session.URI)
 		}
-		return "allow", httpData
+		return remediation.Allow, httpData
 	}
 
-	return "captcha", httpData
+	return remediation.Captcha, httpData
 }
 
 // getIPRemediation performs IP and geo/country remediation checks
 // Returns the final remediation after checking IP, geo, and country
-func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (string, string) {
+func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediation.Remediation, string) {
 	var origin string
 	// Check IP directly against dataset
 	r, origin, err := s.dataset.CheckIP(ip)
@@ -623,7 +623,7 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (string, st
 			"ip":    ip.String(),
 			"error": err,
 		}).Error("Failed to get IP remediation")
-		return "allow", "" // Safe default
+		return remediation.Allow, "" // Safe default
 	}
 
 	// Always try to get and set ISO code if geo database is available
@@ -642,10 +642,9 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (string, st
 				req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
 
 				// If no IP-specific remediation (Allow), check country-based remediation
-				// Compare weights instead of direct comparison
-				if remediation.GetWeight(r) == remediation.WeightAllow {
+				if r.IsEqual(remediation.Allow) {
 					cnR, cnOrigin := s.dataset.CheckCN(iso)
-					if remediation.GetWeight(cnR) > remediation.WeightAllow {
+					if cnR.IsHigher(remediation.Allow) {
 						r = cnR
 						origin = cnOrigin
 					}
@@ -682,14 +681,14 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	// Check IP directly against dataset
 	r, origin := s.getIPRemediation(req, ipAddr)
 
-	// Count blocked requests (check weight > Allow weight)
+	// Count blocked requests (not Allow)
 	// This includes Unknown, Captcha, Ban, and any custom remediations
-	if remediation.GetWeight(r) > remediation.WeightAllow {
+	if r.IsWeighted() {
 		// Label order: origin, ip_type, remediation (as defined in metrics.go)
-		metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, r).Inc()
+		metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, r.String()).Inc()
 	}
 
-	req.Actions.SetVar(action.ScopeTransaction, "remediation", r)
+	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
 }
 
 func handlerWrapper(s *Spoa) func(req *request.Request) {

@@ -40,7 +40,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 	type cnOp struct {
 		cn     string
 		origin string
-		r      string // Remediation name as string
+		r      remediation.Remediation
 	}
 
 	// Separate operations by type:
@@ -64,7 +64,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 
 		scope := strings.ToLower(*decision.Scope)
 		r := remediation.FromString(*decision.Type)
-		remediationName := r.String() // Convert to string for storage
+		remediationName := r.String() // Convert to string for operations structs
 
 		switch scope {
 		case "ip":
@@ -74,7 +74,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				continue
 			}
 			// Check for no-op: same IP, same remediation, same origin already exists
-			if d.IPMap.HasRemediation(ip, remediationName, origin) {
+			if d.IPMap.HasRemediation(ip, r, origin) {
 				// Exact duplicate - skip processing (no-op)
 				continue
 			}
@@ -83,7 +83,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				ipType = "ipv6"
 			}
 			// Check if we're overwriting an existing decision with different origin
-			if existingR, existingOrigin, found := d.IPMap.Contains(ip); found && existingR == remediationName && existingOrigin != origin {
+			if existingR, existingOrigin, found := d.IPMap.Contains(ip); found && existingR.IsEqual(r) && existingOrigin != origin {
 				// Decrement old origin's metric before incrementing new one
 				// Label order: origin, ip_type, scope (as defined in metrics.go)
 				metrics.TotalActiveDecisions.WithLabelValues(existingOrigin, ipType, "ip").Dec()
@@ -99,7 +99,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				continue
 			}
 			// Check for no-op: same prefix, same remediation, same origin already exists
-			if d.RangeSet.HasRemediation(prefix, remediationName, origin) {
+			if d.RangeSet.HasRemediation(prefix, r, origin) {
 				// Exact duplicate - skip processing (no-op)
 				continue
 			}
@@ -108,7 +108,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				ipType = "ipv6"
 			}
 			// Check if we're overwriting an existing decision with different origin
-			if existingOrigin, found := d.RangeSet.GetOriginForRemediation(prefix, remediationName); found && existingOrigin != origin {
+			if existingOrigin, found := d.RangeSet.GetOriginForRemediation(prefix, r); found && existingOrigin != origin {
 				// Decrement old origin's metric before incrementing new one
 				// Label order: origin, ip_type, scope (as defined in metrics.go)
 				metrics.TotalActiveDecisions.WithLabelValues(existingOrigin, ipType, "range").Dec()
@@ -121,17 +121,17 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 			// Clone country code to break reference to Decision struct memory
 			cn := strings.Clone(*decision.Value)
 			// Check for no-op: same country, same remediation, same origin already exists
-			if d.CNSet.HasRemediation(cn, remediationName, origin) {
+			if d.CNSet.HasRemediation(cn, r, origin) {
 				// Exact duplicate - skip processing (no-op)
 				continue
 			}
 			// Check if we're overwriting an existing decision with different origin
-			if existingR, existingOrigin := d.CNSet.Contains(cn); existingR == remediationName && existingOrigin != "" && existingOrigin != origin {
+			if existingR, existingOrigin := d.CNSet.Contains(cn); existingR.IsEqual(r) && existingOrigin != "" && existingOrigin != origin {
 				// Decrement old origin's metric before incrementing new one
 				// Label order: origin, ip_type, scope (as defined in metrics.go)
 				metrics.TotalActiveDecisions.WithLabelValues(existingOrigin, "", "country").Dec()
 			}
-			cnOps = append(cnOps, cnOp{cn: cn, origin: origin, r: remediationName})
+			cnOps = append(cnOps, cnOp{cn: cn, origin: origin, r: r})
 		default:
 			log.Errorf("Unknown scope %s", *decision.Scope)
 		}
@@ -178,15 +178,15 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	}
 	log.Infof("Processing %d deleted decisions", len(decisions))
 
-	type cnOp struct {
-		cn     string
-		r      string // Remediation name as string
-		origin string
-	}
-
 	// Separate operations by type
 	// Note: We don't pre-allocate capacity here because many decisions might be no-ops
 	// (duplicates) and would waste allocated memory. Let Go handle dynamic growth.
+	type cnOp struct {
+		cn     string
+		origin string
+		r      remediation.Remediation
+	}
+
 	ipOps := make([]IPRemoveOp, 0)
 	rangeOps := make([]BartRemoveOp, 0)
 	cnOps := make([]cnOp, 0)
@@ -230,7 +230,7 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 			rangeOps = append(rangeOps, BartRemoveOp{Prefix: prefix, R: remediationName, Origin: origin, IPType: ipType, Scope: "range"})
 		case "country":
 			// Clone country code to break reference to Decision struct memory
-			cnOps = append(cnOps, cnOp{cn: strings.Clone(*decision.Value), r: remediationName, origin: origin})
+			cnOps = append(cnOps, cnOp{cn: strings.Clone(*decision.Value), r: r, origin: origin})
 		default:
 			log.Errorf("Unknown scope %s", *decision.Scope)
 		}
@@ -292,9 +292,9 @@ func (d *DataSet) Remove(decisions models.GetDecisionsResponse) {
 	log.Infof("Finished processing %d deleted decisions", len(decisions))
 }
 
-func (d *DataSet) CheckIP(ip netip.Addr) (string, string, error) {
+func (d *DataSet) CheckIP(ip netip.Addr) (remediation.Remediation, string, error) {
 	if !ip.IsValid() {
-		return "allow", "", fmt.Errorf("invalid IP address")
+		return remediation.Allow, "", fmt.Errorf("invalid IP address")
 	}
 
 	// First check the IPMap for exact IP match (O(1) lookup)
@@ -307,23 +307,24 @@ func (d *DataSet) CheckIP(ip netip.Addr) (string, string, error) {
 	return r, origin, nil
 }
 
-func (d *DataSet) CheckCN(cn string) (string, string) {
-	return d.CNSet.Contains(cn)
+func (d *DataSet) CheckCN(cn string) (remediation.Remediation, string) {
+	r, origin := d.CNSet.Contains(cn)
+	return r, origin
 }
 
 // Helper method for CN operations (still needed for country scope)
-func (d *DataSet) addCN(cn string, origin string, remediationName string) error {
+func (d *DataSet) addCN(cn string, origin string, r remediation.Remediation) error {
 	if cn == "" {
 		return fmt.Errorf("empty CN")
 	}
-	d.CNSet.Add(cn, origin, remediationName)
+	d.CNSet.Add(cn, origin, r)
 	return nil
 }
 
-func (d *DataSet) removeCN(cn string, remediationName string) (bool, error) {
+func (d *DataSet) removeCN(cn string, r remediation.Remediation) (bool, error) {
 	if cn == "" {
 		return false, fmt.Errorf("empty CN")
 	}
-	removed := d.CNSet.Remove(cn, remediationName)
+	removed := d.CNSet.Remove(cn, r)
 	return removed, nil
 }

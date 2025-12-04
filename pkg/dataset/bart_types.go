@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/gaissmai/bart"
 	log "github.com/sirupsen/logrus"
 )
@@ -100,7 +101,7 @@ func (s *BartRangeSet) initializeBatch(operations []BartAddOp) {
 			data = RemediationMap{}
 		}
 		// Add the remediation (this handles merging if prefix already seen)
-		data.Add(valueLog, op.R, op.Origin)
+		data.Add(valueLog, remediation.FromString(op.R), op.Origin)
 		prefixMap[prefix] = data
 	}
 
@@ -145,7 +146,7 @@ func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationMap], operations [
 					valueLog.Trace("exact prefix exists, merging remediations")
 				}
 				// bart already cloned via our Cloner interface, modify directly
-				existingData.Add(valueLog, op.R, op.Origin)
+				existingData.Add(valueLog, remediation.FromString(op.R), op.Origin)
 				return existingData, false // false = don't delete
 			}
 			if valueLog != nil {
@@ -153,7 +154,7 @@ func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationMap], operations [
 			}
 			// Create new data
 			newData := make(RemediationMap)
-			newData.Add(valueLog, op.R, op.Origin)
+			newData.Add(valueLog, remediation.FromString(op.R), op.Origin)
 			return newData, false // false = don't delete
 		})
 	}
@@ -209,11 +210,12 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 
 			// Check if the remediation exists with the matching origin before removing
 			// This prevents removing decisions when the origin has been overwritten (e.g., by CAPI)
-			if !existingData.HasRemediationWithOrigin(op.R, op.Origin) {
+			if !existingData.HasRemediationWithOrigin(remediation.FromString(op.R), op.Origin) {
 				// Origin doesn't match - this decision was likely overwritten by another origin
 				// Don't remove it, as it's not the decision we're trying to delete
 				if valueLog != nil {
-					storedOrigin, exists := existingData[op.R]
+					r := remediation.FromString(op.R)
+					storedOrigin, exists := existingData[r]
 					if exists {
 						valueLog.Tracef("remediation exists but origin mismatch (stored: %s, requested: %s), skipping removal", storedOrigin, op.Origin)
 					} else {
@@ -227,7 +229,7 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 			// bart already cloned via our Cloner interface, modify directly
 			// Remove returns an error if remediation doesn't exist (duplicate delete)
 			// We already checked origin above, so this should succeed
-			err := existingData.Remove(valueLog, op.R)
+			err := existingData.Remove(valueLog, remediation.FromString(op.R))
 			if errors.Is(err, ErrRemediationNotFound) {
 				// This shouldn't happen since we checked above, but handle it gracefully
 				if valueLog != nil {
@@ -262,13 +264,13 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 // Contains checks if an IP address matches any prefix in the bart table.
 // Returns the longest matching prefix's remediation and origin.
 // This method uses lock-free reads via atomic pointer for optimal performance.
-func (s *BartRangeSet) Contains(ip netip.Addr) (string, string) {
+func (s *BartRangeSet) Contains(ip netip.Addr) (remediation.Remediation, string) {
 	// Lock-free read: atomically load the current table pointer
 	table := s.tableAtomicPtr.Load()
 
 	// Check for nil table (not yet initialized)
 	if table == nil {
-		return "allow", ""
+		return remediation.Allow, ""
 	}
 
 	// Only build logging fields if trace level is enabled
@@ -284,21 +286,21 @@ func (s *BartRangeSet) Contains(ip netip.Addr) (string, string) {
 		if valueLog != nil {
 			valueLog.Trace("no match found")
 		}
-		return "allow", ""
+		return remediation.Allow, ""
 	}
 
-	remediationResult, origin := data.GetRemediationAndOrigin()
+	r, origin := data.GetRemediationAndOrigin()
 	if valueLog != nil {
-		valueLog.Tracef("bart result: %s (data: %+v)", remediationResult, data)
+		valueLog.Tracef("bart result: %s (data: %+v)", r.String(), data)
 	}
-	return remediationResult, origin
+	return r, origin
 }
 
 // HasRemediation checks if an exact prefix has a specific remediation with a specific origin.
 // Uses Get() for exact prefix lookup (not LPM like Contains/Lookup).
 // Returns true if the exact prefix exists and has the given remediation with the given origin.
 // This method uses lock-free reads via atomic pointer for optimal performance.
-func (s *BartRangeSet) HasRemediation(prefix netip.Prefix, remediationName string, origin string) bool {
+func (s *BartRangeSet) HasRemediation(prefix netip.Prefix, r remediation.Remediation, origin string) bool {
 	// Lock-free read: atomically load the current table pointer
 	table := s.tableAtomicPtr.Load()
 
@@ -314,14 +316,14 @@ func (s *BartRangeSet) HasRemediation(prefix netip.Prefix, remediationName strin
 		return false
 	}
 
-	return data.HasRemediationWithOrigin(remediationName, origin)
+	return data.HasRemediationWithOrigin(r, origin)
 }
 
 // GetOriginForRemediation returns the origin for a specific remediation on an exact prefix.
 // Uses Get() for exact prefix lookup (not LPM).
 // Returns the origin and true if the exact prefix exists and has the given remediation, false otherwise.
 // This method uses lock-free reads via atomic pointer for optimal performance.
-func (s *BartRangeSet) GetOriginForRemediation(prefix netip.Prefix, remediationName string) (string, bool) {
+func (s *BartRangeSet) GetOriginForRemediation(prefix netip.Prefix, r remediation.Remediation) (string, bool) {
 	// Lock-free read: atomically load the current table pointer
 	table := s.tableAtomicPtr.Load()
 
@@ -338,7 +340,7 @@ func (s *BartRangeSet) GetOriginForRemediation(prefix netip.Prefix, remediationN
 	}
 
 	// Check if the remediation exists and return its origin
-	if existingOrigin, ok := data[remediationName]; ok {
+	if existingOrigin, ok := data[r]; ok {
 		return existingOrigin, true
 	}
 

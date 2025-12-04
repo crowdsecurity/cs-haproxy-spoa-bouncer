@@ -32,21 +32,45 @@ var globalRegistry = &registry{
 	weights: make(map[string]int),
 }
 
+// Built-in remediation constants (for convenience)
+// Initialized to nil, will be set in init()
+var (
+	Allow   Remediation
+	Unknown Remediation
+	Captcha Remediation
+	Ban     Remediation
+)
+
+//nolint:gochecknoinits // init() is required to initialize package-level vars after weights are set
 func init() {
 	// Initialize built-in remediations with default weights
 	globalRegistry.mu.Lock()
 	defer globalRegistry.mu.Unlock()
 
+	// Set weights FIRST before creating strings
 	globalRegistry.weights["allow"] = WeightAllow
 	globalRegistry.weights["unknown"] = WeightUnknown
 	globalRegistry.weights["captcha"] = WeightCaptcha
 	globalRegistry.weights["ban"] = WeightBan
 
 	// Pre-create deduplicated strings for built-in remediations
-	for name := range globalRegistry.weights {
-		deduped := name
-		globalRegistry.strings[name] = &deduped
-	}
+	// Must create new string variables for each to avoid pointer aliasing
+	allowStr := "allow"
+	unknownStr := "unknown"
+	captchaStr := "captcha"
+	banStr := "ban"
+
+	globalRegistry.strings["allow"] = &allowStr
+	globalRegistry.strings["unknown"] = &unknownStr
+	globalRegistry.strings["captcha"] = &captchaStr
+	globalRegistry.strings["ban"] = &banStr
+
+	// Now initialize the package-level vars directly (we already hold the lock)
+	// This avoids deadlock since New() would try to acquire the lock again
+	Allow = Remediation{name: &allowStr, weight: WeightAllow}
+	Unknown = Remediation{name: &unknownStr, weight: WeightUnknown}
+	Captcha = Remediation{name: &captchaStr, weight: WeightCaptcha}
+	Ban = Remediation{name: &banStr, weight: WeightBan}
 }
 
 // SetWeight sets a custom weight for a remediation (for configuration)
@@ -74,14 +98,6 @@ func GetWeight(name string) int {
 	return WeightUnknown
 }
 
-// Built-in remediation constants (for convenience)
-var (
-	Allow   = New("allow")
-	Unknown = New("unknown")
-	Captcha = New("captcha")
-	Ban     = New("ban")
-)
-
 // New creates a new Remediation from a string
 // Uses deduplicated string pointers to reduce allocations
 func New(name string) Remediation {
@@ -100,7 +116,12 @@ func New(name string) Remediation {
 		}
 	}
 
-	weight := globalRegistry.weights[name]
+	// Read weight from registry (may have been set in init() or SetWeight())
+	weight, ok := globalRegistry.weights[name]
+	if !ok {
+		// Weight not found, default to Unknown
+		weight = WeightUnknown
+	}
 	return Remediation{
 		name:   deduped,
 		weight: weight,
@@ -126,6 +147,27 @@ func (r Remediation) Weight() int {
 // - positive if r > other
 func (r Remediation) Compare(other Remediation) int {
 	return r.weight - other.weight
+}
+
+// IsHigher returns true if r has a higher weight than other
+func (r Remediation) IsHigher(other Remediation) bool {
+	return r.weight > other.weight
+}
+
+// IsLower returns true if r has a lower weight than other
+func (r Remediation) IsLower(other Remediation) bool {
+	return r.weight < other.weight
+}
+
+// IsEqual returns true if r has the same weight as other
+func (r Remediation) IsEqual(other Remediation) bool {
+	return r.weight == other.weight
+}
+
+// IsWeighted returns true if r is not Allow (has weight > Allow)
+// This is useful for checking if a remediation should be applied
+func (r Remediation) IsWeighted() bool {
+	return r.weight > WeightAllow
 }
 
 // FromString creates a Remediation from a string (alias for New for backward compatibility)
