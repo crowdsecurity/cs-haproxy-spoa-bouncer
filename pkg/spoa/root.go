@@ -25,6 +25,11 @@ import (
 )
 
 var (
+	// Maximum buffer sizes to prevent unbounded memory growth from outlier requests
+	// If a request exceeds these sizes, we allocate a new buffer instead of reusing the pooled one
+	maxHeadersBufferSize = 64 * 1024  // 64KB
+	maxBodyBufferSize    = 512 * 1024 // 512KB
+
 	// Message data struct pools for reducing GC pressure
 	// These pools reuse both the structs and their embedded buffers
 	httpMessageDataPool = sync.Pool{
@@ -360,26 +365,24 @@ func extractHTTPMessageData(mes *encoding.Message) *HTTPMessageData {
 			// Copy borrowed slice immediately - k.ValueBytes() returns memory owned by KV entry
 			// which will be overwritten on next iteration, so we must copy now
 			headersBytes := k.ValueBytes()
-			// Reuse existing buffer if it has enough capacity, otherwise allocate new one
-			if cap(data.HeadersCopied) < len(headersBytes) {
+			// Reuse existing buffer if it has enough capacity and isn't too large, otherwise allocate new one
+			if cap(data.HeadersCopied) < len(headersBytes) || cap(data.HeadersCopied) > maxHeadersBufferSize {
 				data.HeadersCopied = make([]byte, len(headersBytes))
 			} else {
-				// Reuse buffer, reset length and clear old data
+				// Reuse buffer, reset length (copy will overwrite old data)
 				data.HeadersCopied = data.HeadersCopied[:len(headersBytes)]
-				clear(data.HeadersCopied) // Clear any old data
 			}
 			copy(data.HeadersCopied, headersBytes)
 		case bytes.Equal(nameBytes, keyBody):
 			// Copy borrowed slice immediately - k.ValueBytes() returns memory owned by KV entry
 			// which will be overwritten on next iteration, so we must copy now
 			bodyBytes := k.ValueBytes()
-			// Reuse existing buffer if it has enough capacity, otherwise allocate new one
-			if cap(data.BodyCopied) < len(bodyBytes) {
+			// Reuse existing buffer if it has enough capacity and isn't too large, otherwise allocate new one
+			if cap(data.BodyCopied) < len(bodyBytes) || cap(data.BodyCopied) > maxBodyBufferSize {
 				data.BodyCopied = make([]byte, len(bodyBytes))
 			} else {
-				// Reuse buffer, reset length and clear old data
+				// Reuse buffer, reset length (copy will overwrite old data)
 				data.BodyCopied = data.BodyCopied[:len(bodyBytes)]
-				clear(data.BodyCopied) // Clear any old data
 			}
 			copy(data.BodyCopied, bodyBytes)
 		default:
@@ -844,8 +847,7 @@ func (s *Spoa) handleIPRequest(ctx context.Context, writer *encoding.ActionWrite
 			"error": err,
 			"key":   "src-ip",
 		}).Error("failed to read src-ip from message, cannot check IP remediation - ensure HAProxy is sending the 'src' variable as 'src-ip' in crowdsec-ip message")
-		// Return struct to pool on error
-		ipMessageDataPool.Put(msgData)
+		// Note: extractIPMessageData already returns struct to pool on error, so msgData is nil here
 		return
 	}
 	// Return struct to pool when done
