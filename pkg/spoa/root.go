@@ -231,14 +231,6 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// HTTPRequestData holds parsed HTTP request data for reuse across handlers
-type HTTPRequestData struct {
-	URL     *string
-	Method  *string
-	Body    *[]byte
-	Headers http.Header
-}
-
 // HTTPMessageData holds all KV entries from crowdsec-http message
 // Extracted in a single pass for efficiency
 type HTTPMessageData struct {
@@ -373,7 +365,8 @@ func extractHTTPMessageData(mes *encoding.Message) *HTTPMessageData {
 			// which will be overwritten on next iteration, so we must copy now
 			headersBytes := k.ValueBytes()
 			// Reuse existing buffer if it has enough capacity and isn't too large, otherwise allocate new one
-			if cap(data.HeadersCopied) < len(headersBytes) || cap(data.HeadersCopied) > maxHeadersBufferSize {
+			// Use >= to handle the edge case where capacity exactly equals maxHeadersBufferSize
+			if cap(data.HeadersCopied) < len(headersBytes) || cap(data.HeadersCopied) >= maxHeadersBufferSize {
 				data.HeadersCopied = make([]byte, len(headersBytes))
 			} else {
 				// Reuse buffer, reset length (copy will overwrite old data)
@@ -385,7 +378,8 @@ func extractHTTPMessageData(mes *encoding.Message) *HTTPMessageData {
 			// which will be overwritten on next iteration, so we must copy now
 			bodyBytes := k.ValueBytes()
 			// Reuse existing buffer if it has enough capacity and isn't too large, otherwise allocate new one
-			if cap(data.BodyCopied) < len(bodyBytes) || cap(data.BodyCopied) > maxBodyBufferSize {
+			// Use >= to handle the edge case where capacity exactly equals maxBodyBufferSize
+			if cap(data.BodyCopied) < len(bodyBytes) || cap(data.BodyCopied) >= maxBodyBufferSize {
 				data.BodyCopied = make([]byte, len(bodyBytes))
 			} else {
 				// Reuse buffer, reset length (copy will overwrite old data)
@@ -482,8 +476,6 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		return
 	}
 
-	var httpData HTTPRequestData
-
 	switch r {
 	case remediation.Allow:
 		// If user has a captcha cookie but decision is Allow, generate unset cookie
@@ -511,25 +503,11 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 			_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", unsetCookie.String())
 			// Note: We deliberately don't set captcha_status here
 		}
-		// Build HTTP data from extracted message data
-		httpData = HTTPRequestData{
-			URL:     msgData.URL,
-			Method:  msgData.Method,
-			Body:    &msgData.BodyCopied,
-			Headers: msgData.HeadersParsed,
-		}
 	case remediation.Ban:
 		//Handle ban
 		matchedHost.Ban.InjectKeyValues(writer)
-		// Build HTTP data from extracted message data
-		httpData = HTTPRequestData{
-			URL:     msgData.URL,
-			Method:  msgData.Method,
-			Body:    &msgData.BodyCopied,
-			Headers: msgData.HeadersParsed,
-		}
 	case remediation.Captcha:
-		r, httpData = s.handleCaptchaRemediation(ctx, writer, msgData, matchedHost)
+		r = s.handleCaptchaRemediation(ctx, writer, msgData, matchedHost)
 		// If remediation changed to fallback, return early
 		// If it became Allow, continue for AppSec processing
 		if r != remediation.Captcha && r != remediation.Allow {
@@ -541,15 +519,9 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	if r > remediation.Unknown && !matchedHost.AppSec.AlwaysSend {
 		return
 	}
-	// !TODO APPSEC STUFF - httpData contains parsed URL, Method, Body, Headers for reuse
-	_ = httpData // Reserved for AppSec implementation
-
-	// request, err := http.NewRequest(httpData.Method, httpData.URL, strings.NewReader(httpData.Body))
-	// if err != nil {
-	// 	log.Printf("failed to create request: %v", err)
-	// 	return
-	// }
-	// request.Header = httpData.Headers
+	// !TODO APPSEC STUFF - msgData contains parsed URL, Method, Body, Headers for reuse
+	// When AppSec is implemented, use msgData directly (URL, Method, BodyCopied, HeadersParsed)
+	// Note: msgData is still valid here since defer hasn't run yet, but AppSec should copy what it needs
 }
 
 // createNewSessionAndCookie creates a new session, generates a cookie, and sets it in the request.
@@ -592,10 +564,10 @@ func (s *Spoa) createNewSessionAndCookie(_ context.Context, writer *encoding.Act
 
 // handleCaptchaRemediation handles all captcha-related logic including cookie validation,
 // session management, captcha validation, and status updates.
-// Returns the remediation and parsed HTTP request data for reuse in AppSec processing.
-func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (remediation.Remediation, HTTPRequestData) {
+// Returns the remediation.
+func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) remediation.Remediation {
 	if err := matchedHost.Captcha.InjectKeyValues(writer); err != nil {
-		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
+		return remediation.FromString(matchedHost.Captcha.FallbackRemediation)
 	}
 
 	uuid := ""
@@ -625,7 +597,7 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 				"host":  matchedHost.Host,
 				"error": err,
 			}).Error("Failed to create new session and cookie, falling back to fallback remediation")
-			return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
+			return remediation.FromString(matchedHost.Captcha.FallbackRemediation)
 		}
 	}
 
@@ -633,7 +605,7 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 		// We should never hit this but safety net
 		// As a fallback we set the remediation to the fallback remediation
 		s.logger.Error("failed to get uuid from cookie")
-		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
+		return remediation.FromString(matchedHost.Captcha.FallbackRemediation)
 	}
 
 	// Get the session only if we didn't just create it (i.e., we have an existing cookie)
@@ -654,7 +626,7 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 					"host":  matchedHost.Host,
 					"error": err,
 				}).Error("Failed to create new session after reload, falling back to fallback remediation")
-				return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
+				return remediation.FromString(matchedHost.Captcha.FallbackRemediation)
 			}
 		}
 	}
@@ -693,7 +665,7 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 			}
 		}
 
-		// Check url is not nil before dereferencing
+		// msgData.URL is guaranteed to be non-nil here (checked at line 649)
 		if (storedURL == "" || *msgData.URL != storedURL) && !strings.HasSuffix(*msgData.URL, ".ico") {
 			s.logger.WithField("session", uuid).Debugf("updating stored url %s", *msgData.URL)
 			ses.Set(session.URI, *msgData.URL)
@@ -704,13 +676,7 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 		s.logger.WithFields(log.Fields{
 			"host": matchedHost.Host,
 		}).Error("failed to read method from message, cannot validate captcha form submission - ensure HAProxy is sending the 'method' variable in crowdsec-http message")
-		return remediation.Captcha, HTTPRequestData{URL: msgData.URL} // Return partial data
-	}
-
-	httpData := HTTPRequestData{
-		URL:     msgData.URL,
-		Method:  msgData.Method,
-		Headers: msgData.HeadersParsed,
+		return remediation.Captcha
 	}
 
 	// Check if the request is a captcha validation request
@@ -720,12 +686,10 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 				"host":    matchedHost.Host,
 				"session": uuid,
 			}).Error("failed to read body from message, cannot validate captcha response - ensure HAProxy is sending the 'body' variable in crowdsec-http message for POST requests")
-			return remediation.Captcha, httpData // Return data without body
+			return remediation.Captcha
 		}
 
-		httpData.Body = &msgData.BodyCopied
-
-		// Validate captcha
+		// Validate captcha (use msgData.BodyCopied directly since it's synchronous and msgData is still valid)
 		isValid, err := matchedHost.Captcha.Validate(ctx, uuid, string(msgData.BodyCopied))
 		if err != nil {
 			s.logger.WithFields(log.Fields{
@@ -754,10 +718,10 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 				ses.Delete(session.URI)
 			}
 		}
-		return remediation.Allow, httpData
+		return remediation.Allow
 	}
 
-	return remediation.Captcha, httpData
+	return remediation.Captcha
 }
 
 // getIPRemediation performs IP and geo/country remediation checks
