@@ -159,9 +159,11 @@ func (r Remediation) IsLower(other Remediation) bool {
 	return r.weight < other.weight
 }
 
-// IsEqual returns true if r has the same weight as other
+// IsEqual returns true if r represents the same remediation as other.
+// This compares both the name pointer (for deduplicated identity) and weight.
+// Two remediations are equal if they have the same name pointer and weight.
 func (r Remediation) IsEqual(other Remediation) bool {
-	return r.weight == other.weight
+	return r.name == other.name && r.weight == other.weight
 }
 
 // IsWeighted returns true if r is not Allow (has weight > Allow)

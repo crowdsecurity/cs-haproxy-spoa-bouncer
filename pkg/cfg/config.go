@@ -37,10 +37,28 @@ type BouncerConfig struct {
 	ListenUnix       string                  `yaml:"listen_unix"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
 	PprofConfig      PprofConfig             `yaml:"pprof"`
-	// RemediationWeights allows users to configure custom weights for remediations
-	// Format: map[string]int where key is remediation name and value is weight
-	// Built-in defaults: allow=0, unknown=1, captcha=10, ban=20
-	// Custom remediations can slot between these values
+	// RemediationWeights allows users to configure custom weights for remediations.
+	//
+	// Format:
+	//   remediation_weights:
+	//     <remediation_name>: <weight>
+	//
+	// Example:
+	//   remediation_weights:
+	//     mfa: 15   # slots between captcha (10) and ban (20)
+	//
+	// Valid weight range: integer values >= 0. Lower values are less severe; higher values are more severe.
+	// Recommended: Use values between 0 and 100.
+	//
+	// Built-in defaults:
+	//   allow=0, unknown=1, captcha=10, ban=20
+	//
+	// Custom weights override or supplement built-in remediations. If a custom remediation is defined,
+	// its weight will be used for ordering and severity. Custom remediations can slot between built-in
+	// ones by choosing an appropriate weight value.
+	//
+	// Note: Custom weights for built-in remediations (allow, unknown, captcha, ban) must be set
+	// before package initialization. After init(), package-level constants already have cached weights.
 	RemediationWeights map[string]int `yaml:"remediation_weights,omitempty"`
 }
 

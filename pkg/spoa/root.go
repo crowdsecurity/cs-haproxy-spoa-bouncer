@@ -314,11 +314,13 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		r, httpData = s.handleCaptchaRemediation(req, mes, matchedHost)
 		// If remediation changed to fallback, return early
 		// If it became Allow, continue for AppSec processing
+		// Note: Direct struct comparison works because Remediation is comparable
 		if r != remediation.Captcha && r != remediation.Allow {
 			return
 		}
 	default:
-		// Unknown or custom remediation - parse HTTP data for AppSec processing
+		// Unknown or custom remediation: currently, only HTTP data is parsed for AppSec processing.
+		// If a custom remediation requires special handling (like Ban), this must be implemented explicitly.
 		httpData = parseHTTPData(s.logger, mes)
 	}
 
