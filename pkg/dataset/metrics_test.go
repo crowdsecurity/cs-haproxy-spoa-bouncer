@@ -746,7 +746,7 @@ func TestMetrics_NoOp_DuplicateDecisions(t *testing.T) {
 		r, foundOrigin, found := dataSet.IPMap.Contains(ip)
 		assert.True(t, found, "IP should still exist")
 		assert.Equal(t, origin, foundOrigin, "origin should match")
-		assert.Equal(t, remediation.Ban.String(), r, "remediation should be ban")
+		assert.True(t, r.IsEqual(remediation.Ban), "remediation should be ban")
 	})
 
 	t.Run("Duplicate range decision is no-op", func(t *testing.T) {
@@ -775,7 +775,7 @@ func TestMetrics_NoOp_DuplicateDecisions(t *testing.T) {
 		require.NoError(t, err)
 		r, foundOrigin := dataSet.RangeSet.Contains(testIP)
 		assert.Equal(t, origin, foundOrigin, "origin should match")
-		assert.Equal(t, remediation.Ban.String(), r, "remediation should be ban")
+		assert.True(t, r.IsEqual(remediation.Ban), "remediation should be ban")
 	})
 
 	t.Run("Duplicate country decision is no-op", func(t *testing.T) {
@@ -802,7 +802,7 @@ func TestMetrics_NoOp_DuplicateDecisions(t *testing.T) {
 		// Verify decision still exists
 		r, foundOrigin := dataSet.CNSet.Contains("US")
 		assert.Equal(t, origin, foundOrigin, "origin should match")
-		assert.Equal(t, remediation.Ban.String(), r, "remediation should be ban")
+		assert.True(t, r.IsEqual(remediation.Ban), "remediation should be ban")
 	})
 
 	t.Run("Same IP different remediation is not no-op", func(t *testing.T) {
