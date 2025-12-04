@@ -890,10 +890,8 @@ func readHeaders(headers []byte) (http.Header, error) {
 		return nil, fmt.Errorf("no headers found")
 	}
 
-	// Split by \r\n using bytes.Split to avoid converting entire slice to string
-	headerLines := bytes.Split(headers, []byte("\r\n"))
-
-	for _, headerLine := range headerLines {
+	// Split by \r\n using bytes.SplitSeq to avoid allocating a slice upfront
+	for headerLine := range bytes.SplitSeq(headers, []byte("\r\n")) {
 		if len(headerLine) == 0 {
 			continue
 		}
