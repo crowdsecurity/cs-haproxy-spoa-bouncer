@@ -68,7 +68,6 @@ var (
 type Spoa struct {
 	ListenAddr   net.Listener
 	ListenSocket net.Listener
-	ctx          context.Context
 	logger       *log.Entry
 	// Direct access to shared data (no IPC needed)
 	dataset        *dataset.DataSet
@@ -164,7 +163,6 @@ func (s *Spoa) HandleSPOE(ctx context.Context, writer *encoding.ActionWriter, me
 }
 
 func (s *Spoa) Serve(ctx context.Context) error {
-	s.ctx = ctx
 	serverError := make(chan error, 2)
 
 	startServer := func(listener net.Listener) {
@@ -307,7 +305,14 @@ func addrPtr(a netip.Addr) *netip.Addr {
 // Uses byte slice comparisons to avoid string allocations for key matching
 // Returns a pooled struct that should be returned to pool via returnToPool()
 func extractHTTPMessageData(mes *encoding.Message) *HTTPMessageData {
-	data := httpMessageDataPool.Get().(*HTTPMessageData)
+	data, ok := httpMessageDataPool.Get().(*HTTPMessageData)
+	if !ok {
+		// This should never happen, but handle gracefully
+		data = &HTTPMessageData{
+			HeadersCopied: make([]byte, 0, 2048),
+			BodyCopied:    make([]byte, 0, 4096),
+		}
+	}
 	data.reset() // Clear any previous data
 	k := encoding.AcquireKVEntry()
 	defer encoding.ReleaseKVEntry(k)
@@ -539,7 +544,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 
 // createNewSessionAndCookie creates a new session, generates a cookie, and sets it in the request.
 // Returns the session, uuid, and an error if any step fails.
-func (s *Spoa) createNewSessionAndCookie(ctx context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (*session.Session, string, error) {
+func (s *Spoa) createNewSessionAndCookie(_ context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (*session.Session, string, error) {
 	var ssl *bool
 	if msgData.SSL != nil {
 		ssl = msgData.SSL
@@ -650,7 +655,11 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 	if captchaStatusVal == nil {
 		captchaStatus = captcha.Pending // Assume pending if not set
 	} else {
-		captchaStatus = captchaStatusVal.(string)
+		var ok bool
+		captchaStatus, ok = captchaStatusVal.(string)
+		if !ok {
+			captchaStatus = captcha.Pending // Fallback to pending if type assertion fails
+		}
 	}
 
 	// Set the captcha status in the transaction for HAProxy
@@ -667,7 +676,11 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 		storedURLVal := ses.Get(session.URI)
 		storedURL := ""
 		if storedURLVal != nil {
-			storedURL = storedURLVal.(string)
+			var ok bool
+			storedURL, ok = storedURLVal.(string)
+			if !ok {
+				storedURL = ""
+			}
 		}
 
 		// Check url is not nil before dereferencing
@@ -703,7 +716,7 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 		httpData.Body = &msgData.BodyCopied
 
 		// Validate captcha
-		isValid, err := matchedHost.Captcha.Validate(context.Background(), uuid, string(msgData.BodyCopied))
+		isValid, err := matchedHost.Captcha.Validate(ctx, uuid, string(msgData.BodyCopied))
 		if err != nil {
 			s.logger.WithFields(log.Fields{
 				"host":    matchedHost.Host,
@@ -720,7 +733,10 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 	if captchaStatus == captcha.Valid {
 		storedURLVal := ses.Get(session.URI)
 		if storedURLVal != nil {
-			storedURL := storedURLVal.(string)
+			storedURL, ok := storedURLVal.(string)
+			if !ok {
+				storedURL = ""
+			}
 			if storedURL != "" {
 				s.logger.Debug("redirecting to: ", storedURL)
 				_ = writer.SetString(encoding.VarScopeTransaction, "redirect", storedURL)
@@ -736,7 +752,7 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 
 // getIPRemediation performs IP and geo/country remediation checks
 // Returns the final remediation after checking IP, geo, and country
-func (s *Spoa) getIPRemediation(ctx context.Context, writer *encoding.ActionWriter, ip netip.Addr) (remediation.Remediation, string) {
+func (s *Spoa) getIPRemediation(_ context.Context, writer *encoding.ActionWriter, ip netip.Addr) (remediation.Remediation, string) {
 	var origin string
 	// Check IP directly against dataset
 	r, origin, err := s.dataset.CheckIP(ip)
@@ -781,7 +797,11 @@ func (s *Spoa) getIPRemediation(ctx context.Context, writer *encoding.ActionWrit
 // extractIPMessageData extracts all KV entries from crowdsec-ip message in a single pass
 // Returns a pooled struct that should be returned to pool via returnToPool()
 func extractIPMessageData(mes *encoding.Message) (*IPMessageData, error) {
-	data := ipMessageDataPool.Get().(*IPMessageData)
+	data, ok := ipMessageDataPool.Get().(*IPMessageData)
+	if !ok {
+		// This should never happen, but handle gracefully
+		data = &IPMessageData{}
+	}
 	// Reset fields
 	data.SrcIP = netip.Addr{}
 	data.SrcPort = nil
@@ -859,50 +879,10 @@ func (s *Spoa) handleIPRequest(ctx context.Context, writer *encoding.ActionWrite
 	_ = writer.SetString(encoding.VarScopeTransaction, "remediation", r.String())
 }
 
-// readKeyFromMessage reads a key from a message and returns it as the type T
-// Uses zero-allocation iterator pattern with KV entry pooling
 var (
 	ErrMessageKeyNotFound     = errors.New("message key not found")
 	ErrMessageKeyTypeMismatch = errors.New("message key type mismatch")
 )
-
-func readKeyFromMessage[T string | netip.Addr | bool | []byte](msg *encoding.Message, key string) (*T, error) {
-	k := encoding.AcquireKVEntry()
-	defer encoding.ReleaseKVEntry(k)
-
-	for msg.KV.Next(k) {
-		if !k.NameEquals(key) {
-			continue
-		}
-
-		var result T
-		switch target := any(&result).(type) {
-		case *string:
-			val := string(k.ValueBytes())
-			*target = val
-			return &result, nil
-		case *netip.Addr:
-			val := k.ValueAddr()
-			*target = val
-			return &result, nil
-		case *bool:
-			val := k.ValueBool()
-			*target = val
-			return &result, nil
-		case *[]byte:
-			// Copy bytes as they're borrowed from the KV entry
-			valBytes := k.ValueBytes()
-			val := make([]byte, len(valBytes))
-			copy(val, valBytes)
-			*target = val
-			return &result, nil
-		default:
-			return nil, fmt.Errorf("unsupported type for readKeyFromMessage")
-		}
-	}
-
-	return nil, fmt.Errorf("%w: %s", ErrMessageKeyNotFound, key)
-}
 
 func readHeaders(headers []byte) (http.Header, error) {
 	h := http.Header{}
