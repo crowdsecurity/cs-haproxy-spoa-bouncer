@@ -15,7 +15,7 @@ import (
 type BartAddOp struct {
 	Prefix netip.Prefix
 	Origin string
-	R      remediation.Remediation
+	R      string // Remediation name as string
 	IPType string
 	Scope  string
 }
@@ -23,7 +23,7 @@ type BartAddOp struct {
 // BartRemoveOp represents a single prefix removal operation for batch processing
 type BartRemoveOp struct {
 	Prefix netip.Prefix
-	R      remediation.Remediation
+	R      string // Remediation name as string
 	Origin string
 	IPType string
 	Scope  string
@@ -91,7 +91,7 @@ func (s *BartRangeSet) initializeBatch(operations []BartAddOp) {
 		// Only build logging fields if trace level is enabled
 		var valueLog *log.Entry
 		if s.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R.String())
+			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R)
 			valueLog.Trace("initial load: collecting prefix operations")
 		}
 
@@ -101,7 +101,7 @@ func (s *BartRangeSet) initializeBatch(operations []BartAddOp) {
 			data = RemediationMap{}
 		}
 		// Add the remediation (this handles merging if prefix already seen)
-		data.Add(valueLog, op.R, op.Origin)
+		data.Add(valueLog, remediation.FromString(op.R), op.Origin)
 		prefixMap[prefix] = data
 	}
 
@@ -134,7 +134,7 @@ func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationMap], operations [
 		// Only build logging fields if trace level is enabled
 		var valueLog *log.Entry
 		if s.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R.String())
+			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R)
 			valueLog.Trace("adding to bart trie")
 		}
 
@@ -146,7 +146,7 @@ func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationMap], operations [
 					valueLog.Trace("exact prefix exists, merging remediations")
 				}
 				// bart already cloned via our Cloner interface, modify directly
-				existingData.Add(valueLog, op.R, op.Origin)
+				existingData.Add(valueLog, remediation.FromString(op.R), op.Origin)
 				return existingData, false // false = don't delete
 			}
 			if valueLog != nil {
@@ -154,7 +154,7 @@ func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationMap], operations [
 			}
 			// Create new data
 			newData := make(RemediationMap)
-			newData.Add(valueLog, op.R, op.Origin)
+			newData.Add(valueLog, remediation.FromString(op.R), op.Origin)
 			return newData, false // false = don't delete
 		})
 	}
@@ -193,7 +193,7 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 		// Only build logging fields if trace level is enabled
 		var valueLog *log.Entry
 		if s.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R.String())
+			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R)
 			valueLog.Trace("removing from bart trie")
 		}
 
@@ -210,11 +210,12 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 
 			// Check if the remediation exists with the matching origin before removing
 			// This prevents removing decisions when the origin has been overwritten (e.g., by CAPI)
-			if !existingData.HasRemediationWithOrigin(op.R, op.Origin) {
+			if !existingData.HasRemediationWithOrigin(remediation.FromString(op.R), op.Origin) {
 				// Origin doesn't match - this decision was likely overwritten by another origin
 				// Don't remove it, as it's not the decision we're trying to delete
 				if valueLog != nil {
-					storedOrigin, exists := existingData[op.R]
+					r := remediation.FromString(op.R)
+					storedOrigin, exists := existingData[r]
 					if exists {
 						valueLog.Tracef("remediation exists but origin mismatch (stored: %s, requested: %s), skipping removal", storedOrigin, op.Origin)
 					} else {
@@ -228,7 +229,7 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 			// bart already cloned via our Cloner interface, modify directly
 			// Remove returns an error if remediation doesn't exist (duplicate delete)
 			// We already checked origin above, so this should succeed
-			err := existingData.Remove(valueLog, op.R)
+			err := existingData.Remove(valueLog, remediation.FromString(op.R))
 			if errors.Is(err, ErrRemediationNotFound) {
 				// This shouldn't happen since we checked above, but handle it gracefully
 				if valueLog != nil {
@@ -288,11 +289,11 @@ func (s *BartRangeSet) Contains(ip netip.Addr) (remediation.Remediation, string)
 		return remediation.Allow, ""
 	}
 
-	remediationResult, origin := data.GetRemediationAndOrigin()
+	r, origin := data.GetRemediationAndOrigin()
 	if valueLog != nil {
-		valueLog.Tracef("bart result: %s (data: %+v)", remediationResult.String(), data)
+		valueLog.Tracef("bart result: %s (data: %+v)", r.String(), data)
 	}
-	return remediationResult, origin
+	return r, origin
 }
 
 // HasRemediation checks if an exact prefix has a specific remediation with a specific origin.

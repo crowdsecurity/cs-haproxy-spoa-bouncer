@@ -174,13 +174,13 @@ func TestCorrectness(t *testing.T) {
 			continue
 		}
 
-		// Basic sanity check - result should be valid
-		if result < remediation.Allow {
+		// Basic sanity check - result should be valid (not less than Allow weight)
+		if result.Compare(remediation.Allow) < 0 {
 			t.Errorf("Invalid result for IP %s: %v", testIP.String(), result)
 		}
 
-		// Origin should be non-empty if we have a match
-		if result > remediation.Allow && origin == "" {
+		// Origin should be non-empty if we have a match (result > Allow)
+		if result.Compare(remediation.Allow) > 0 && origin == "" {
 			t.Errorf("Empty origin for IP %s with result %v", testIP.String(), result)
 		}
 	}
@@ -192,38 +192,38 @@ func TestLongestPrefixMatch(t *testing.T) {
 
 	// Add individual IP to IPMap and ranges to RangeSet
 	dataset.IPMap.AddBatch([]IPAddOp{
-		{IP: netip.MustParseAddr("192.168.1.1"), Origin: "test", R: remediation.Allow, IPType: "ipv4"},
+		{IP: netip.MustParseAddr("192.168.1.1"), Origin: "test", R: remediation.Allow.String(), IPType: "ipv4"},
 	})
 	dataset.RangeSet.AddBatch([]BartAddOp{
-		{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Origin: "test", R: remediation.Ban, IPType: "ipv4", Scope: "range"},
-		{Prefix: netip.MustParsePrefix("192.168.1.0/24"), Origin: "test", R: remediation.Captcha, IPType: "ipv4", Scope: "range"},
+		{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Origin: "test", R: remediation.Ban.String(), IPType: "ipv4", Scope: "range"},
+		{Prefix: netip.MustParsePrefix("192.168.1.0/24"), Origin: "test", R: remediation.Captcha.String(), IPType: "ipv4", Scope: "range"},
 	})
 
 	// Test that individual IP from IPMap wins (checked first before RangeSet)
 	ip1 := netip.MustParseAddr("192.168.1.1")
 	result, _, _ := dataset.CheckIP(ip1)
-	if result != remediation.Allow {
+	if !result.IsEqual(remediation.Allow) {
 		t.Errorf("Expected Allow for 192.168.1.1 (from IPMap), got %v", result)
 	}
 
 	// Test that we get the LPM from RangeSet (Captcha /24 wins over Ban /16)
 	ip2 := netip.MustParseAddr("192.168.1.2")
 	result, _, _ = dataset.CheckIP(ip2)
-	if result != remediation.Captcha {
+	if !result.IsEqual(remediation.Captcha) {
 		t.Errorf("Expected Captcha for 192.168.1.2 (LPM from RangeSet), got %v", result)
 	}
 
 	// Test that we get the broadest match from RangeSet
 	ip3 := netip.MustParseAddr("192.168.2.1")
 	result, _, _ = dataset.CheckIP(ip3)
-	if result != remediation.Ban {
+	if !result.IsEqual(remediation.Ban) {
 		t.Errorf("Expected Ban for 192.168.2.1 (from RangeSet), got %v", result)
 	}
 
 	// Test that we get no match
 	ip4 := netip.MustParseAddr("10.0.0.1")
 	result, _, _ = dataset.CheckIP(ip4)
-	if result != remediation.Allow {
+	if !result.IsEqual(remediation.Allow) {
 		t.Errorf("Expected Allow for 10.0.0.1 (no match), got %v", result)
 	}
 }
@@ -354,7 +354,7 @@ func BenchmarkHybridVsBartOnly(b *testing.B) {
 				ops = append(ops, BartAddOp{
 					Prefix: netip.PrefixFrom(ip, prefixLen),
 					Origin: *d.Origin,
-					R:      remediation.Ban,
+					R:      remediation.Ban.String(),
 					IPType: "ipv4",
 					Scope:  "ip",
 				})
@@ -384,13 +384,13 @@ func BenchmarkLookupHybrid(b *testing.B) {
 			byte(i % 256),
 		})
 		dataset.IPMap.AddBatch([]IPAddOp{
-			{IP: ip, Origin: "test", R: remediation.Ban, IPType: "ipv4"},
+			{IP: ip, Origin: "test", R: remediation.Ban.String(), IPType: "ipv4"},
 		})
 	}
 
 	// Add some ranges to RangeSet
 	dataset.RangeSet.AddBatch([]BartAddOp{
-		{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Origin: "test", R: remediation.Ban, IPType: "ipv4", Scope: "range"},
+		{Prefix: netip.MustParsePrefix("192.168.0.0/16"), Origin: "test", R: remediation.Ban.String(), IPType: "ipv4", Scope: "range"},
 	})
 
 	// Test IPs - some in IPMap, some in RangeSet, some not found

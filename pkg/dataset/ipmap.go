@@ -50,14 +50,14 @@ func NewIPMap(logAlias string) *IPMap {
 type IPAddOp struct {
 	IP     netip.Addr
 	Origin string
-	R      remediation.Remediation
+	R      string // Remediation name as string
 	IPType string
 }
 
 // IPRemoveOp represents a remove operation for an individual IP
 type IPRemoveOp struct {
 	IP     netip.Addr
-	R      remediation.Remediation
+	R      string // Remediation name as string
 	Origin string
 	IPType string
 }
@@ -78,7 +78,7 @@ func (m *IPMap) AddBatch(operations []IPAddOp) {
 func (m *IPMap) add(op IPAddOp) {
 	var valueLog *log.Entry
 	if m.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R.String())
+		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R)
 		valueLog.Trace("adding IP to map")
 	}
 
@@ -102,7 +102,7 @@ func (m *IPMap) add(op IPAddOp) {
 				// Empty or nil - no need to clone, just create new map
 				newData = make(RemediationMap)
 			}
-			newData.Add(valueLog, op.R, op.Origin)
+			newData.Add(valueLog, remediation.FromString(op.R), op.Origin)
 			entry.data.Store(&newData)
 			return
 		}
@@ -111,7 +111,7 @@ func (m *IPMap) add(op IPAddOp) {
 	// Create new entry with data
 	// Store directly (no LoadOrStore race needed since application uses single writer)
 	newData := make(RemediationMap)
-	newData.Add(valueLog, op.R, op.Origin)
+	newData.Add(valueLog, remediation.FromString(op.R), op.Origin)
 	entry := &ipEntry{}
 	entry.data.Store(&newData)
 	ipMap.Store(op.IP, entry)
@@ -139,7 +139,7 @@ func (m *IPMap) RemoveBatch(operations []IPRemoveOp) []*IPRemoveOp {
 func (m *IPMap) remove(op IPRemoveOp) bool {
 	var valueLog *log.Entry
 	if m.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R.String())
+		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R)
 		valueLog.Trace("removing IP from map")
 	}
 
@@ -174,11 +174,12 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 
 	// Check if the remediation exists with the matching origin before removing
 	// This prevents removing decisions when the origin has been overwritten (e.g., by CAPI)
-	if !current.HasRemediationWithOrigin(op.R, op.Origin) {
+	if !current.HasRemediationWithOrigin(remediation.FromString(op.R), op.Origin) {
 		// Origin doesn't match - this decision was likely overwritten by another origin
 		// Don't remove it, as it's not the decision we're trying to delete
 		if valueLog != nil {
-			storedOrigin, exists := (*current)[op.R]
+			r := remediation.FromString(op.R)
+			storedOrigin, exists := (*current)[r]
 			if exists {
 				valueLog.Tracef("remediation exists but origin mismatch (stored: %s, requested: %s), skipping removal", storedOrigin, op.Origin)
 			} else {
@@ -195,7 +196,7 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 
 	// Remove returns an error if remediation doesn't exist (duplicate delete)
 	// We already checked origin above, so this should succeed
-	err := newData.Remove(valueLog, op.R)
+	err := newData.Remove(valueLog, remediation.FromString(op.R))
 	if errors.Is(err, ErrRemediationNotFound) {
 		// This shouldn't happen since we checked above, but handle it gracefully
 		if valueLog != nil {
