@@ -24,6 +24,12 @@ var ErrRemediationNotFound = errors.New("remediation not found")
 // Keys are remediation.Remediation types, which use deduplicated string pointers internally.
 // This automatically benefits from string deduplication without extra complexity.
 // Weight comparison is done via remediation.Compare() when determining priority.
+//
+// IMPORTANT: Map key comparison uses Go's == operator which compares all struct fields,
+// including the name pointer. For map lookups to work correctly, all Remediation instances
+// MUST be created via remediation.New() or remediation.FromString() to ensure proper
+// deduplication. Direct struct initialization will result in different pointers and
+// cause map lookups to fail.
 type RemediationMap map[remediation.Remediation]string
 
 // Remove removes a remediation entry (deletion means user wants to allow the IP).

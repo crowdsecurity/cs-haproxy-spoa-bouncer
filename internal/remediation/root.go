@@ -81,8 +81,9 @@ func SetWeight(name string, weight int) {
 	globalRegistry.weights[name] = weight
 	// Ensure deduplicated string exists
 	if _, exists := globalRegistry.strings[name]; !exists {
-		deduped := name
-		globalRegistry.strings[name] = &deduped
+		// Create new string copy on heap to ensure pointer remains valid
+		nameCopy := name
+		globalRegistry.strings[name] = &nameCopy
 	}
 }
 
@@ -98,8 +99,16 @@ func GetWeight(name string) int {
 	return WeightUnknown
 }
 
-// New creates a new Remediation from a string
-// Uses deduplicated string pointers to reduce allocations
+// New creates a new Remediation from a string.
+// Uses deduplicated string pointers to reduce allocations and ensure map key equality.
+//
+// IMPORTANT: All Remediation instances must be created via New() or FromString() to ensure
+// proper deduplication. Direct struct initialization will create different string pointers,
+// causing map lookups (e.g., in RemediationMap) to fail even for the same remediation name.
+//
+// The deduplication works by storing a single *string pointer per unique remediation name
+// in globalRegistry.strings. All subsequent calls with the same name return Remediation
+// instances with the same name pointer, ensuring map key equality works correctly.
 func New(name string) Remediation {
 	globalRegistry.mu.Lock()
 	defer globalRegistry.mu.Unlock()
@@ -107,8 +116,10 @@ func New(name string) Remediation {
 	// Get or create deduplicated string pointer
 	deduped, exists := globalRegistry.strings[name]
 	if !exists {
-		// Create new deduplicated string
-		deduped = &name
+		// Create new deduplicated string. The variable escapes to heap when stored in
+		// the package-level map, ensuring the pointer remains valid for map key comparisons.
+		nameCopy := name
+		deduped = &nameCopy
 		globalRegistry.strings[name] = deduped
 		// Set default weight if not configured
 		if _, hasWeight := globalRegistry.weights[name]; !hasWeight {
