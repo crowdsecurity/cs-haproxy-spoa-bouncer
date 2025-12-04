@@ -7,6 +7,7 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	cslogging "github.com/crowdsecurity/crowdsec-spoa/pkg/logging"
 	"github.com/crowdsecurity/go-cs-lib/csyaml"
@@ -36,6 +37,11 @@ type BouncerConfig struct {
 	ListenUnix       string                  `yaml:"listen_unix"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
 	PprofConfig      PprofConfig             `yaml:"pprof"`
+	// RemediationWeights allows users to configure custom weights for remediations
+	// Format: map[string]int where key is remediation name and value is weight
+	// Built-in defaults: allow=0, unknown=1, captcha=10, ban=20
+	// Custom remediations can slot between these values
+	RemediationWeights map[string]int `yaml:"remediation_weights,omitempty"`
 }
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).
@@ -65,6 +71,13 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 
 	if err = config.Logging.Setup("crowdsec-spoa-bouncer.log"); err != nil {
 		return nil, fmt.Errorf("failed to setup logging: %w", err)
+	}
+
+	// Apply custom remediation weights if configured
+	if config.RemediationWeights != nil {
+		for remediationName, weight := range config.RemediationWeights {
+			remediation.SetWeight(remediationName, weight)
+		}
 	}
 
 	if err := config.Validate(); err != nil {

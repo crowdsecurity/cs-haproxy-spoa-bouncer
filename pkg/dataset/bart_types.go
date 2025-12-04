@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/gaissmai/bart"
 	log "github.com/sirupsen/logrus"
 )
@@ -15,7 +14,7 @@ import (
 type BartAddOp struct {
 	Prefix netip.Prefix
 	Origin string
-	R      remediation.Remediation
+	R      string // Remediation name as string
 	IPType string
 	Scope  string
 }
@@ -23,7 +22,7 @@ type BartAddOp struct {
 // BartRemoveOp represents a single prefix removal operation for batch processing
 type BartRemoveOp struct {
 	Prefix netip.Prefix
-	R      remediation.Remediation
+	R      string // Remediation name as string
 	Origin string
 	IPType string
 	Scope  string
@@ -91,7 +90,7 @@ func (s *BartRangeSet) initializeBatch(operations []BartAddOp) {
 		// Only build logging fields if trace level is enabled
 		var valueLog *log.Entry
 		if s.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R.String())
+			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R)
 			valueLog.Trace("initial load: collecting prefix operations")
 		}
 
@@ -134,7 +133,7 @@ func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationMap], operations [
 		// Only build logging fields if trace level is enabled
 		var valueLog *log.Entry
 		if s.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R.String())
+			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R)
 			valueLog.Trace("adding to bart trie")
 		}
 
@@ -193,7 +192,7 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 		// Only build logging fields if trace level is enabled
 		var valueLog *log.Entry
 		if s.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R.String())
+			valueLog = s.logger.WithField("prefix", prefix.String()).WithField("remediation", op.R)
 			valueLog.Trace("removing from bart trie")
 		}
 
@@ -263,13 +262,13 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 // Contains checks if an IP address matches any prefix in the bart table.
 // Returns the longest matching prefix's remediation and origin.
 // This method uses lock-free reads via atomic pointer for optimal performance.
-func (s *BartRangeSet) Contains(ip netip.Addr) (remediation.Remediation, string) {
+func (s *BartRangeSet) Contains(ip netip.Addr) (string, string) {
 	// Lock-free read: atomically load the current table pointer
 	table := s.tableAtomicPtr.Load()
 
 	// Check for nil table (not yet initialized)
 	if table == nil {
-		return remediation.Allow, ""
+		return "allow", ""
 	}
 
 	// Only build logging fields if trace level is enabled
@@ -285,12 +284,12 @@ func (s *BartRangeSet) Contains(ip netip.Addr) (remediation.Remediation, string)
 		if valueLog != nil {
 			valueLog.Trace("no match found")
 		}
-		return remediation.Allow, ""
+		return "allow", ""
 	}
 
 	remediationResult, origin := data.GetRemediationAndOrigin()
 	if valueLog != nil {
-		valueLog.Tracef("bart result: %s (data: %+v)", remediationResult.String(), data)
+		valueLog.Tracef("bart result: %s (data: %+v)", remediationResult, data)
 	}
 	return remediationResult, origin
 }
@@ -299,7 +298,7 @@ func (s *BartRangeSet) Contains(ip netip.Addr) (remediation.Remediation, string)
 // Uses Get() for exact prefix lookup (not LPM like Contains/Lookup).
 // Returns true if the exact prefix exists and has the given remediation with the given origin.
 // This method uses lock-free reads via atomic pointer for optimal performance.
-func (s *BartRangeSet) HasRemediation(prefix netip.Prefix, r remediation.Remediation, origin string) bool {
+func (s *BartRangeSet) HasRemediation(prefix netip.Prefix, remediationName string, origin string) bool {
 	// Lock-free read: atomically load the current table pointer
 	table := s.tableAtomicPtr.Load()
 
@@ -315,14 +314,14 @@ func (s *BartRangeSet) HasRemediation(prefix netip.Prefix, r remediation.Remedia
 		return false
 	}
 
-	return data.HasRemediationWithOrigin(r, origin)
+	return data.HasRemediationWithOrigin(remediationName, origin)
 }
 
 // GetOriginForRemediation returns the origin for a specific remediation on an exact prefix.
 // Uses Get() for exact prefix lookup (not LPM).
 // Returns the origin and true if the exact prefix exists and has the given remediation, false otherwise.
 // This method uses lock-free reads via atomic pointer for optimal performance.
-func (s *BartRangeSet) GetOriginForRemediation(prefix netip.Prefix, r remediation.Remediation) (string, bool) {
+func (s *BartRangeSet) GetOriginForRemediation(prefix netip.Prefix, remediationName string) (string, bool) {
 	// Lock-free read: atomically load the current table pointer
 	table := s.tableAtomicPtr.Load()
 
@@ -339,7 +338,7 @@ func (s *BartRangeSet) GetOriginForRemediation(prefix netip.Prefix, r remediatio
 	}
 
 	// Check if the remediation exists and return its origin
-	if existingOrigin, ok := data[r]; ok {
+	if existingOrigin, ok := data[remediationName]; ok {
 		return existingOrigin, true
 	}
 

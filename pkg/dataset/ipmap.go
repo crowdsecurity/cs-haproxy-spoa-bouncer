@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -50,14 +49,14 @@ func NewIPMap(logAlias string) *IPMap {
 type IPAddOp struct {
 	IP     netip.Addr
 	Origin string
-	R      remediation.Remediation
+	R      string // Remediation name as string
 	IPType string
 }
 
 // IPRemoveOp represents a remove operation for an individual IP
 type IPRemoveOp struct {
 	IP     netip.Addr
-	R      remediation.Remediation
+	R      string // Remediation name as string
 	Origin string
 	IPType string
 }
@@ -78,7 +77,7 @@ func (m *IPMap) AddBatch(operations []IPAddOp) {
 func (m *IPMap) add(op IPAddOp) {
 	var valueLog *log.Entry
 	if m.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R.String())
+		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R)
 		valueLog.Trace("adding IP to map")
 	}
 
@@ -139,7 +138,7 @@ func (m *IPMap) RemoveBatch(operations []IPRemoveOp) []*IPRemoveOp {
 func (m *IPMap) remove(op IPRemoveOp) bool {
 	var valueLog *log.Entry
 	if m.logger.Logger.IsLevelEnabled(log.TraceLevel) {
-		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R.String())
+		valueLog = m.logger.WithField("ip", op.IP.String()).WithField("remediation", op.R)
 		valueLog.Trace("removing IP from map")
 	}
 
@@ -226,7 +225,7 @@ func (m *IPMap) remove(op IPRemoveOp) bool {
 // Contains checks if an IP address exists in the map
 // Returns the remediation and origin if found
 // This method is completely lock-free - SPOA handlers never block
-func (m *IPMap) Contains(ip netip.Addr) (remediation.Remediation, string, bool) {
+func (m *IPMap) Contains(ip netip.Addr) (string, string, bool) {
 	var valueLog *log.Entry
 	if m.logger.Logger.IsLevelEnabled(log.TraceLevel) {
 		valueLog = m.logger.WithField("ip", ip.String())
@@ -244,23 +243,23 @@ func (m *IPMap) Contains(ip netip.Addr) (remediation.Remediation, string, bool) 
 		if valueLog != nil {
 			valueLog.Trace("IP not found in map")
 		}
-		return remediation.Allow, "", false
+		return "allow", "", false
 	}
 
 	entry, ok := existing.(*ipEntry)
 	if !ok {
-		return remediation.Allow, "", false
+		return "allow", "", false
 	}
 
 	// Lock-free read via atomic pointer
 	data := entry.data.Load()
 	if data == nil {
-		return remediation.Allow, "", false
+		return "allow", "", false
 	}
 
 	r, origin := data.GetRemediationAndOrigin()
 	if valueLog != nil {
-		valueLog.Tracef("found IP with remediation: %s", r.String())
+		valueLog.Tracef("found IP with remediation: %s", r)
 	}
 	return r, origin, true
 }
@@ -272,7 +271,7 @@ func (m *IPMap) Count() (ipv4 int64, ipv6 int64) {
 
 // HasRemediation checks if an IP has a specific remediation with a specific origin.
 // Returns true if the IP exists and has the given remediation with the given origin.
-func (m *IPMap) HasRemediation(ip netip.Addr, r remediation.Remediation, origin string) bool {
+func (m *IPMap) HasRemediation(ip netip.Addr, remediationName string, origin string) bool {
 	// Select the appropriate map based on IP version
 	ipMap := &m.ipv4
 	if ip.Is6() {
@@ -295,5 +294,5 @@ func (m *IPMap) HasRemediation(ip netip.Addr, r remediation.Remediation, origin 
 		return false
 	}
 
-	return data.HasRemediationWithOrigin(r, origin)
+	return data.HasRemediationWithOrigin(remediationName, origin)
 }
