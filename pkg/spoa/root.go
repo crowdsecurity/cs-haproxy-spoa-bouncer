@@ -267,8 +267,8 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	var httpData HTTPRequestData
 
-	//nolint:gocritic // Using if-else chain with IsEqual() for type-safe remediation comparisons instead of switch on String()
-	if r.IsEqual(remediation.Allow) {
+	switch r {
+	case remediation.Allow:
 		// If user has a captcha cookie but decision is Allow, generate unset cookie
 		// We don't set captcha_status, so HAProxy knows to clear the cookie
 		cookieB64, err := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
@@ -305,18 +305,21 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 		// Parse HTTP data for AppSec processing
 		httpData = parseHTTPData(s.logger, mes)
-	} else if r.IsEqual(remediation.Ban) {
+	case remediation.Ban:
 		//Handle ban
 		matchedHost.Ban.InjectKeyValues(&req.Actions)
 		// Parse HTTP data for AppSec processing
 		httpData = parseHTTPData(s.logger, mes)
-	} else if r.IsEqual(remediation.Captcha) {
+	case remediation.Captcha:
 		r, httpData = s.handleCaptchaRemediation(req, mes, matchedHost)
 		// If remediation changed to fallback, return early
 		// If it became Allow, continue for AppSec processing
-		if !r.IsEqual(remediation.Captcha) && !r.IsEqual(remediation.Allow) {
+		if r != remediation.Captcha && r != remediation.Allow {
 			return
 		}
+	default:
+		// Unknown or custom remediation - parse HTTP data for AppSec processing
+		httpData = parseHTTPData(s.logger, mes)
 	}
 
 	// If remediation is not allow, we dont need to create a request to send to appsec unless always send is on
