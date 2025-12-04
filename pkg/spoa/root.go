@@ -1,6 +1,7 @@
 package spoa
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
@@ -17,21 +19,56 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
-	"github.com/negasus/haproxy-spoe-go/action"
-	"github.com/negasus/haproxy-spoe-go/agent"
-	"github.com/negasus/haproxy-spoe-go/message"
-	"github.com/negasus/haproxy-spoe-go/request"
+	"github.com/dropmorepackets/haproxy-go/pkg/encoding"
+	"github.com/dropmorepackets/haproxy-go/spop"
 	log "github.com/sirupsen/logrus"
 )
 
 var (
-	messageNames = []string{"crowdsec-http", "crowdsec-ip"}
+	// Message data struct pools for reducing GC pressure
+	// These pools reuse both the structs and their embedded buffers
+	httpMessageDataPool = sync.Pool{
+		New: func() interface{} {
+			return &HTTPMessageData{
+				// Pre-allocate buffers with reasonable initial capacity
+				HeadersCopied: make([]byte, 0, 2048),
+				BodyCopied:    make([]byte, 0, 4096),
+			}
+		},
+	}
+
+	ipMessageDataPool = sync.Pool{
+		New: func() interface{} {
+			return &IPMessageData{}
+		},
+	}
+
+	// Pre-allocated byte slices for key matching (avoid string conversions)
+	// Using bytes.Equal is more efficient than k.NameEquals() which allocates
+	keyRemediation   = []byte("remediation")
+	keySrcIP         = []byte("src-ip")
+	keyHost          = []byte("host")
+	keyCaptchaCookie = []byte("crowdsec_captcha_cookie")
+	keySSL           = []byte("ssl")
+	keyURL           = []byte("url")
+	keyMethod        = []byte("method")
+	keyPath          = []byte("path")
+	keyQuery         = []byte("query")
+	keyVersion       = []byte("version")
+	keyID            = []byte("id")
+	keySrcPort       = []byte("src-port")
+	keyHeaders       = []byte("headers")
+	keyBody          = []byte("body")
+
+	// Pre-allocated byte slices for message name matching
+	messageCrowdsecHTTP = []byte("crowdsec-http")
+	messageCrowdsecIP   = []byte("crowdsec-ip")
 )
 
 type Spoa struct {
 	ListenAddr   net.Listener
 	ListenSocket net.Listener
-	Server       *agent.Agent
+	ctx          context.Context
 	logger       *log.Entry
 	// Direct access to shared data (no IPC needed)
 	dataset        *dataset.DataSet
@@ -108,16 +145,34 @@ func New(config *SpoaConfig) (*Spoa, error) {
 		s.ListenSocket = addr
 	}
 
-	s.Server = agent.New(handlerWrapper(s), s.logger)
-
 	return s, nil
 }
 
+// HandleSPOE implements the spop.Handler interface
+func (s *Spoa) HandleSPOE(ctx context.Context, writer *encoding.ActionWriter, message *encoding.Message) {
+	messageNameBytes := message.NameBytes()
+	s.logger.Trace("Received message: ", string(messageNameBytes))
+
+	switch {
+	case bytes.Equal(messageNameBytes, messageCrowdsecHTTP):
+		s.handleHTTPRequest(ctx, writer, message)
+	case bytes.Equal(messageNameBytes, messageCrowdsecIP):
+		s.handleIPRequest(ctx, writer, message)
+	default:
+		s.logger.Debugf("Unknown message type: %s", string(messageNameBytes))
+	}
+}
+
 func (s *Spoa) Serve(ctx context.Context) error {
+	s.ctx = ctx
 	serverError := make(chan error, 2)
 
 	startServer := func(listener net.Listener) {
-		err := s.Server.Serve(listener)
+		agent := spop.Agent{
+			Handler:     s,
+			BaseContext: ctx,
+		}
+		err := agent.Serve(listener)
 		switch {
 		case errors.Is(err, net.ErrClosed):
 			// Server closed normally during shutdown
@@ -181,38 +236,194 @@ type HTTPRequestData struct {
 	Headers http.Header
 }
 
+// HTTPMessageData holds all KV entries from crowdsec-http message
+// Extracted in a single pass for efficiency
+type HTTPMessageData struct {
+	Remediation   *string
+	SrcIP         *netip.Addr
+	SrcPort       *int64
+	Host          *string
+	CaptchaCookie *string
+	SSL           *bool
+	URL           *string
+	Method        *string
+	Path          *string
+	Query         *string
+	Version       *string
+	ID            *string // unique-id from HAProxy
+	HeadersCopied []byte  // Copy of headers (reused from struct pool)
+	BodyCopied    []byte  // Copy of body (reused from struct pool)
+	HeadersParsed http.Header
+}
+
+// reset clears all fields in preparation for returning to pool
+// Buffers are reset to length 0 but keep their capacity for reuse
+func (d *HTTPMessageData) reset() {
+	d.Remediation = nil
+	d.SrcIP = nil
+	d.SrcPort = nil
+	d.Host = nil
+	d.CaptchaCookie = nil
+	d.SSL = nil
+	d.URL = nil
+	d.Method = nil
+	d.Path = nil
+	d.Query = nil
+	d.Version = nil
+	d.ID = nil
+	// Reset buffer lengths but keep backing arrays for reuse
+	d.HeadersCopied = d.HeadersCopied[:0]
+	d.BodyCopied = d.BodyCopied[:0]
+	d.HeadersParsed = nil
+}
+
+// IPMessageData holds all KV entries from crowdsec-ip message
+// Extracted in a single pass for efficiency
+type IPMessageData struct {
+	SrcIP   netip.Addr
+	SrcPort *int64
+	ID      *string // unique-id from HAProxy
+}
+
+// Helper functions to allocate values on heap explicitly
+// These ensure values are heap-allocated rather than relying on escape analysis
+func stringPtr(s string) *string {
+	return &s
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func int64Ptr(i int64) *int64 {
+	return &i
+}
+
+func addrPtr(a netip.Addr) *netip.Addr {
+	return &a
+}
+
+// extractHTTPMessageData extracts all KV entries from crowdsec-http message in a single pass
+// Uses byte slice comparisons to avoid string allocations for key matching
+// Returns a pooled struct that should be returned to pool via returnToPool()
+func extractHTTPMessageData(mes *encoding.Message) *HTTPMessageData {
+	data := httpMessageDataPool.Get().(*HTTPMessageData)
+	data.reset() // Clear any previous data
+	k := encoding.AcquireKVEntry()
+	defer encoding.ReleaseKVEntry(k)
+
+	for mes.KV.Next(k) {
+		nameBytes := k.NameBytes()
+		switch {
+		case bytes.Equal(nameBytes, keyRemediation):
+			val := string(k.ValueBytes())
+			data.Remediation = stringPtr(val)
+		case bytes.Equal(nameBytes, keySrcIP):
+			val := k.ValueAddr()
+			data.SrcIP = addrPtr(val)
+		case bytes.Equal(nameBytes, keyHost):
+			val := string(k.ValueBytes())
+			data.Host = stringPtr(val)
+		case bytes.Equal(nameBytes, keyCaptchaCookie):
+			val := string(k.ValueBytes())
+			data.CaptchaCookie = stringPtr(val)
+		case bytes.Equal(nameBytes, keySSL):
+			val := k.ValueBool()
+			data.SSL = boolPtr(val)
+		case bytes.Equal(nameBytes, keyURL):
+			val := string(k.ValueBytes())
+			data.URL = stringPtr(val)
+		case bytes.Equal(nameBytes, keyMethod):
+			val := string(k.ValueBytes())
+			data.Method = stringPtr(val)
+		case bytes.Equal(nameBytes, keyPath):
+			val := string(k.ValueBytes())
+			data.Path = stringPtr(val)
+		case bytes.Equal(nameBytes, keyQuery):
+			val := string(k.ValueBytes())
+			data.Query = stringPtr(val)
+		case bytes.Equal(nameBytes, keyVersion):
+			val := string(k.ValueBytes())
+			data.Version = stringPtr(val)
+		case bytes.Equal(nameBytes, keyID):
+			val := string(k.ValueBytes())
+			data.ID = stringPtr(val)
+		case bytes.Equal(nameBytes, keySrcPort):
+			val := k.ValueInt()
+			data.SrcPort = int64Ptr(val)
+		case bytes.Equal(nameBytes, keyHeaders):
+			// Copy borrowed slice immediately - k.ValueBytes() returns memory owned by KV entry
+			// which will be overwritten on next iteration, so we must copy now
+			headersBytes := k.ValueBytes()
+			// Reuse existing buffer if it has enough capacity, otherwise allocate new one
+			if cap(data.HeadersCopied) < len(headersBytes) {
+				data.HeadersCopied = make([]byte, len(headersBytes))
+			} else {
+				// Reuse buffer, reset length and clear old data
+				data.HeadersCopied = data.HeadersCopied[:len(headersBytes)]
+				clear(data.HeadersCopied) // Clear any old data
+			}
+			copy(data.HeadersCopied, headersBytes)
+		case bytes.Equal(nameBytes, keyBody):
+			// Copy borrowed slice immediately - k.ValueBytes() returns memory owned by KV entry
+			// which will be overwritten on next iteration, so we must copy now
+			bodyBytes := k.ValueBytes()
+			// Reuse existing buffer if it has enough capacity, otherwise allocate new one
+			if cap(data.BodyCopied) < len(bodyBytes) {
+				data.BodyCopied = make([]byte, len(bodyBytes))
+			} else {
+				// Reuse buffer, reset length and clear old data
+				data.BodyCopied = data.BodyCopied[:len(bodyBytes)]
+				clear(data.BodyCopied) // Clear any old data
+			}
+			copy(data.BodyCopied, bodyBytes)
+		default:
+			// Unknown key, ignore
+		}
+	}
+
+	// Parse headers if present
+	if len(data.HeadersCopied) > 0 {
+		headers, err := readHeaders(data.HeadersCopied)
+		if err == nil {
+			data.HeadersParsed = headers
+		}
+	}
+
+	return data
+}
+
 // Handles checking the http request which has 2 stages
 // First stage is to check the host header and determine if the remediation from handleIpRequest is still valid
 // Second stage is to check if AppSec is enabled and then forward to the component if needed
-func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
+func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWriter, mes *encoding.Message) {
+	// Extract all message data in a single pass
+	msgData := extractHTTPMessageData(mes)
+	// Return struct (with embedded buffers) to pool when done
+	defer func() {
+		msgData.reset()
+		httpMessageDataPool.Put(msgData)
+	}()
+
 	r := remediation.Allow
 	var origin string
 	shouldCountMetrics := false
 
-	rstring, err := readKeyFromMessage[string](mes, "remediation")
-	if err != nil {
+	if msgData.Remediation == nil {
 		// IP remediation not found - fallback to checking IP directly
 		// This handles cases where crowdsec-ip message didn't fire (e.g., on-client-session not triggered)
 		// Also handles upstream proxy mode where no IP check happened
-		s.logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "remediation",
-		}).Debug("remediation key not found in message (expected from crowdsec-ip message), checking IP directly as fallback")
+		s.logger.Debug("remediation key not found in message (expected from crowdsec-ip message), checking IP directly as fallback")
 		// Get IP from message for both remediation and origin (needed for metrics)
-		ipAddrPtr, ipErr := readKeyFromMessage[netip.Addr](mes, "src-ip")
-		if ipErr == nil && ipAddrPtr != nil {
-			r, origin = s.getIPRemediation(req, *ipAddrPtr)
+		if msgData.SrcIP != nil {
+			r, origin = s.getIPRemediation(ctx, writer, *msgData.SrcIP)
 			// Only count metrics if we successfully got IP and checked remediation
 			shouldCountMetrics = true
 		}
-	}
-
-	if rstring != nil {
-		r = remediation.FromString(*rstring)
+	} else {
+		r = remediation.FromString(*msgData.Remediation)
 		// Remediation came from IP check, already counted
 	}
-
-	hoststring, err := readKeyFromMessage[string](mes, "host")
 
 	var matchedHost *host.Host
 
@@ -223,19 +434,13 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			r = remediation.Ban
 		}
 		rString := r.String()
-		req.Actions.SetVar(action.ScopeTransaction, "remediation", rString)
+		_ = writer.SetString(encoding.VarScopeTransaction, "remediation", rString)
 
 		// Count metrics if this is the only handler (upstream proxy mode)
 		if shouldCountMetrics {
 			// Get IP from message for metrics
 			ipTypeLabel := "ipv4"
-			srcIP, ipErr := readKeyFromMessage[netip.Addr](mes, "src-ip")
-			if ipErr != nil {
-				s.logger.WithFields(log.Fields{
-					"error": ipErr,
-					"key":   "src-ip",
-				}).Warn("failed to read src-ip from message for metrics, assuming ipv4")
-			} else if srcIP != nil && srcIP.IsValid() && srcIP.Is6() {
+			if msgData.SrcIP != nil && msgData.SrcIP.IsValid() && msgData.SrcIP.Is6() {
 				ipTypeLabel = "ipv6"
 			}
 
@@ -250,15 +455,12 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		}
 	}()
 
-	if err != nil {
-		s.logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "host",
-		}).Warn("failed to read host header from message, cannot match host configuration - ensure HAProxy is sending the 'host' variable in crowdsec-http message")
+	if msgData.Host == nil {
+		s.logger.Warn("failed to read host header from message, cannot match host configuration - ensure HAProxy is sending the 'host' variable in crowdsec-http message")
 		return
 	}
 
-	matchedHost = s.hostManager.MatchFirstHost(*hoststring)
+	matchedHost = s.hostManager.MatchFirstHost(*msgData.Host)
 
 	// if the host is not found we cannot alter the remediation or do appsec checks
 	if matchedHost == nil {
@@ -271,20 +473,11 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	case remediation.Allow:
 		// If user has a captcha cookie but decision is Allow, generate unset cookie
 		// We don't set captcha_status, so HAProxy knows to clear the cookie
-		cookieB64, err := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
-		if err != nil && !errors.Is(err, ErrMessageKeyNotFound) {
-			s.logger.WithFields(log.Fields{
-				"error": err,
-				"key":   "crowdsec_captcha_cookie",
-			}).Debug("failed to read captcha cookie from message (cookie may not be present, which is expected)")
-		}
-		if cookieB64 != nil {
-			ssl, err := readKeyFromMessage[bool](mes, "ssl")
-			if err != nil {
-				s.logger.WithFields(log.Fields{
-					"error": err,
-					"key":   "ssl",
-				}).Warn("failed to read ssl flag from message, cookie secure flag will default to false - ensure HAProxy is sending the 'ssl_fc' variable as 'ssl' in crowdsec-http message")
+		// Check for both nil and empty string (HAProxy may send empty string when cookie doesn't exist)
+		if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
+			var ssl *bool
+			if msgData.SSL != nil {
+				ssl = msgData.SSL
 			}
 
 			unsetCookie, err := matchedHost.Captcha.CookieGenerator.GenerateUnsetCookie(ssl)
@@ -300,18 +493,28 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 			s.logger.WithFields(log.Fields{
 				"host": matchedHost.Host,
 			}).Debug("Allow decision but captcha cookie present, will clear cookie")
-			req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", unsetCookie.String())
+			_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", unsetCookie.String())
 			// Note: We deliberately don't set captcha_status here
 		}
-		// Parse HTTP data for AppSec processing
-		httpData = parseHTTPData(s.logger, mes)
+		// Build HTTP data from extracted message data
+		httpData = HTTPRequestData{
+			URL:     msgData.URL,
+			Method:  msgData.Method,
+			Body:    &msgData.BodyCopied,
+			Headers: msgData.HeadersParsed,
+		}
 	case remediation.Ban:
 		//Handle ban
-		matchedHost.Ban.InjectKeyValues(&req.Actions)
-		// Parse HTTP data for AppSec processing
-		httpData = parseHTTPData(s.logger, mes)
+		matchedHost.Ban.InjectKeyValues(writer)
+		// Build HTTP data from extracted message data
+		httpData = HTTPRequestData{
+			URL:     msgData.URL,
+			Method:  msgData.Method,
+			Body:    &msgData.BodyCopied,
+			Headers: msgData.HeadersParsed,
+		}
 	case remediation.Captcha:
-		r, httpData = s.handleCaptchaRemediation(req, mes, matchedHost)
+		r, httpData = s.handleCaptchaRemediation(ctx, writer, msgData, matchedHost)
 		// If remediation changed to fallback, return early
 		// If it became Allow, continue for AppSec processing
 		if r != remediation.Captcha && r != remediation.Allow {
@@ -334,69 +537,12 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	// request.Header = httpData.Headers
 }
 
-// parseHTTPData extracts HTTP request data from the message for reuse in AppSec processing
-//
-//nolint:unparam // httpData will be used when AppSec is implemented
-func parseHTTPData(logger *log.Entry, mes *message.Message) HTTPRequestData {
-	var httpData HTTPRequestData
-
-	url, err := readKeyFromMessage[string](mes, "url")
-	if err != nil {
-		logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "url",
-		}).Debug("failed to read url from message for AppSec processing - ensure HAProxy is sending the 'url' variable in crowdsec-http message")
-	}
-	httpData.URL = url
-
-	method, err := readKeyFromMessage[string](mes, "method")
-	if err != nil {
-		logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "method",
-		}).Debug("failed to read method from message for AppSec processing - ensure HAProxy is sending the 'method' variable in crowdsec-http message")
-	}
-	httpData.Method = method
-
-	headersType, err := readKeyFromMessage[string](mes, "headers")
-	if err != nil {
-		logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "headers",
-		}).Debug("failed to read headers from message for AppSec processing - ensure HAProxy is sending the 'headers' variable in crowdsec-http message")
-	} else if headersType != nil {
-		headers, parseErr := readHeaders(*headersType)
-		if parseErr != nil {
-			logger.WithFields(log.Fields{
-				"error": parseErr,
-				"key":   "headers",
-			}).Debug("failed to parse headers from message for AppSec processing")
-		} else {
-			httpData.Headers = headers
-		}
-	}
-
-	body, err := readKeyFromMessage[[]byte](mes, "body")
-	if err != nil {
-		logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "body",
-		}).Debug("failed to read body from message for AppSec processing - ensure HAProxy is sending the 'body' variable in crowdsec-http message")
-	}
-	httpData.Body = body
-
-	return httpData
-}
-
 // createNewSessionAndCookie creates a new session, generates a cookie, and sets it in the request.
 // Returns the session, uuid, and an error if any step fails.
-func (s *Spoa) createNewSessionAndCookie(req *request.Request, mes *message.Message, matchedHost *host.Host) (*session.Session, string, error) {
-	ssl, err := readKeyFromMessage[bool](mes, "ssl")
-	if err != nil {
-		s.logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "ssl",
-		}).Warn("failed to read ssl flag from message, cookie secure flag will default to false - ensure HAProxy is sending the 'ssl_fc' variable as 'ssl' in crowdsec-http message")
+func (s *Spoa) createNewSessionAndCookie(ctx context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (*session.Session, string, error) {
+	var ssl *bool
+	if msgData.SSL != nil {
+		ssl = msgData.SSL
 	}
 
 	// Create a new session using global session manager
@@ -424,7 +570,7 @@ func (s *Spoa) createNewSessionAndCookie(req *request.Request, mes *message.Mess
 	uuid := ses.UUID
 
 	// Set the captcha cookie - status will be set later based on session state
-	req.Actions.SetVar(action.ScopeTransaction, "captcha_cookie", cookie.String())
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", cookie.String())
 
 	return ses, uuid, nil
 }
@@ -432,24 +578,18 @@ func (s *Spoa) createNewSessionAndCookie(req *request.Request, mes *message.Mess
 // handleCaptchaRemediation handles all captcha-related logic including cookie validation,
 // session management, captcha validation, and status updates.
 // Returns the remediation and parsed HTTP request data for reuse in AppSec processing.
-func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Message, matchedHost *host.Host) (remediation.Remediation, HTTPRequestData) {
-	if err := matchedHost.Captcha.InjectKeyValues(&req.Actions); err != nil {
+func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (remediation.Remediation, HTTPRequestData) {
+	if err := matchedHost.Captcha.InjectKeyValues(writer); err != nil {
 		return remediation.FromString(matchedHost.Captcha.FallbackRemediation), HTTPRequestData{}
 	}
 
-	cookieB64, err := readKeyFromMessage[string](mes, "crowdsec_captcha_cookie")
-	if err != nil && !errors.Is(err, ErrMessageKeyNotFound) {
-		s.logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "crowdsec_captcha_cookie",
-		}).Debug("failed to read captcha cookie from message (cookie may not be present, which is expected for new sessions)")
-	}
 	uuid := ""
 	var ses *session.Session
 
-	if cookieB64 != nil {
+	// Check for both nil and empty string (HAProxy may send empty string when cookie doesn't exist)
+	if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
 		var err error
-		uuid, err = matchedHost.Captcha.CookieGenerator.ValidateCookie(*cookieB64)
+		uuid, err = matchedHost.Captcha.CookieGenerator.ValidateCookie(*msgData.CaptchaCookie)
 		if err != nil {
 			s.logger.WithFields(log.Fields{
 				"host":  matchedHost.Host,
@@ -462,7 +602,7 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 	if uuid == "" {
 		// No valid cookie, create new session and cookie
 		var err error
-		ses, uuid, err = s.createNewSessionAndCookie(req, mes, matchedHost)
+		ses, uuid, err = s.createNewSessionAndCookie(ctx, writer, msgData, matchedHost)
 		if err != nil {
 			// Session creation is critical for captcha to work - without it we can't track captcha status
 			// This is a critical failure, so we must fall back to fallback remediation
@@ -491,7 +631,7 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 				"session": uuid,
 			}).Warn("Session not found in memory (likely lost after reload), creating new session and cookie")
 			var err error
-			ses, uuid, err = s.createNewSessionAndCookie(req, mes, matchedHost)
+			ses, uuid, err = s.createNewSessionAndCookie(ctx, writer, msgData, matchedHost)
 			if err != nil {
 				// Session creation is critical for captcha to work - without it we can't track captcha status
 				// This is a critical failure, so we must fall back to fallback remediation
@@ -505,85 +645,65 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 	}
 
 	// Get the current captcha status from the session (cache it to avoid redundant fetches)
-	captchaStatus := ses.Get(session.CaptchaStatus)
-	if captchaStatus == nil {
+	captchaStatusVal := ses.Get(session.CaptchaStatus)
+	var captchaStatus string
+	if captchaStatusVal == nil {
 		captchaStatus = captcha.Pending // Assume pending if not set
+	} else {
+		captchaStatus = captchaStatusVal.(string)
 	}
 
 	// Set the captcha status in the transaction for HAProxy
-	req.Actions.SetVar(action.ScopeTransaction, "captcha_status", captchaStatus)
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", captchaStatus)
 
 	// Read URL - this is not critical for showing the captcha page, only for redirect after validation
-	url, err := readKeyFromMessage[string](mes, "url")
-	if err != nil {
+	if msgData.URL == nil {
 		s.logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "url",
-			"host":  matchedHost.Host,
+			"host": matchedHost.Host,
 		}).Warn("failed to read url from message, captcha will still be shown but redirect after validation may not work - ensure HAProxy is sending the 'url' variable in crowdsec-http message")
 		// Continue with captcha even without URL - we just won't be able to redirect after validation
-	} else if captchaStatus != captcha.Valid && url != nil {
+	} else if captchaStatus != captcha.Valid {
 		// Update the incoming url if it is different from the stored url for the session ignore favicon requests
-		storedURL := ses.Get(session.URI)
-		if storedURL == nil {
-			storedURL = ""
+		storedURLVal := ses.Get(session.URI)
+		storedURL := ""
+		if storedURLVal != nil {
+			storedURL = storedURLVal.(string)
 		}
 
 		// Check url is not nil before dereferencing
-		if (storedURL == "" || *url != storedURL) && !strings.HasSuffix(*url, ".ico") {
-			s.logger.WithField("session", uuid).Debugf("updating stored url %s", *url)
-			ses.Set(session.URI, *url)
+		if (storedURL == "" || *msgData.URL != storedURL) && !strings.HasSuffix(*msgData.URL, ".ico") {
+			s.logger.WithField("session", uuid).Debugf("updating stored url %s", *msgData.URL)
+			ses.Set(session.URI, *msgData.URL)
 		}
 	}
 
-	method, err := readKeyFromMessage[string](mes, "method")
-	if err != nil {
+	if msgData.Method == nil {
 		s.logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "method",
-			"host":  matchedHost.Host,
+			"host": matchedHost.Host,
 		}).Error("failed to read method from message, cannot validate captcha form submission - ensure HAProxy is sending the 'method' variable in crowdsec-http message")
-		return remediation.Captcha, HTTPRequestData{URL: url} // Return partial data
-	}
-
-	headersType, err := readKeyFromMessage[string](mes, "headers")
-	if err != nil {
-		s.logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "headers",
-			"host":  matchedHost.Host,
-		}).Error("failed to read headers from message, cannot validate captcha form submission - ensure HAProxy is sending the 'headers' variable in crowdsec-http message")
-		return remediation.Captcha, HTTPRequestData{URL: url, Method: method} // Return partial data
-	}
-
-	headers, err := readHeaders(*headersType)
-	if err != nil {
-		s.logger.Errorf("failed to parse headers: %v", err)
+		return remediation.Captcha, HTTPRequestData{URL: msgData.URL} // Return partial data
 	}
 
 	httpData := HTTPRequestData{
-		URL:     url,
-		Method:  method,
-		Headers: headers,
+		URL:     msgData.URL,
+		Method:  msgData.Method,
+		Headers: msgData.HeadersParsed,
 	}
 
 	// Check if the request is a captcha validation request
-	if captchaStatus == captcha.Pending && method != nil && *method == http.MethodPost && headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
-		body, err := readKeyFromMessage[[]byte](mes, "body")
-		if err != nil {
+	if captchaStatus == captcha.Pending && *msgData.Method == http.MethodPost && msgData.HeadersParsed != nil && msgData.HeadersParsed.Get("Content-Type") == "application/x-www-form-urlencoded" {
+		if len(msgData.BodyCopied) == 0 {
 			s.logger.WithFields(log.Fields{
-				"error":   err,
-				"key":     "body",
 				"host":    matchedHost.Host,
 				"session": uuid,
 			}).Error("failed to read body from message, cannot validate captcha response - ensure HAProxy is sending the 'body' variable in crowdsec-http message for POST requests")
 			return remediation.Captcha, httpData // Return data without body
 		}
 
-		httpData.Body = body
+		httpData.Body = &msgData.BodyCopied
 
 		// Validate captcha
-		isValid, err := matchedHost.Captcha.Validate(context.Background(), uuid, string(*body))
+		isValid, err := matchedHost.Captcha.Validate(context.Background(), uuid, string(msgData.BodyCopied))
 		if err != nil {
 			s.logger.WithFields(log.Fields{
 				"host":    matchedHost.Host,
@@ -598,12 +718,15 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 
 	// if the session has a valid captcha status we allow the request
 	if captchaStatus == captcha.Valid {
-		storedURL := ses.Get(session.URI)
-		if storedURL != nil && storedURL != "" {
-			s.logger.Debug("redirecting to: ", storedURL)
-			req.Actions.SetVar(action.ScopeTransaction, "redirect", storedURL)
-			// Delete the URI from the session so we dont redirect loop
-			ses.Delete(session.URI)
+		storedURLVal := ses.Get(session.URI)
+		if storedURLVal != nil {
+			storedURL := storedURLVal.(string)
+			if storedURL != "" {
+				s.logger.Debug("redirecting to: ", storedURL)
+				_ = writer.SetString(encoding.VarScopeTransaction, "redirect", storedURL)
+				// Delete the URI from the session so we dont redirect loop
+				ses.Delete(session.URI)
+			}
 		}
 		return remediation.Allow, httpData
 	}
@@ -613,7 +736,7 @@ func (s *Spoa) handleCaptchaRemediation(req *request.Request, mes *message.Messa
 
 // getIPRemediation performs IP and geo/country remediation checks
 // Returns the final remediation after checking IP, geo, and country
-func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediation.Remediation, string) {
+func (s *Spoa) getIPRemediation(ctx context.Context, writer *encoding.ActionWriter, ip netip.Addr) (remediation.Remediation, string) {
 	var origin string
 	// Check IP directly against dataset
 	r, origin, err := s.dataset.CheckIP(ip)
@@ -638,7 +761,7 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediatio
 			iso := geo.GetIsoCodeFromRecord(record)
 			if iso != "" {
 				// Always set the ISO code variable when available
-				req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
+				_ = writer.SetString(encoding.VarScopeTransaction, "isocode", iso)
 
 				// If no IP-specific remediation, check country-based remediation
 				if r < remediation.Unknown {
@@ -655,18 +778,65 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediatio
 	return r, origin
 }
 
+// extractIPMessageData extracts all KV entries from crowdsec-ip message in a single pass
+// Returns a pooled struct that should be returned to pool via returnToPool()
+func extractIPMessageData(mes *encoding.Message) (*IPMessageData, error) {
+	data := ipMessageDataPool.Get().(*IPMessageData)
+	// Reset fields
+	data.SrcIP = netip.Addr{}
+	data.SrcPort = nil
+	data.ID = nil
+	k := encoding.AcquireKVEntry()
+	defer encoding.ReleaseKVEntry(k)
+
+	foundIP := false
+	for mes.KV.Next(k) {
+		nameBytes := k.NameBytes()
+		switch {
+		case bytes.Equal(nameBytes, keySrcIP):
+			data.SrcIP = k.ValueAddr()
+			foundIP = true
+		case bytes.Equal(nameBytes, keySrcPort):
+			val := k.ValueInt()
+			data.SrcPort = int64Ptr(val)
+		case bytes.Equal(nameBytes, keyID):
+			val := string(k.ValueBytes())
+			data.ID = stringPtr(val)
+		default:
+			// Unknown key, ignore
+		}
+	}
+
+	if !foundIP {
+		// Return struct to pool on error
+		ipMessageDataPool.Put(data)
+		return nil, fmt.Errorf("src-ip key not found in message")
+	}
+
+	return data, nil
+}
+
 // Handles checking the IP address against the dataset
-func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
-	ipAddrPtr, err := readKeyFromMessage[netip.Addr](mes, "src-ip")
+func (s *Spoa) handleIPRequest(ctx context.Context, writer *encoding.ActionWriter, mes *encoding.Message) {
+	msgData, err := extractIPMessageData(mes)
 	if err != nil {
 		s.logger.WithFields(log.Fields{
 			"error": err,
 			"key":   "src-ip",
 		}).Error("failed to read src-ip from message, cannot check IP remediation - ensure HAProxy is sending the 'src' variable as 'src-ip' in crowdsec-ip message")
+		// Return struct to pool on error
+		ipMessageDataPool.Put(msgData)
 		return
 	}
+	// Return struct to pool when done
+	defer func() {
+		msgData.SrcIP = netip.Addr{}
+		msgData.SrcPort = nil
+		msgData.ID = nil
+		ipMessageDataPool.Put(msgData)
+	}()
 
-	ipAddr := *ipAddrPtr
+	ipAddr := msgData.SrcIP
 
 	// Determine IP type for metrics
 	ipTypeLabel := "ipv4"
@@ -678,7 +848,7 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 	metrics.TotalProcessedRequests.WithLabelValues(ipTypeLabel).Inc()
 
 	// Check IP directly against dataset
-	r, origin := s.getIPRemediation(req, ipAddr)
+	r, origin := s.getIPRemediation(ctx, writer, ipAddr)
 
 	// Count blocked requests
 	if r > remediation.Unknown {
@@ -686,107 +856,62 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 		metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, r.String()).Inc()
 	}
 
-	req.Actions.SetVar(action.ScopeTransaction, "remediation", r.String())
-}
-
-func handlerWrapper(s *Spoa) func(req *request.Request) {
-	return func(req *request.Request) {
-		// The library now handles workgroup tracking internally, no need for manual Add/Done
-		for _, messageName := range messageNames {
-			mes, err := req.Messages.GetByName(messageName)
-			if err != nil {
-				continue
-			}
-			s.logger.Trace("Received message: ", messageName)
-			switch messageName {
-			case "crowdsec-http":
-				s.handleHTTPRequest(req, mes)
-			case "crowdsec-ip":
-				s.handleIPRequest(req, mes)
-			}
-		}
-	}
+	_ = writer.SetString(encoding.VarScopeTransaction, "remediation", r.String())
 }
 
 // readKeyFromMessage reads a key from a message and returns it as the type T
+// Uses zero-allocation iterator pattern with KV entry pooling
 var (
 	ErrMessageKeyNotFound     = errors.New("message key not found")
 	ErrMessageKeyTypeMismatch = errors.New("message key type mismatch")
 )
 
-func readKeyFromMessage[T string | net.IP | netip.Addr | bool | []byte](msg *message.Message, key string) (*T, error) {
-	value, ok := msg.KV.Get(key)
-	if !ok || value == nil {
-		return nil, fmt.Errorf("%w: %s", ErrMessageKeyNotFound, key)
+func readKeyFromMessage[T string | netip.Addr | bool | []byte](msg *encoding.Message, key string) (*T, error) {
+	k := encoding.AcquireKVEntry()
+	defer encoding.ReleaseKVEntry(k)
+
+	for msg.KV.Next(k) {
+		if !k.NameEquals(key) {
+			continue
+		}
+
+		var result T
+		switch target := any(&result).(type) {
+		case *string:
+			val := string(k.ValueBytes())
+			*target = val
+			return &result, nil
+		case *netip.Addr:
+			val := k.ValueAddr()
+			*target = val
+			return &result, nil
+		case *bool:
+			val := k.ValueBool()
+			*target = val
+			return &result, nil
+		case *[]byte:
+			// Copy bytes as they're borrowed from the KV entry
+			valBytes := k.ValueBytes()
+			val := make([]byte, len(valBytes))
+			copy(val, valBytes)
+			*target = val
+			return &result, nil
+		default:
+			return nil, fmt.Errorf("unsupported type for readKeyFromMessage")
+		}
 	}
 
-	var result T
-
-	switch target := any(&result).(type) {
-	case *string:
-		str, ok := value.(string)
-		if !ok {
-			return nil, fmt.Errorf("%w: key %s has wrong type %T, expected string", ErrMessageKeyTypeMismatch, key, value)
-		}
-		*target = str
-	case *bool:
-		boolean, ok := value.(bool)
-		if !ok {
-			return nil, fmt.Errorf("%w: key %s has wrong type %T, expected bool", ErrMessageKeyTypeMismatch, key, value)
-		}
-		*target = boolean
-	case *[]byte:
-		bytes, ok := value.([]byte)
-		if !ok {
-			return nil, fmt.Errorf("%w: key %s has wrong type %T, expected []byte", ErrMessageKeyTypeMismatch, key, value)
-		}
-		*target = bytes
-	case *net.IP:
-		switch v := value.(type) {
-		case net.IP:
-			*target = v
-		case string:
-			ip := net.ParseIP(v)
-			if ip == nil {
-				return nil, fmt.Errorf("%w: key %s contains invalid IP string %q", ErrMessageKeyTypeMismatch, key, v)
-			}
-			*target = ip
-		default:
-			return nil, fmt.Errorf("%w: key %s has wrong type %T, expected net.IP or string", ErrMessageKeyTypeMismatch, key, value)
-		}
-	case *netip.Addr:
-		switch v := value.(type) {
-		case netip.Addr:
-			*target = v
-		case net.IP:
-			addr, ok := netip.AddrFromSlice(v)
-			if !ok {
-				return nil, fmt.Errorf("%w: key %s contains invalid net.IP value", ErrMessageKeyTypeMismatch, key)
-			}
-			*target = addr
-		case string:
-			addr, err := netip.ParseAddr(v)
-			if err != nil {
-				return nil, fmt.Errorf("%w: key %s contains invalid IP string %q", ErrMessageKeyTypeMismatch, key, v)
-			}
-			*target = addr
-		default:
-			return nil, fmt.Errorf("%w: key %s has wrong type %T, expected netip.Addr, net.IP, or string", ErrMessageKeyTypeMismatch, key, value)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported type for readKeyFromMessage")
-	}
-
-	return &result, nil
+	return nil, fmt.Errorf("%w: %s", ErrMessageKeyNotFound, key)
 }
 
-func readHeaders(headers string) (http.Header, error) {
+func readHeaders(headers []byte) (http.Header, error) {
 	h := http.Header{}
-	hs := strings.Split(headers, "\r\n")
-
-	if len(hs) == 0 {
+	if len(headers) == 0 {
 		return nil, fmt.Errorf("no headers found")
 	}
+
+	// Split by \r\n
+	hs := strings.Split(string(headers), "\r\n")
 
 	for _, header := range hs {
 		if header == "" {
