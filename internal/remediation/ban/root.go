@@ -1,7 +1,7 @@
 package ban
 
 import (
-	"github.com/negasus/haproxy-spoe-go/action"
+	"github.com/dropmorepackets/haproxy-go/pkg/encoding"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -19,6 +19,6 @@ func (b *Ban) InitLogger(logger *log.Entry) {
 	b.logger = logger.WithField("module", "ban")
 }
 
-func (b *Ban) InjectKeyValues(actions *action.Actions) {
-	actions.SetVar(action.ScopeTransaction, "contact_us_url", b.ContactUsURL)
+func (b *Ban) InjectKeyValues(writer *encoding.ActionWriter) {
+	_ = writer.SetString(encoding.VarScopeTransaction, "contact_us_url", b.ContactUsURL)
 }
