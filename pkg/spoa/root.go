@@ -267,6 +267,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	var httpData HTTPRequestData
 
+	//nolint:gocritic // Using if-else chain with IsEqual() for type-safe remediation comparisons instead of switch on String()
 	if r.IsEqual(remediation.Allow) {
 		// If user has a captcha cookie but decision is Allow, generate unset cookie
 		// We don't set captcha_status, so HAProxy knows to clear the cookie
