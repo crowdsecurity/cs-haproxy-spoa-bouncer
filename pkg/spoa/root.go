@@ -288,6 +288,13 @@ type IPMessageData struct {
 	ID      *string // unique-id from HAProxy
 }
 
+// reset clears all fields in preparation for returning to pool
+func (d *IPMessageData) reset() {
+	d.SrcIP = netip.Addr{}
+	d.SrcPort = nil
+	d.ID = nil
+}
+
 // Helper functions to allocate values on heap explicitly
 // These ensure values are heap-allocated rather than relying on escape analysis
 func stringPtr(s string) *string {
@@ -805,10 +812,7 @@ func extractIPMessageData(mes *encoding.Message) (*IPMessageData, error) {
 		// This should never happen, but handle gracefully
 		data = &IPMessageData{}
 	}
-	// Reset fields
-	data.SrcIP = netip.Addr{}
-	data.SrcPort = nil
-	data.ID = nil
+	data.reset() // Clear any previous data
 	k := encoding.AcquireKVEntry()
 	defer encoding.ReleaseKVEntry(k)
 
@@ -832,6 +836,7 @@ func extractIPMessageData(mes *encoding.Message) (*IPMessageData, error) {
 
 	if !foundIP {
 		// Return struct to pool on error
+		data.reset()
 		ipMessageDataPool.Put(data)
 		return nil, fmt.Errorf("src-ip key not found in message")
 	}
@@ -852,9 +857,7 @@ func (s *Spoa) handleIPRequest(ctx context.Context, writer *encoding.ActionWrite
 	}
 	// Return struct to pool when done
 	defer func() {
-		msgData.SrcIP = netip.Addr{}
-		msgData.SrcPort = nil
-		msgData.ID = nil
+		msgData.reset()
 		ipMessageDataPool.Put(msgData)
 	}()
 
