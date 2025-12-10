@@ -275,7 +275,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		// Use global AppSec if configured (no always_send check for global, but respect remediation)
 		// For global AppSec, we always check unless remediation is already restrictive (no always_send option)
 		if s.globalAppSec != nil && s.globalAppSec.IsValid() && r < remediation.Captcha {
-			r = s.validateWithAppSec(mes, nil, s.globalAppSec, r)
+			r = s.validateWithAppSec(mes, nil, s.globalAppSec, r, s.globalAppSec.TimeoutOrDefault())
 		}
 		return
 	}
@@ -333,10 +333,16 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		s.logger.Debug("Using global AppSec config (host-specific AppSec not configured)")
 	}
 
+	requestTimeout := matchedHost.AppSec.TimeoutOrDefault()
+	if matchedHost.AppSec.Timeout <= 0 && appSecToUse != nil {
+		// Host didn't override timeout, use whichever AppSec client we call (host or global)
+		requestTimeout = appSecToUse.TimeoutOrDefault()
+	}
+
 	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
 	// Use >= Captcha to make intent explicit: skip AppSec for restrictive remediations (Captcha/Ban)
 	if appSecToUse != nil && (r < remediation.Captcha || alwaysSend) {
-		r = s.validateWithAppSec(mes, matchedHost, appSecToUse, r)
+		r = s.validateWithAppSec(mes, matchedHost, appSecToUse, r, requestTimeout)
 		// If AppSec returns ban, inject ban values
 		if r == remediation.Ban {
 			matchedHost.Ban.InjectKeyValues(&req.Actions)
@@ -346,7 +352,13 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 // validateWithAppSec performs AppSec validation and returns the remediation
 // Returns the more restrictive remediation between the current remediation and AppSec result
-func (s *Spoa) validateWithAppSec(mes *message.Message, matchedHost *host.Host, appSecToUse *appsec.AppSec, currentRemediation remediation.Remediation) remediation.Remediation {
+func (s *Spoa) validateWithAppSec(
+	mes *message.Message,
+	matchedHost *host.Host,
+	appSecToUse *appsec.AppSec,
+	currentRemediation remediation.Remediation,
+	requestTimeout time.Duration,
+) remediation.Remediation {
 	// Extract AppSec data from message
 	httpData, err := extractAppSecData(mes)
 	if err != nil {
@@ -366,8 +378,8 @@ func (s *Spoa) validateWithAppSec(mes *message.Message, matchedHost *host.Host, 
 	// Build AppSec request
 	appSecReq := buildAppSecRequest(httpData.Host, httpData)
 
-	// Validate with AppSec using a short timeout: on success we return quickly, otherwise HAProxy falls back
-	appSecCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	// Validate with AppSec using the configured timeout: on success we return quickly, otherwise HAProxy falls back
+	appSecCtx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 	appSecRemediation, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
 	if err != nil {

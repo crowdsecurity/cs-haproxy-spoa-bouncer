@@ -14,6 +14,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const DefaultRequestTimeout = 200 * time.Millisecond
+
 // AppSecRequest represents the HTTP request data to be validated by AppSec
 type AppSecRequest struct {
 	Host      string
@@ -36,9 +38,10 @@ type AppSecClient struct {
 
 // AppSec represents the AppSec configuration for a host
 type AppSec struct {
-	AlwaysSend bool   `yaml:"always_send"`
-	URL        string `yaml:"url,omitempty"`     // Host-specific AppSec URL (overrides global)
-	APIKey     string `yaml:"api_key,omitempty"` // Host-specific API key (overrides global)
+	AlwaysSend bool          `yaml:"always_send"`
+	URL        string        `yaml:"url,omitempty"`     // Host-specific AppSec URL (overrides global)
+	APIKey     string        `yaml:"api_key,omitempty"` // Host-specific API key (overrides global)
+	Timeout    time.Duration `yaml:"timeout,omitempty"` // Request timeout override (default 200ms)
 	Client     *AppSecClient
 	logger     *log.Entry `yaml:"-"`
 }
@@ -87,6 +90,14 @@ func (a *AppSec) IsValid() bool {
 
 func (a *AppSec) InitLogger(logger *log.Entry) {
 	a.logger = logger.WithField("type", "appsec")
+}
+
+// TimeoutOrDefault returns the timeout configured for this AppSec entry, or the default if unset
+func (a *AppSec) TimeoutOrDefault() time.Duration {
+	if a == nil || a.Timeout <= 0 {
+		return DefaultRequestTimeout
+	}
+	return a.Timeout
 }
 
 // ValidateRequest sends the HTTP request to the AppSec engine and returns the remediation
@@ -202,10 +213,7 @@ func normalizeHTTPVersion(raw string) string {
 		return "11"
 	}
 
-	normalized := strings.TrimSpace(strings.ToUpper(raw))
-	if strings.HasPrefix(normalized, "HTTP/") {
-		normalized = strings.TrimPrefix(normalized, "HTTP/")
-	}
+	normalized := strings.TrimPrefix(strings.TrimSpace(strings.ToUpper(raw)), "HTTP/")
 
 	switch normalized {
 	case "1.0", "1":

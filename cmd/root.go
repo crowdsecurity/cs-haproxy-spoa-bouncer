@@ -207,8 +207,9 @@ func Execute() error {
 	var globalAppSec *appsec.AppSec
 	if config.AppSecURL != "" {
 		globalAppSec = &appsec.AppSec{
-			URL:    config.AppSecURL,
-			APIKey: config.APIKey,
+			URL:     config.AppSecURL,
+			APIKey:  config.APIKey,
+			Timeout: config.AppSecTimeout,
 		}
 		appSecLogger := log.WithField("component", "global_appsec")
 		if err := globalAppSec.Init(appSecLogger); err != nil {
