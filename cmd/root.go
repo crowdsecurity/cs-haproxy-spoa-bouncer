@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
@@ -202,6 +203,20 @@ func Execute() error {
 	hostManagerLogger := log.WithField("component", "host_manager")
 	HostManager := host.NewManager(hostManagerLogger)
 
+	// Create and initialize global AppSec (for use when no host is matched or as fallback)
+	var globalAppSec *appsec.AppSec
+	if config.AppSecURL != "" {
+		globalAppSec = &appsec.AppSec{
+			URL:     config.AppSecURL,
+			APIKey:  config.APIKey,
+			Timeout: config.AppSecTimeout,
+		}
+		appSecLogger := log.WithField("component", "global_appsec")
+		if err := globalAppSec.Init(appSecLogger); err != nil {
+			return fmt.Errorf("failed to initialize global AppSec: %w", err)
+		}
+	}
+
 	// Create and initialize global session manager (single GC goroutine for all hosts)
 	globalSessions := &session.Sessions{
 		SessionIdleTimeout:    "1h", // Default values
@@ -233,6 +248,7 @@ func Execute() error {
 		HostManager:    HostManager,
 		GeoDatabase:    &config.Geo,
 		GlobalSessions: globalSessions,
+		GlobalAppSec:   globalAppSec,
 		Logger:         spoaLogger,
 	}
 

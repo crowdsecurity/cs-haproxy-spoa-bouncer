@@ -186,6 +186,8 @@ func (h *Manager) AddHost(host *Host) {
 	if err := host.Ban.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
+	// Initialize AppSec with only host-specific config (no global fallback)
+	// Global AppSec is handled at SPOA level
 	if err := host.AppSec.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
