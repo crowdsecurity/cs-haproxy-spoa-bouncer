@@ -166,24 +166,7 @@ func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) 
 		"user_agent": req.UserAgent,
 	}).Debug("Created AppSec request with headers")
 
-	// Set HTTP version from the request (set by HAProxy SPOE)
-	// Convert version format from HAProxy (e.g., "1.1", "2.0") to our format (e.g., "11", "20")
-	httpVersion := "11" // Default to HTTP/1.1
-	if req.Version != "" {
-		// Use explicit mapping for known versions to handle edge cases correctly
-		switch req.Version {
-		case "1.0":
-			httpVersion = "10"
-		case "1.1":
-			httpVersion = "11"
-		case "2.0", "2":
-			httpVersion = "20"
-		default:
-			// For unknown formats, strip dots
-			httpVersion = strings.ReplaceAll(req.Version, ".", "")
-		}
-	}
-	httpReq.Header.Set("X-Crowdsec-Appsec-Http-Version", httpVersion)
+	httpReq.Header.Set("X-Crowdsec-Appsec-Http-Version", normalizeHTTPVersion(req.Version))
 
 	return httpReq, nil
 }
@@ -212,4 +195,28 @@ func (a *AppSec) processAppSecResponse(resp *http.Response) (remediation.Remedia
 		a.logger.Warnf("Unexpected AppSec response code: %d", resp.StatusCode)
 		return remediation.Allow, fmt.Errorf("unexpected AppSec response code: %d", resp.StatusCode)
 	}
+}
+
+func normalizeHTTPVersion(raw string) string {
+	if raw == "" {
+		return "11"
+	}
+
+	normalized := strings.TrimSpace(strings.ToUpper(raw))
+	if strings.HasPrefix(normalized, "HTTP/") {
+		normalized = strings.TrimPrefix(normalized, "HTTP/")
+	}
+
+	switch normalized {
+	case "1.0", "1":
+		return "10"
+	case "1.1":
+		return "11"
+	case "2.0", "2":
+		return "20"
+	case "3.0", "3":
+		return "30"
+	}
+
+	return strings.ReplaceAll(normalized, ".", "")
 }

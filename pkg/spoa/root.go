@@ -325,10 +325,9 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 	// Validate with AppSec - check remediation and always_send logic
 	// Use host-specific AppSec if valid, otherwise fall back to global AppSec
 	var appSecToUse *appsec.AppSec
-	alwaysSend := false
+	alwaysSend := matchedHost.AppSec.AlwaysSend
 	if matchedHost.AppSec.IsValid() {
 		appSecToUse = &matchedHost.AppSec
-		alwaysSend = matchedHost.AppSec.AlwaysSend
 	} else if s.globalAppSec != nil && s.globalAppSec.IsValid() {
 		appSecToUse = s.globalAppSec
 		s.logger.Debug("Using global AppSec config (host-specific AppSec not configured)")
@@ -367,9 +366,8 @@ func (s *Spoa) validateWithAppSec(mes *message.Message, matchedHost *host.Host, 
 	// Build AppSec request
 	appSecReq := buildAppSecRequest(httpData.Host, httpData)
 
-	// Validate with AppSec
-	// Use a timeout context that's slightly less than HAProxy's processing timeout (6s) to avoid connection resets
-	appSecCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Validate with AppSec using a short timeout: on success we return quickly, otherwise HAProxy falls back
+	appSecCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	appSecRemediation, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
 	if err != nil {
