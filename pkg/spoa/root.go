@@ -218,7 +218,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	// defer a function that always add the remediation to the request at end of processing
 	defer func() {
-		if matchedHost == nil && r.IsEqual(remediation.Captcha) {
+		if matchedHost == nil && remediation.IsEqual(r, remediation.Captcha) {
 			s.logger.Warn("remediation is captcha, no matching host was found cannot issue captcha remediation reverting to ban")
 			r = remediation.Ban
 		}
@@ -243,7 +243,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 			// Count blocked request if remediation applied (not Allow)
 			// This includes Unknown, Captcha, Ban, and any custom remediations
-			if r.IsWeighted() {
+			if remediation.IsWeighted(r) {
 				// Label order: origin, ip_type, remediation (as defined in metrics.go)
 				metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, r.String()).Inc()
 			}
@@ -326,7 +326,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 
 	// If remediation is not allow, we dont need to create a request to send to appsec unless always send is on
 	// This includes Unknown, Captcha, Ban, and any custom remediations
-	if r.IsWeighted() && !matchedHost.AppSec.AlwaysSend {
+	if remediation.IsWeighted(r) && !matchedHost.AppSec.AlwaysSend {
 		return
 	}
 	// !TODO APPSEC STUFF - httpData contains parsed URL, Method, Body, Headers for reuse
@@ -647,9 +647,9 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediatio
 				req.Actions.SetVar(action.ScopeTransaction, "isocode", iso)
 
 				// If no IP-specific remediation (Allow), check country-based remediation
-				if r.IsEqual(remediation.Allow) {
+				if remediation.IsEqual(r, remediation.Allow) {
 					cnR, cnOrigin := s.dataset.CheckCN(iso)
-					if cnR.IsHigher(remediation.Allow) {
+					if remediation.IsHigher(cnR, remediation.Allow) {
 						r = cnR
 						origin = cnOrigin
 					}
@@ -688,7 +688,7 @@ func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
 
 	// Count blocked requests (not Allow)
 	// This includes Unknown, Captcha, Ban, and any custom remediations
-	if r.IsWeighted() {
+	if remediation.IsWeighted(r) {
 		// Label order: origin, ip_type, remediation (as defined in metrics.go)
 		metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, r.String()).Inc()
 	}

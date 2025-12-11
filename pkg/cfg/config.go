@@ -94,11 +94,9 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 		return nil, fmt.Errorf("failed to setup logging: %w", err)
 	}
 
-	// Apply custom remediation weights if configured
+	// Load custom remediation weights if configured (loads all weights at once on startup)
 	if config.RemediationWeights != nil {
-		for remediationName, weight := range config.RemediationWeights {
-			remediation.SetWeight(remediationName, weight)
-		}
+		remediation.LoadWeights(config.RemediationWeights)
 	}
 
 	if err := config.Validate(); err != nil {

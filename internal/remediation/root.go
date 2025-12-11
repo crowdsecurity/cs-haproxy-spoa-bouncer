@@ -14,63 +14,36 @@ const (
 )
 
 // Remediation represents a remediation type as a string
-// We use string pointers for deduplication to reduce allocations
-type Remediation struct {
-	name   *string // Pointer to deduplicated string
-	weight int     // Weight for comparison (higher = more severe)
-}
+type Remediation string
 
-// registry manages deduplicated remediation strings and their weights
+// Built-in remediation constants
+const (
+	Allow   Remediation = "allow"
+	Unknown Remediation = "unknown"
+	Captcha Remediation = "captcha"
+	Ban     Remediation = "ban"
+)
+
+// registry manages remediation weights
 type registry struct {
 	mu      sync.RWMutex
-	strings map[string]*string // Maps string to its deduplicated pointer
-	weights map[string]int     // Maps remediation name to its weight
+	weights map[string]int // Maps remediation name to its weight
 }
 
 var globalRegistry = &registry{
-	strings: make(map[string]*string),
 	weights: make(map[string]int),
 }
 
-// Built-in remediation constants (for convenience)
-// Initialized to nil, will be set in init()
-var (
-	Allow   Remediation
-	Unknown Remediation
-	Captcha Remediation
-	Ban     Remediation
-)
-
-//nolint:gochecknoinits // init() is required to initialize package-level vars after weights are set
+//nolint:gochecknoinits // init() is required to initialize default weights
 func init() {
 	// Initialize built-in remediations with default weights
 	globalRegistry.mu.Lock()
 	defer globalRegistry.mu.Unlock()
 
-	// Set weights FIRST before creating strings
 	globalRegistry.weights["allow"] = WeightAllow
 	globalRegistry.weights["unknown"] = WeightUnknown
 	globalRegistry.weights["captcha"] = WeightCaptcha
 	globalRegistry.weights["ban"] = WeightBan
-
-	// Pre-create deduplicated strings for built-in remediations
-	// Must create new string variables for each to avoid pointer aliasing
-	allowStr := "allow"
-	unknownStr := "unknown"
-	captchaStr := "captcha"
-	banStr := "ban"
-
-	globalRegistry.strings["allow"] = &allowStr
-	globalRegistry.strings["unknown"] = &unknownStr
-	globalRegistry.strings["captcha"] = &captchaStr
-	globalRegistry.strings["ban"] = &banStr
-
-	// Now initialize the package-level vars directly (we already hold the lock)
-	// This avoids deadlock since New() would try to acquire the lock again
-	Allow = Remediation{name: &allowStr, weight: WeightAllow}
-	Unknown = Remediation{name: &unknownStr, weight: WeightUnknown}
-	Captcha = Remediation{name: &captchaStr, weight: WeightCaptcha}
-	Ban = Remediation{name: &banStr, weight: WeightBan}
 }
 
 // SetWeight sets a custom weight for a remediation (for configuration)
@@ -79,12 +52,6 @@ func SetWeight(name string, weight int) {
 	defer globalRegistry.mu.Unlock()
 
 	globalRegistry.weights[name] = weight
-	// Ensure deduplicated string exists
-	if _, exists := globalRegistry.strings[name]; !exists {
-		// Create new string copy on heap to ensure pointer remains valid
-		nameCopy := name
-		globalRegistry.strings[name] = &nameCopy
-	}
 }
 
 // GetWeight returns the weight for a remediation name
@@ -99,96 +66,67 @@ func GetWeight(name string) int {
 	return WeightUnknown
 }
 
-// New creates a new Remediation from a string.
-// Uses deduplicated string pointers to reduce allocations and ensure map key equality.
-//
-// IMPORTANT: All Remediation instances must be created via New() or FromString() to ensure
-// proper deduplication. Direct struct initialization will create different string pointers,
-// causing map lookups (e.g., in RemediationMap) to fail even for the same remediation name.
-//
-// The deduplication works by storing a single *string pointer per unique remediation name
-// in globalRegistry.strings. All subsequent calls with the same name return Remediation
-// instances with the same name pointer, ensuring map key equality works correctly.
-func New(name string) Remediation {
+// LoadWeights loads weights for multiple remediations at once (for startup initialization)
+func LoadWeights(weights map[string]int) {
 	globalRegistry.mu.Lock()
 	defer globalRegistry.mu.Unlock()
 
-	// Get or create deduplicated string pointer
-	deduped, exists := globalRegistry.strings[name]
-	if !exists {
-		// Create new deduplicated string. The variable escapes to heap when stored in
-		// the package-level map, ensuring the pointer remains valid for map key comparisons.
-		nameCopy := name
-		deduped = &nameCopy
-		globalRegistry.strings[name] = deduped
-		// Set default weight if not configured
-		if _, hasWeight := globalRegistry.weights[name]; !hasWeight {
-			globalRegistry.weights[name] = WeightUnknown
-		}
+	for name, weight := range weights {
+		globalRegistry.weights[name] = weight
 	}
+}
 
-	// Read weight from registry (may have been set in init() or SetWeight())
-	weight, ok := globalRegistry.weights[name]
-	if !ok {
-		// Weight not found, default to Unknown
-		weight = WeightUnknown
-	}
-	return Remediation{
-		name:   deduped,
-		weight: weight,
-	}
+// New creates a new Remediation from a string.
+func New(name string) Remediation {
+	return Remediation(name)
 }
 
 // String returns the remediation name
 func (r Remediation) String() string {
-	if r.name == nil {
+	if r == "" {
 		return "allow" // Default fallback
 	}
-	return *r.name
-}
-
-// Weight returns the weight of the remediation
-func (r Remediation) Weight() int {
-	return r.weight
+	return string(r)
 }
 
 // Compare returns:
-// - negative if r < other
-// - zero if r == other
-// - positive if r > other
-func (r Remediation) Compare(other Remediation) int {
-	return r.weight - other.weight
+// - negative if a < b
+// - zero if a == b
+// - positive if a > b
+func Compare(a, b Remediation) int {
+	weightA := GetWeight(a.String())
+	weightB := GetWeight(b.String())
+	return weightA - weightB
 }
 
-// IsHigher returns true if r has a higher weight than other
-func (r Remediation) IsHigher(other Remediation) bool {
-	return r.weight > other.weight
+// IsHigher returns true if a has a higher weight than b
+func IsHigher(a, b Remediation) bool {
+	return Compare(a, b) > 0
 }
 
-// IsLower returns true if r has a lower weight than other
-func (r Remediation) IsLower(other Remediation) bool {
-	return r.weight < other.weight
+// IsLower returns true if a has a lower weight than b
+func IsLower(a, b Remediation) bool {
+	return Compare(a, b) < 0
 }
 
-// IsEqual returns true if r represents the same remediation as other.
-// This compares both the name pointer (for deduplicated identity) and weight.
-// Two remediations are equal if they have the same name pointer and weight.
-func (r Remediation) IsEqual(other Remediation) bool {
-	return r.name == other.name && r.weight == other.weight
+// IsEqual returns true if a represents the same remediation as b.
+// This compares the remediation names (strings).
+func IsEqual(a, b Remediation) bool {
+	return a == b
 }
 
-// HasSameWeight returns true if r has the same weight as other.
+// HasSameWeight returns true if a has the same weight as b.
 // This is useful for checking if two different remediations have the same priority.
 // Note: Two remediations with the same weight will be compared by name (alphabetical)
 // as a tie-breaker when determining priority.
-func (r Remediation) HasSameWeight(other Remediation) bool {
-	return r.weight == other.weight
+func HasSameWeight(a, b Remediation) bool {
+	return Compare(a, b) == 0
 }
 
 // IsWeighted returns true if r is not Allow (has weight > Allow)
 // This is useful for checking if a remediation should be applied
-func (r Remediation) IsWeighted() bool {
-	return r.weight > WeightAllow
+func IsWeighted(r Remediation) bool {
+	return GetWeight(r.String()) > WeightAllow
 }
 
 // FromString creates a Remediation from a string (alias for New for backward compatibility)
@@ -198,5 +136,5 @@ func FromString(s string) Remediation {
 
 // IsZero returns true if the remediation is zero-valued
 func (r Remediation) IsZero() bool {
-	return r.name == nil
+	return r == ""
 }

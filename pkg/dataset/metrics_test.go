@@ -746,7 +746,7 @@ func TestMetrics_NoOp_DuplicateDecisions(t *testing.T) {
 		r, foundOrigin, found := dataSet.IPMap.Contains(ip)
 		assert.True(t, found, "IP should still exist")
 		assert.Equal(t, origin, foundOrigin, "origin should match")
-		assert.True(t, r.IsEqual(remediation.Ban), "remediation should be ban")
+		assert.True(t, remediation.IsEqual(r, remediation.Ban), "remediation should be ban")
 	})
 
 	t.Run("Duplicate range decision is no-op", func(t *testing.T) {
@@ -775,7 +775,7 @@ func TestMetrics_NoOp_DuplicateDecisions(t *testing.T) {
 		require.NoError(t, err)
 		r, foundOrigin := dataSet.RangeSet.Contains(testIP)
 		assert.Equal(t, origin, foundOrigin, "origin should match")
-		assert.True(t, r.IsEqual(remediation.Ban), "remediation should be ban")
+		assert.True(t, remediation.IsEqual(r, remediation.Ban), "remediation should be ban")
 	})
 
 	t.Run("Duplicate country decision is no-op", func(t *testing.T) {
@@ -802,7 +802,7 @@ func TestMetrics_NoOp_DuplicateDecisions(t *testing.T) {
 		// Verify decision still exists
 		r, foundOrigin := dataSet.CNSet.Contains("US")
 		assert.Equal(t, origin, foundOrigin, "origin should match")
-		assert.True(t, r.IsEqual(remediation.Ban), "remediation should be ban")
+		assert.True(t, remediation.IsEqual(r, remediation.Ban), "remediation should be ban")
 	})
 
 	t.Run("Same IP different remediation is not no-op", func(t *testing.T) {
@@ -866,7 +866,7 @@ func TestMetrics_OriginOverwriteAndDelete(t *testing.T) {
 		require.NoError(t, err)
 		r, storedOrigin, found := dataSet.IPMap.Contains(ip)
 		assert.True(t, found, "IP should exist")
-		assert.True(t, r.IsEqual(remediation.Ban), "IP should have ban remediation")
+		assert.True(t, remediation.IsEqual(r, remediation.Ban), "IP should have ban remediation")
 		assert.Equal(t, origin, storedOrigin, "IP should have CAPI origin")
 
 		// Step 2: Add captcha from same CAPI origin (overwrites ban)
@@ -890,7 +890,7 @@ func TestMetrics_OriginOverwriteAndDelete(t *testing.T) {
 		// Both ban and captcha exist in the map, but ban is returned as highest priority
 		r2, storedOrigin2, found2 := dataSet.IPMap.Contains(ip)
 		assert.True(t, found2, "IP should still exist")
-		assert.True(t, r2.IsEqual(remediation.Ban), "IP should have ban remediation (highest priority, ban > captcha)")
+		assert.True(t, remediation.IsEqual(r2, remediation.Ban), "IP should have ban remediation (highest priority, ban > captcha)")
 		assert.Equal(t, origin, storedOrigin2, "IP should still have CAPI origin")
 
 		// Step 3: Delete ban from CAPI
@@ -913,7 +913,7 @@ func TestMetrics_OriginOverwriteAndDelete(t *testing.T) {
 		// Verify IP now has captcha (ban was removed, captcha is now active)
 		r3, storedOrigin3, found3 := dataSet.IPMap.Contains(ip)
 		assert.True(t, found3, "IP should still exist")
-		assert.True(t, r3.IsEqual(remediation.Captcha), "IP should now have captcha remediation (ban was removed)")
+		assert.True(t, remediation.IsEqual(r3, remediation.Captcha), "IP should now have captcha remediation (ban was removed)")
 		assert.Equal(t, origin, storedOrigin3, "IP should still have CAPI origin")
 	})
 }

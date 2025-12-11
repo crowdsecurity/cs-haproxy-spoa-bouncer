@@ -21,15 +21,8 @@ var ErrRemediationNotFound = errors.New("remediation not found")
 //   - Deletions: Delete means user wants to allow the IP - just remove the remediation entry.
 //     Duplicate deletes are safely ignored (entry already gone).
 //
-// Keys are remediation.Remediation types, which use deduplicated string pointers internally.
-// This automatically benefits from string deduplication without extra complexity.
+// Keys are remediation.Remediation types (string type).
 // Weight comparison is done via remediation.Compare() when determining priority.
-//
-// IMPORTANT: Map key comparison uses Go's == operator which compares all struct fields,
-// including the name pointer. For map lookups to work correctly, all Remediation instances
-// MUST be created via remediation.New() or remediation.FromString() to ensure proper
-// deduplication. Direct struct initialization will result in different pointers and
-// cause map lookups to fail.
 type RemediationMap map[remediation.Remediation]string
 
 // Remove removes a remediation entry (deletion means user wants to allow the IP).
@@ -81,10 +74,10 @@ func (rM RemediationMap) GetRemediationAndOrigin() (remediation.Remediation, str
 		}
 
 		// Compare by weight first
-		if r.IsHigher(maxRemediation) {
+		if remediation.IsHigher(r, maxRemediation) {
 			maxRemediation = r
 			maxOrigin = origin
-		} else if r.HasSameWeight(maxRemediation) {
+		} else if remediation.HasSameWeight(r, maxRemediation) {
 			// Tie-breaker: use alphabetical order of name for deterministic behavior
 			if r.String() < maxRemediation.String() {
 				maxRemediation = r

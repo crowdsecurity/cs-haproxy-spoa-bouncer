@@ -83,7 +83,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				ipType = "ipv6"
 			}
 			// Check if we're overwriting an existing decision with different origin
-			if existingR, existingOrigin, found := d.IPMap.Contains(ip); found && existingR.IsEqual(r) && existingOrigin != origin {
+			if existingR, existingOrigin, found := d.IPMap.Contains(ip); found && remediation.IsEqual(existingR, r) && existingOrigin != origin {
 				// Decrement old origin's metric before incrementing new one
 				// Label order: origin, ip_type, scope (as defined in metrics.go)
 				metrics.TotalActiveDecisions.WithLabelValues(existingOrigin, ipType, "ip").Dec()
@@ -126,7 +126,7 @@ func (d *DataSet) Add(decisions models.GetDecisionsResponse) {
 				continue
 			}
 			// Check if we're overwriting an existing decision with different origin
-			if existingR, existingOrigin := d.CNSet.Contains(cn); existingR.IsEqual(r) && existingOrigin != "" && existingOrigin != origin {
+			if existingR, existingOrigin := d.CNSet.Contains(cn); remediation.IsEqual(existingR, r) && existingOrigin != "" && existingOrigin != origin {
 				// Decrement old origin's metric before incrementing new one
 				// Label order: origin, ip_type, scope (as defined in metrics.go)
 				metrics.TotalActiveDecisions.WithLabelValues(existingOrigin, "", "country").Dec()

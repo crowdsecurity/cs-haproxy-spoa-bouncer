@@ -169,7 +169,7 @@ func TestDataSet(t *testing.T) {
 				t.Fatalf("unknown scope %s", tt.toCheck.Scope)
 			}
 			require.NoError(t, err)
-			assert.True(t, r.IsEqual(tt.toCheck.Type), "remediation should match: got %s, expected %s", r.String(), tt.toCheck.Type.String())
+			assert.True(t, remediation.IsEqual(r, tt.toCheck.Type), "remediation should match: got %s, expected %s", r.String(), tt.toCheck.Type.String())
 			assert.Equal(t, origin, tt.toCheck.Origin)
 		})
 	}

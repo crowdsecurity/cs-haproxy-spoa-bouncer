@@ -175,12 +175,12 @@ func TestCorrectness(t *testing.T) {
 		}
 
 		// Basic sanity check - result should be valid (not less than Allow weight)
-		if result.Compare(remediation.Allow) < 0 {
+		if remediation.Compare(result, remediation.Allow) < 0 {
 			t.Errorf("Invalid result for IP %s: %v", testIP.String(), result)
 		}
 
 		// Origin should be non-empty if we have a match (result > Allow)
-		if result.Compare(remediation.Allow) > 0 && origin == "" {
+		if remediation.Compare(result, remediation.Allow) > 0 && origin == "" {
 			t.Errorf("Empty origin for IP %s with result %v", testIP.String(), result)
 		}
 	}
@@ -202,28 +202,28 @@ func TestLongestPrefixMatch(t *testing.T) {
 	// Test that individual IP from IPMap wins (checked first before RangeSet)
 	ip1 := netip.MustParseAddr("192.168.1.1")
 	result, _, _ := dataset.CheckIP(ip1)
-	if !result.IsEqual(remediation.Allow) {
+	if !remediation.IsEqual(result, remediation.Allow) {
 		t.Errorf("Expected Allow for 192.168.1.1 (from IPMap), got %v", result)
 	}
 
 	// Test that we get the LPM from RangeSet (Captcha /24 wins over Ban /16)
 	ip2 := netip.MustParseAddr("192.168.1.2")
 	result, _, _ = dataset.CheckIP(ip2)
-	if !result.IsEqual(remediation.Captcha) {
+	if !remediation.IsEqual(result, remediation.Captcha) {
 		t.Errorf("Expected Captcha for 192.168.1.2 (LPM from RangeSet), got %v", result)
 	}
 
 	// Test that we get the broadest match from RangeSet
 	ip3 := netip.MustParseAddr("192.168.2.1")
 	result, _, _ = dataset.CheckIP(ip3)
-	if !result.IsEqual(remediation.Ban) {
+	if !remediation.IsEqual(result, remediation.Ban) {
 		t.Errorf("Expected Ban for 192.168.2.1 (from RangeSet), got %v", result)
 	}
 
 	// Test that we get no match
 	ip4 := netip.MustParseAddr("10.0.0.1")
 	result, _, _ = dataset.CheckIP(ip4)
-	if !result.IsEqual(remediation.Allow) {
+	if !remediation.IsEqual(result, remediation.Allow) {
 		t.Errorf("Expected Allow for 10.0.0.1 (no match), got %v", result)
 	}
 }
