@@ -31,7 +31,7 @@ services:
        - --port=2020
 
   haproxy:
-    image: haproxy:2.9.7-alpine
+    image: haproxy:3.2-alpine
     restart: unless-stopped
     volumes:
       - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg

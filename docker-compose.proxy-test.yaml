@@ -30,10 +30,10 @@ services:
        - --port=2020
 
   haproxy:
-    image: haproxy:2.9.7-alpine
+    image: haproxy:3.2-alpine
     volumes:
       - ./config/haproxy-upstreamproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
-      - ./config/crowdsec-upstreamproxy.cfg:/etc/haproxy/crowdsec.cfg
+      - ./config/crowdsec.cfg:/etc/haproxy/crowdsec.cfg
       - sockets:/run/
       - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
       - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/

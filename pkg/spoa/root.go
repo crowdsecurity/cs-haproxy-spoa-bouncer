@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	messageNames = []string{"crowdsec-http", "crowdsec-ip"}
+	messageNames = []string{"crowdsec-tcp", "crowdsec-http-body", "crowdsec-http-no-body"}
 )
 
 type Spoa struct {
@@ -182,34 +182,42 @@ type HTTPRequestData struct {
 }
 
 // Handles checking the http request which has 2 stages
-// First stage is to check the host header and determine if the remediation from handleIpRequest is still valid
+// First stage is to always check the IP (even if remediation was passed from TCP handler)
+//   - Compare with passed remediation, only count metrics if remediation changed
+//
 // Second stage is to check if AppSec is enabled and then forward to the component if needed
+// Body will be checked automatically - if not present in message, it will be nil
 func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
-	r := remediation.Allow
-	var origin string
-	shouldCountMetrics := false
+	var tcpRemediation remediation.Remediation
+	var remediationChanged bool
 
+	// Get remediation passed from crowdsec-tcp handler (if any)
 	rstring, err := readKeyFromMessage[string](mes, "remediation")
-	if err != nil {
-		// IP remediation not found - fallback to checking IP directly
-		// This handles cases where crowdsec-ip message didn't fire (e.g., on-client-session not triggered)
-		// Also handles upstream proxy mode where no IP check happened
-		s.logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "remediation",
-		}).Debug("remediation key not found in message (expected from crowdsec-ip message), checking IP directly as fallback")
-		// Get IP from message for both remediation and origin (needed for metrics)
-		ipAddrPtr, ipErr := readKeyFromMessage[netip.Addr](mes, "src-ip")
-		if ipErr == nil && ipAddrPtr != nil {
-			r, origin = s.getIPRemediation(req, *ipAddrPtr)
-			// Only count metrics if we successfully got IP and checked remediation
-			shouldCountMetrics = true
-		}
+	if err == nil && rstring != nil {
+		tcpRemediation = remediation.FromString(*rstring)
 	}
 
-	if rstring != nil {
-		r = remediation.FromString(*rstring)
-		// Remediation came from IP check, already counted
+	// Always check IP - we cannot trust if src-ip has changed since TCP handler ran
+	ipAddrPtr, ipErr := readKeyFromMessage[netip.Addr](mes, "src-ip")
+	if ipErr != nil || ipAddrPtr == nil {
+		s.logger.WithFields(log.Fields{
+			"error": ipErr,
+			"key":   "src-ip",
+		}).Error("failed to read src-ip from message, cannot check IP remediation")
+		// Fall back to TCP remediation if available
+		if rstring != nil {
+			req.Actions.SetVar(action.ScopeTransaction, "remediation", tcpRemediation.String())
+		}
+		return
+	}
+
+	// Always check IP remediation
+	r, origin := s.getIPRemediation(req, *ipAddrPtr)
+
+	// Only increment metrics if remediation changed from TCP handler's initial lookup
+	// This prevents double-counting when the same IP is checked in both TCP and HTTP handlers
+	if r != tcpRemediation {
+		remediationChanged = true
 	}
 
 	hoststring, err := readKeyFromMessage[string](mes, "host")
@@ -225,17 +233,12 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 		rString := r.String()
 		req.Actions.SetVar(action.ScopeTransaction, "remediation", rString)
 
-		// Count metrics if this is the only handler (upstream proxy mode)
-		if shouldCountMetrics {
+		// Only count metrics if remediation changed from TCP handler (or if no TCP remediation was passed)
+		// This prevents double-counting when the same IP is checked in both TCP and HTTP handlers
+		if remediationChanged || (rstring == nil || *rstring == "") {
 			// Get IP from message for metrics
 			ipTypeLabel := "ipv4"
-			srcIP, ipErr := readKeyFromMessage[netip.Addr](mes, "src-ip")
-			if ipErr != nil {
-				s.logger.WithFields(log.Fields{
-					"error": ipErr,
-					"key":   "src-ip",
-				}).Warn("failed to read src-ip from message for metrics, assuming ipv4")
-			} else if srcIP != nil && srcIP.IsValid() && srcIP.Is6() {
+			if ipAddrPtr != nil && ipAddrPtr.IsValid() && ipAddrPtr.Is6() {
 				ipTypeLabel = "ipv6"
 			}
 
@@ -335,6 +338,7 @@ func (s *Spoa) handleHTTPRequest(req *request.Request, mes *message.Message) {
 }
 
 // parseHTTPData extracts HTTP request data from the message for reuse in AppSec processing
+// Body will be nil if not present in the message (for crowdsec-http-no-body messages)
 //
 //nolint:unparam // httpData will be used when AppSec is implemented
 func parseHTTPData(logger *log.Entry, mes *message.Message) HTTPRequestData {
@@ -376,14 +380,14 @@ func parseHTTPData(logger *log.Entry, mes *message.Message) HTTPRequestData {
 		}
 	}
 
+	// Attempt to read body - will be nil if not present (for crowdsec-http-no-body messages)
 	body, err := readKeyFromMessage[[]byte](mes, "body")
 	if err != nil {
-		logger.WithFields(log.Fields{
-			"error": err,
-			"key":   "body",
-		}).Debug("failed to read body from message for AppSec processing - ensure HAProxy is sending the 'body' variable in crowdsec-http message")
+		// Body not present in message - this is expected for crowdsec-http-no-body messages
+		httpData.Body = nil
+	} else {
+		httpData.Body = body
 	}
-	httpData.Body = body
 
 	return httpData
 }
@@ -655,14 +659,15 @@ func (s *Spoa) getIPRemediation(req *request.Request, ip netip.Addr) (remediatio
 	return r, origin
 }
 
-// Handles checking the IP address against the dataset
-func (s *Spoa) handleIPRequest(req *request.Request, mes *message.Message) {
+// Handles checking the IP address against the dataset (TCP/IP level check)
+// This is called from the crowdsec-tcp message via event on-client-session
+func (s *Spoa) handleTCPRequest(req *request.Request, mes *message.Message) {
 	ipAddrPtr, err := readKeyFromMessage[netip.Addr](mes, "src-ip")
 	if err != nil {
 		s.logger.WithFields(log.Fields{
 			"error": err,
 			"key":   "src-ip",
-		}).Error("failed to read src-ip from message, cannot check IP remediation - ensure HAProxy is sending the 'src' variable as 'src-ip' in crowdsec-ip message")
+		}).Error("failed to read src-ip from message, cannot check IP remediation - ensure HAProxy is sending the 'src' variable as 'src-ip' in crowdsec-tcp message")
 		return
 	}
 
@@ -699,10 +704,12 @@ func handlerWrapper(s *Spoa) func(req *request.Request) {
 			}
 			s.logger.Trace("Received message: ", messageName)
 			switch messageName {
-			case "crowdsec-http":
+			case "crowdsec-http-body", "crowdsec-http-no-body":
+				// Both HTTP message types use the same handler
+				// The handler will check if body is present in the message
 				s.handleHTTPRequest(req, mes)
-			case "crowdsec-ip":
-				s.handleIPRequest(req, mes)
+			case "crowdsec-tcp":
+				s.handleTCPRequest(req, mes)
 			}
 		}
 	}
