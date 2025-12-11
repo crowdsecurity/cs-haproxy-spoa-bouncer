@@ -12,7 +12,7 @@ import (
 // ErrRemediationNotFound is returned when attempting to remove a remediation that doesn't exist.
 var ErrRemediationNotFound = errors.New("remediation not found")
 
-// RemediationMap stores one origin string per remediation type.
+// RemediationMap stores one origin string per remediation type (using Remediation as keys).
 // ID is not tracked since LAPI behavior ensures we only have the longest decision.
 //
 // LAPI behavior:
@@ -20,6 +20,9 @@ var ErrRemediationNotFound = errors.New("remediation not found")
 //   - Stream: Only returns NEW decisions if they're LONGER than current
 //   - Deletions: Delete means user wants to allow the IP - just remove the remediation entry.
 //     Duplicate deletes are safely ignored (entry already gone).
+//
+// Keys are remediation.Remediation types (string type).
+// Weight comparison is done via remediation.Compare() when determining priority.
 type RemediationMap map[remediation.Remediation]string
 
 // Remove removes a remediation entry (deletion means user wants to allow the IP).
@@ -54,16 +57,32 @@ func (rM RemediationMap) Add(clog *log.Entry, r remediation.Remediation, origin 
 }
 
 // GetRemediationAndOrigin returns the highest priority remediation and its origin.
+// Priority is determined by comparing weights using remediation.Compare().
+// If two remediations have the same weight, alphabetical order of the name is used as a tie-breaker
+// to ensure deterministic behavior.
 func (rM RemediationMap) GetRemediationAndOrigin() (remediation.Remediation, string) {
 	var maxRemediation remediation.Remediation
 	var maxOrigin string
 	first := true
 
-	for k, v := range rM {
-		if first || k > maxRemediation {
-			maxRemediation = k
-			maxOrigin = v
+	for r, origin := range rM {
+		if first {
+			maxRemediation = r
+			maxOrigin = origin
 			first = false
+			continue
+		}
+
+		// Compare by weight first
+		if remediation.IsHigher(r, maxRemediation) {
+			maxRemediation = r
+			maxOrigin = origin
+		} else if remediation.HasSameWeight(r, maxRemediation) {
+			// Tie-breaker: use alphabetical order of name for deterministic behavior
+			if r.String() < maxRemediation.String() {
+				maxRemediation = r
+				maxOrigin = origin
+			}
 		}
 	}
 

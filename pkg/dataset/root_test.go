@@ -16,7 +16,7 @@ type toCheck struct {
 	Value  string // IP, Country
 	Scope  string // IP, Country
 	Origin string
-	Type   remediation.Remediation
+	Type   remediation.Remediation // remediation type
 }
 
 func TestDataSet(t *testing.T) {
@@ -169,7 +169,7 @@ func TestDataSet(t *testing.T) {
 				t.Fatalf("unknown scope %s", tt.toCheck.Scope)
 			}
 			require.NoError(t, err)
-			assert.Equal(t, r, tt.toCheck.Type)
+			assert.True(t, remediation.IsEqual(r, tt.toCheck.Type), "remediation should match: got %s, expected %s", r.String(), tt.toCheck.Type.String())
 			assert.Equal(t, origin, tt.toCheck.Origin)
 		})
 	}

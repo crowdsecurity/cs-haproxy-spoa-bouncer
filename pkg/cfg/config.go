@@ -7,6 +7,7 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	cslogging "github.com/crowdsecurity/crowdsec-spoa/pkg/logging"
 	"github.com/crowdsecurity/go-cs-lib/csyaml"
@@ -36,6 +37,32 @@ type BouncerConfig struct {
 	ListenUnix       string                  `yaml:"listen_unix"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
 	PprofConfig      PprofConfig             `yaml:"pprof"`
+	// RemediationWeights allows users to configure custom weights for remediations.
+	//
+	// Format:
+	//   remediation_weights:
+	//     <remediation_name>: <weight>
+	//
+	// Example:
+	//   remediation_weights:
+	//     mfa: 15   # slots between captcha (10) and ban (20)
+	//
+	// Valid weight range: integer values >= 0. Lower values are less severe; higher values are more severe.
+	// Recommended: Use values between 0 and 100.
+	//
+	// Built-in defaults:
+	//   allow=0, unknown=1, captcha=10, ban=20
+	//
+	// Custom weights override or supplement built-in remediations. If a custom remediation is defined,
+	// its weight will be used for ordering and severity. Custom remediations can slot between built-in
+	// ones by choosing an appropriate weight value.
+	//
+	// Tie-breaking: If two remediations have the same weight, alphabetical order of the remediation
+	// name is used as a deterministic tie-breaker when determining priority.
+	//
+	// Note: Custom weights for built-in remediations (allow, unknown, captcha, ban) must be set
+	// before package initialization. After init(), package-level constants already have cached weights.
+	RemediationWeights map[string]int `yaml:"remediation_weights,omitempty"`
 }
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).
@@ -65,6 +92,11 @@ func NewConfig(reader io.Reader) (*BouncerConfig, error) {
 
 	if err = config.Logging.Setup("crowdsec-spoa-bouncer.log"); err != nil {
 		return nil, fmt.Errorf("failed to setup logging: %w", err)
+	}
+
+	// Load custom remediation weights if configured (loads all weights at once on startup)
+	if config.RemediationWeights != nil {
+		remediation.LoadWeights(config.RemediationWeights)
 	}
 
 	if err := config.Validate(); err != nil {
