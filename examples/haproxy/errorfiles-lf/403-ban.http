@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Security Check</title>
+  <title>Access Denied</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -21,7 +21,7 @@
       border-radius: 4px;
       padding: 40px;
       max-width: 500px;
-      width: 100%;
+      width: 100%%;
       box-shadow: 0 2px 4px rgba(0,0,0,0.3);
     }
     h1 {
@@ -30,11 +30,6 @@
       margin-bottom: 20px;
       text-align: center;
       color: #e5e5e5;
-    }
-    .captcha-container {
-      display: flex;
-      justify-content: center;
-      margin: 30px 0;
     }
     .info-text {
       font-size: 14px;
@@ -79,14 +74,11 @@
       margin-top: 8px;
     }
   </style>
-  <script src="{{captcha_frontend_js}}" async defer></script>
 </head>
 <body>
   <div class="container">
-    <h1>Please verify you are human</h1>
-    <form method="POST" class="captcha-container">
-      <div class="{{captcha_frontend_key}}" data-sitekey="{{captcha_site_key}}" data-callback="onCaptchaSuccess" data-theme="dark"></div>
-    </form>
+    <h1>Access Denied</h1>
+    <p class="info-text">Your request has been blocked.</p>
     <div class="footer">
       <div class="footer-brand">
         <span>Protected by</span>
@@ -105,12 +97,8 @@
           <span>CrowdSec</span>
         </a>
       </div>
+      <div class="unique-id">Request ID: %[unique-id]</div>
     </div>
   </div>
-  <script>
-    function onCaptchaSuccess(token) {
-      document.querySelector('form').submit();
-    }
-  </script>
 </body>
 </html>
