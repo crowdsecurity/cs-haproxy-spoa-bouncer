@@ -66,8 +66,11 @@ var (
 	keyBody          = []byte("body")
 
 	// Pre-allocated byte slices for message name matching
-	messageCrowdsecHTTP = []byte("crowdsec-http")
-	messageCrowdsecIP   = []byte("crowdsec-ip")
+	messageCrowdsecHTTP       = []byte("crowdsec-http")
+	messageCrowdsecHTTPBody   = []byte("crowdsec-http-body")
+	messageCrowdsecHTTPNoBody = []byte("crowdsec-http-no-body")
+	messageCrowdsecIP         = []byte("crowdsec-ip")
+	messageCrowdsecTCP        = []byte("crowdsec-tcp")
 )
 
 type Spoa struct {
@@ -155,15 +158,24 @@ func New(config *SpoaConfig) (*Spoa, error) {
 // HandleSPOE implements the spop.Handler interface
 func (s *Spoa) HandleSPOE(ctx context.Context, writer *encoding.ActionWriter, message *encoding.Message) {
 	messageNameBytes := message.NameBytes()
-	s.logger.Trace("Received message: ", string(messageNameBytes))
+	messageName := string(messageNameBytes)
+
+	// Debug: Log all received messages
+	s.logger.Debugf("Received message: %s", messageName)
 
 	switch {
 	case bytes.Equal(messageNameBytes, messageCrowdsecHTTP):
+		// Legacy support for old message name
 		s.handleHTTPRequest(ctx, writer, message)
-	case bytes.Equal(messageNameBytes, messageCrowdsecIP):
+	case bytes.Equal(messageNameBytes, messageCrowdsecHTTPBody), bytes.Equal(messageNameBytes, messageCrowdsecHTTPNoBody):
+		// Both HTTP message types use the same handler
+		// The handler will check if body is present in the message
+		s.handleHTTPRequest(ctx, writer, message)
+	case bytes.Equal(messageNameBytes, messageCrowdsecIP), bytes.Equal(messageNameBytes, messageCrowdsecTCP):
+		// Both IP/TCP message types use the same handler
 		s.handleIPRequest(ctx, writer, message)
 	default:
-		s.logger.Debugf("Unknown message type: %s", string(messageNameBytes))
+		s.logger.Debugf("Unknown message type: %s", messageName)
 	}
 }
 
@@ -403,8 +415,11 @@ func extractHTTPMessageData(mes *encoding.Message) *HTTPMessageData {
 }
 
 // Handles checking the http request which has 2 stages
-// First stage is to check the host header and determine if the remediation from handleIpRequest is still valid
+// First stage is to always check the IP (even if remediation was passed from TCP handler)
+//   - Compare with passed remediation, only count metrics if remediation changed
+//
 // Second stage is to check if AppSec is enabled and then forward to the component if needed
+// Body will be checked automatically - if not present in message, it will be nil
 func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWriter, mes *encoding.Message) {
 	// Extract all message data in a single pass
 	msgData := extractHTTPMessageData(mes)
@@ -414,25 +429,27 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		httpMessageDataPool.Put(msgData)
 	}()
 
-	r := remediation.Allow
-	var origin string
-	shouldCountMetrics := false
+	var tcpRemediation remediation.Remediation
 
-	if msgData.Remediation == nil {
-		// IP remediation not found - fallback to checking IP directly
-		// This handles cases where crowdsec-ip message didn't fire (e.g., on-client-session not triggered)
-		// Also handles upstream proxy mode where no IP check happened
-		s.logger.Debug("remediation key not found in message (expected from crowdsec-ip message), checking IP directly as fallback")
-		// Get IP from message for both remediation and origin (needed for metrics)
-		if msgData.SrcIP != nil {
-			r, origin = s.getIPRemediation(ctx, writer, *msgData.SrcIP)
-			// Only count metrics if we successfully got IP and checked remediation
-			shouldCountMetrics = true
-		}
-	} else {
-		r = remediation.FromString(*msgData.Remediation)
-		// Remediation came from IP check, already counted
+	// Get remediation passed from crowdsec-tcp handler (if any)
+	if msgData.Remediation != nil {
+		tcpRemediation = remediation.FromString(*msgData.Remediation)
 	}
+
+	// Always check IP - we cannot trust if src-ip has changed since TCP handler ran
+	if msgData.SrcIP == nil {
+		s.logger.WithFields(log.Fields{
+			"key": "src-ip",
+		}).Error("failed to read src-ip from message, cannot check IP remediation")
+		// Fall back to TCP remediation if available
+		if msgData.Remediation != nil {
+			_ = writer.SetString(encoding.VarScopeTransaction, "remediation", tcpRemediation.String())
+		}
+		return
+	}
+
+	// Always check IP remediation
+	r, origin := s.getIPRemediation(ctx, writer, *msgData.SrcIP)
 
 	var matchedHost *host.Host
 
@@ -445,20 +462,41 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		rString := r.String()
 		_ = writer.SetString(encoding.VarScopeTransaction, "remediation", rString)
 
-		// Count metrics if this is the only handler (upstream proxy mode)
-		if shouldCountMetrics {
+		// Metrics logic:
+		// 1. If TCP handler didn't run (remediation == nil): count both processed and blocked
+		// 2. If TCP remediation was Allow and HTTP finds bad remediation: count only blocked
+		//    (new remediation may have been added since TCP check, or IP changed)
+		// 3. If TCP remediation was > Unknown (ban/captcha): don't count anything (already counted)
+		shouldCountProcessed := false
+		shouldCountBlocked := false
+
+		if msgData.Remediation == nil {
+			// TCP handler didn't run - count both processed and blocked
+			shouldCountProcessed = true
+			if r > remediation.Unknown {
+				shouldCountBlocked = true
+			}
+		} else if tcpRemediation == remediation.Allow && r > remediation.Unknown {
+			// TCP found Allow but HTTP found bad remediation - count only blocked
+			// (processed was already counted by TCP handler)
+			shouldCountBlocked = true
+		}
+		// If TCP remediation was already bad, don't count anything (already counted by TCP handler)
+
+		if shouldCountProcessed || shouldCountBlocked {
 			// Get IP from message for metrics
 			ipTypeLabel := "ipv4"
 			if msgData.SrcIP != nil && msgData.SrcIP.IsValid() && msgData.SrcIP.Is6() {
 				ipTypeLabel = "ipv6"
 			}
 
-			// Count processed request - use WithLabelValues to avoid map allocation on hot path
-			metrics.TotalProcessedRequests.WithLabelValues(ipTypeLabel).Inc()
+			if shouldCountProcessed {
+				// Count processed request - use WithLabelValues to avoid map allocation on hot path
+				metrics.TotalProcessedRequests.WithLabelValues(ipTypeLabel).Inc()
+			}
 
-			// Count blocked request if remediation applied
-			if r > remediation.Unknown {
-				// Label order: origin, ip_type, remediation (as defined in metrics.go)
+			if shouldCountBlocked {
+				// Count blocked request - Label order: origin, ip_type, remediation (as defined in metrics.go)
 				metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, r.String()).Inc()
 			}
 		}
