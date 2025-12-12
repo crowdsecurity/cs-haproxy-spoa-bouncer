@@ -164,7 +164,7 @@ func (s *Spoa) HandleSPOE(ctx context.Context, writer *encoding.ActionWriter, me
 		// TCP message type uses the same handler
 		s.handleTCPRequest(ctx, writer, message)
 	case bytes.Equal(messageNameBytes, messageCrowdsecHTTPBody), bytes.Equal(messageNameBytes, messageCrowdsecHTTPNoBody):
-		// HTTP message types uses the same handler
+		// HTTP message types use the same handler
 		// The handler will check if body is present in the message
 		s.handleHTTPRequest(ctx, writer, message)
 	default:
@@ -460,7 +460,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		// 1. If TCP handler didn't run (remediation == nil): count both processed and blocked
 		// 2. If TCP remediation was Allow and HTTP finds bad remediation: count only blocked
 		//    (new remediation may have been added since TCP check, or IP changed)
-		// 3. If TCP remediation was > Unknown (ban/captcha): don't count anything (already counted)
+		// 3. If TCP remediation was not Allow (Unknown/Ban/Captcha): don't count anything (already counted by TCP handler)
 		shouldCountProcessed := false
 		shouldCountBlocked := false
 
@@ -840,7 +840,10 @@ func extractIPMessageData(mes *encoding.Message) (*IPMessageData, error) {
 	return data, nil
 }
 
-// Handles checking the IP address against the dataset
+// handleTCPRequest performs TCP-level IP checking during the on-client-session event.
+// It extracts the source IP from the incoming message and checks it against the dataset
+// to determine if remediation is required. This function runs early in the connection
+// lifecycle, before HTTP-level processing, to enable fast blocking or remediation decisions.
 func (s *Spoa) handleTCPRequest(ctx context.Context, writer *encoding.ActionWriter, mes *encoding.Message) {
 	msgData, err := extractIPMessageData(mes)
 	if err != nil {
