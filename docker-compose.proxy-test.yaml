@@ -33,7 +33,7 @@ services:
     image: haproxy:2.9.7-alpine
     volumes:
       - ./config/haproxy-upstreamproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
-      - ./config/crowdsec-upstreamproxy.cfg:/etc/haproxy/crowdsec.cfg
+      - ./config/crowdsec.cfg:/etc/haproxy/crowdsec.cfg
       - sockets:/run/
       - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
       - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
@@ -51,7 +51,7 @@ services:
     volumes:
       - ./config/nginx-proxy.conf:/etc/nginx/nginx.conf:ro
     ports:
-      - "8080:80"
+      - "9090:80"
     depends_on:
       - haproxy
     networks:
