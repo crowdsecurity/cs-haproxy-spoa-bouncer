@@ -66,10 +66,8 @@ var (
 	keyBody          = []byte("body")
 
 	// Pre-allocated byte slices for message name matching
-	messageCrowdsecHTTP       = []byte("crowdsec-http")
 	messageCrowdsecHTTPBody   = []byte("crowdsec-http-body")
 	messageCrowdsecHTTPNoBody = []byte("crowdsec-http-no-body")
-	messageCrowdsecIP         = []byte("crowdsec-ip")
 	messageCrowdsecTCP        = []byte("crowdsec-tcp")
 )
 
@@ -158,24 +156,20 @@ func New(config *SpoaConfig) (*Spoa, error) {
 // HandleSPOE implements the spop.Handler interface
 func (s *Spoa) HandleSPOE(ctx context.Context, writer *encoding.ActionWriter, message *encoding.Message) {
 	messageNameBytes := message.NameBytes()
-	messageName := string(messageNameBytes)
 
-	// Debug: Log all received messages
-	s.logger.Debugf("Received message: %s", messageName)
+	s.logger.Debugf("Received message: %s", messageNameBytes)
 
 	switch {
-	case bytes.Equal(messageNameBytes, messageCrowdsecHTTP):
-		// Legacy support for old message name
-		s.handleHTTPRequest(ctx, writer, message)
+	case bytes.Equal(messageNameBytes, messageCrowdsecTCP): //TCP message type always runs so match it first
+		// TCP message type uses the same handler
+		s.handleTCPRequest(ctx, writer, message)
 	case bytes.Equal(messageNameBytes, messageCrowdsecHTTPBody), bytes.Equal(messageNameBytes, messageCrowdsecHTTPNoBody):
-		// Both HTTP message types use the same handler
+		// HTTP message types uses the same handler
 		// The handler will check if body is present in the message
 		s.handleHTTPRequest(ctx, writer, message)
-	case bytes.Equal(messageNameBytes, messageCrowdsecIP), bytes.Equal(messageNameBytes, messageCrowdsecTCP):
-		// Both IP/TCP message types use the same handler
-		s.handleIPRequest(ctx, writer, message)
 	default:
-		s.logger.Debugf("Unknown message type: %s", messageName)
+		// Unknown message type
+		s.logger.Debugf("Unknown message type: %s", messageNameBytes)
 	}
 }
 
@@ -847,7 +841,7 @@ func extractIPMessageData(mes *encoding.Message) (*IPMessageData, error) {
 }
 
 // Handles checking the IP address against the dataset
-func (s *Spoa) handleIPRequest(ctx context.Context, writer *encoding.ActionWriter, mes *encoding.Message) {
+func (s *Spoa) handleTCPRequest(ctx context.Context, writer *encoding.ActionWriter, mes *encoding.Message) {
 	msgData, err := extractIPMessageData(mes)
 	if err != nil {
 		s.logger.WithFields(log.Fields{
