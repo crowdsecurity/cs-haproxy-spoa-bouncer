@@ -1,23 +1,34 @@
+<div align="center">
+  <img src="img/crowdsec_haproxy.svg" alt="CrowdSec HAProxy" width="400"/>
+</div>
+
 # CrowdSec HAProxy SPOA Bouncer
 
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://golang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A high-performance [HAProxy SPOE](https://www.haproxy.com/blog/extending-haproxy-with-the-stream-processing-offload-engine) (Stream Processing Offload Engine) filter for [CrowdSec](https://www.crowdsec.net/) that provides real-time IP reputation checking, WAF capabilities, and AppSec protection for your HAProxy infrastructure.
+A lightweight Stream Processing Offload Agent (SPOA) that contacts the CrowdSec Local API to fetch decisions in real time while aiming to be highly performant and minimize latency for clients. It manages an in-memory cache of bans and captchas, and directs HAProxy on how to treat each connection without blocking the data path.
 
-## 🚀 Features
+## At a Glance
 
-- **⚡ High Performance**: Lock-free reads with atomic pointers for zero-blocking SPOA handlers
-- **💾 Memory Efficient**: Hybrid storage system using `sync.Map` for individual IPs and [BART](https://github.com/gaissmai/bart) (Binary Adaptive Radix Tree) for CIDR ranges
-- **🔄 Real-time Updates**: Streams decisions from CrowdSec Local API with parallel batch processing
-- **🛡️ Multiple Remediations**: Supports ban, captcha, and allow decisions with host-based customization
-- **🌍 GeoIP Support**: Optional GeoIP2 database integration for country-based blocking
-- **📊 Prometheus Metrics**: Built-in metrics for monitoring active decisions, processed requests, and blocked requests
-- **🔒 AppSec Integration**: Web Application Firewall (WAF) capabilities for advanced threat detection
+- **Real-time enforcement** – Streams decisions from CrowdSec via the Go bouncer SDK so ban/captcha/allow changes are visible within seconds.
+- **HTTP and TCP coverage** – Handles the `crowdsec-ip`, `crowdsec-http`, and `crowdsec-tcp` SPOE messages to protect both web frontends and raw TCP services.
+- **Host-aware responses** – Each host entry can customize ban pages, captcha providers, and logging while sharing the same SPOA worker.
+- **Captcha challenges built in** – hCaptcha, reCAPTCHA, and Cloudflare Turnstile are supported with signed cookies so HAProxy can validate solved challenges on its own.
+- **Memory-efficient dataset** – IPs live in a lock-free map and CIDRs are stored in a [BART](https://github.com/gaissmai/bart) radix tree, which keeps lookups in the tens of nanoseconds.
+- **Optional GeoIP tagging** – Plug in MaxMind ASN/City databases to enrich decisions with ISO country codes for templating or ACLs.
+- **Operational visibility** – Structured logging, Prometheus counters, and an optional pprof endpoint make it easy to monitor and debug the bouncer.
+- **AppSec path under construction** – Hooks exist for forwarding HTTP payloads to CrowdSec AppSec, but the analysis step is not wired up yet.
 
-## 📖 How It Works
+## Architecture
 
-The CrowdSec HAProxy SPOA Bouncer integrates seamlessly with HAProxy using the SPOE protocol. Here's how requests flow through the system:
+The bouncer is a single binary with three key loops:
+
+1. `go-cs-bouncer` maintains a long-lived stream to the CrowdSec Local API and feeds new/deleted decisions into the dataset (`pkg/dataset`).
+2. The SPOA worker (`pkg/spoa`) listens on TCP and/or Unix sockets, answers HAProxy messages, and applies host-specific logic such as captchas or ban pages.
+3. Auxiliary services (optional) expose Prometheus metrics and pprof diagnostics.
+
+### Request Flow
 
 ```mermaid
 sequenceDiagram
@@ -26,7 +37,7 @@ sequenceDiagram
     participant SPOA as SPOA Bouncer
     participant Dataset as Decision Dataset
     participant CrowdSec as CrowdSec LAPI
-    participant AppSec as CrowdSec AppSec
+    participant AppSec as CrowdSec AppSec (in progress)
     participant Backend
 
     Note over Client,HAProxy: Client Initiates Request
@@ -94,182 +105,131 @@ sequenceDiagram
     SPOA->>Dataset: Update dataset (parallel batch)
 ```
 
-### Request Flow Details
+**Flow highlights**
+- The `crowdsec-ip` message runs first so every transaction carries an initial decision, even if HTTP parsing fails later.
+- Host rules can override remediations (for instance, force captcha for specific domains) or decide whether captcha cookies should be issued/cleared.
+- Captcha sessions live in the SPOA process; HAProxy only needs to copy cookies and template variables exposed via Lua.
+- The AppSec branch above is a preview of the upcoming WAF integration – the code already parses HTTP payloads but does not yet call CrowdSec AppSec.
 
-1. **Client Connection** (`on-client-session` event):
-   - HAProxy sends `crowdsec-ip` message with client IP address
-   - SPOA checks IP against the decision dataset
-   - Sets `txn.crowdsec.remediation` variable (ban/allow/captcha)
+## Install & Run
 
-2. **HTTP Request** (`on-frontend-http-request` event):
-   - HAProxy sends `crowdsec-http` message with full HTTP request details
-   - SPOA performs additional checks:
-     - Host-based remediation customization
-     - Captcha cookie validation
-   - If AppSec is enabled and (remediation = allow OR AlwaysSend = true):
-     - SPOA forwards HTTP request data (URL, method, headers, body) to CrowdSec AppSec
-     - AppSec analyzes the request using WAF rules
-     - AppSec can override remediation to ban if threats are detected
-   - Sets additional variables: `isocode`, `captcha_status`, `redirect`
+The [official documentation](https://doc.crowdsec.net/u/bouncers/haproxy_spoa) covers packaging and upgrade notes. If you want to manually build, see the build section below. A quick happy path:
 
-3. **Remediation Handling**:
-   - **Ban**: HAProxy renders ban page via Lua script, returns 403
-   - **Captcha**: HAProxy renders captcha page, validates cookie on subsequent requests
-   - **Allow**: Request proceeds to backend server
+1. Install the package (Debian/RPM), use the provided Docker image, or build locally with `make build`.
+2. Copy `config/crowdsec-spoa-bouncer.yaml` to `/etc/crowdsec/bouncers/` and set your CrowdSec LAPI URL and API key.
+3. Wire the SPOE filter into HAProxy (see below) and copy the Lua helpers from `lua/` if you do not already ship them.
+4. Start the service with `systemctl start crowdsec-haproxy-spoa-bouncer` or run `./crowdsec-spoa-bouncer -c /path/to/config.yaml` for local tests.
 
-4. **Background Updates**:
-   - SPOA continuously streams decisions from CrowdSec Local API
-   - Updates are processed in parallel batches for optimal performance
-   - Dataset uses copy-on-write for lock-free reads during updates
+## Configure
 
-## 🏗️ Architecture
+### Service configuration
 
-### Memory-Efficient Hybrid Storage
+`config/crowdsec-spoa-bouncer.yaml` (plus `.yaml.local` overrides) controls the daemon:
 
-The bouncer uses a hybrid storage approach optimized for real-world workloads:
+```yaml
+log_mode: file
+log_dir: /var/log/crowdsec-spoa/
+log_level: info
 
-- **Individual IPs**: Stored in `sync.Map` with atomic pointers for O(1) lookups
-- **CIDR Ranges**: Stored in [BART](https://github.com/gaissmai/bart) (Binary Adaptive Radix Tree) for efficient longest prefix match
-- **Copy-on-Write**: All updates use copy-on-write pattern ensuring readers never block
-- **Parallel Processing**: Add/Remove operations use `sync.WaitGroup.Go()` for concurrent batch processing
+update_frequency: 10s
+api_url: http://127.0.0.1:8080/
+api_key: ${API_KEY}
 
-### Performance Characteristics
+listen_tcp: 0.0.0.0:9000
+listen_unix: /run/crowdsec-spoa/spoa.sock
 
-- **IPMap lookup**: ~72 ns/op, 0 allocations
-- **RangeSet lookup**: ~69 ns/op, 0 allocations
-- **Memory usage**: ~70MB for 163K+ active decisions
-- **Zero blocking**: SPOA handlers never block, even during dataset updates
+prometheus:
+  enabled: true
+  listen_addr: 127.0.0.1
+  listen_port: 60601
 
-## 📦 Installation
-
-See the [official documentation](https://doc.crowdsec.net/u/bouncers/haproxy_spoa) for detailed installation instructions.
-
-### Quick Start
-
-```bash
-# Install from package repository
-# (See documentation for your distribution)
-
-# Configure HAProxy
-# Copy example configs from config/ directory
-
-# Start the bouncer
-systemctl start crowdsec-haproxy-spoa-bouncer
+pprof:
+  enabled: false
+  listen_addr: 127.0.0.1
+  listen_port: 6060
 ```
 
-## ⚙️ Configuration
+Key pointers:
+- You can run TCP, Unix, or both listeners; the SPOA worker will refuse to start if neither is set.
+- `geo` settings accept MaxMind ASN/City paths and the watcher reloads files when they change.
+- Prometheus/pprof servers stay disabled unless explicitly enabled, keeping production surfaces small by default.
 
-### HAProxy Configuration
+### Host-level behavior
 
-Add the SPOE filter to your HAProxy frontend:
+Hosts define how HAProxy should present bans or captchas. All hosts in the config file and in `hosts_dir` are loaded during startup.
+
+```yaml
+hosts:
+  - host: "*.example.com"
+    ban:
+      contact_us_url: "mailto:security@example.com"
+    captcha:
+      provider: "hcaptcha"   # hcaptcha | recaptcha | turnstile
+      site_key: "<public-key>"
+      secret_key: "<private-key>"
+      fallback_remediation: "ban"
+      timeout: 5
+    appsec:
+      always_send: false      # reserved for upcoming AppSec support
+```
+
+If a captcha cannot be issued (missing host match, invalid provider, etc.), the SPOA automatically falls back to the configured remediation, so HAProxy always knows how to respond.
+
+### HAProxy wiring
+
+Add the SPOE filter and Lua helpers to your frontend. The config files in `config/` and the Lua scripts in `lua/` show complete examples; the snippet below highlights the essentials:
 
 ```haproxy
 frontend www
-    bind *:80
+    bind :80
     filter spoe engine crowdsec config /etc/haproxy/crowdsec.cfg
-    
-    # Handle remediations
-    http-request lua.crowdsec_handle if { var(txn.crowdsec.remediation) -m str "captcha" }
-    http-request lua.crowdsec_handle if { var(txn.crowdsec.remediation) -m str "ban" }
-    
-    use_backend api_servers
+
+    http-request lua.crowdsec_handle if { var(txn.crowdsec.remediation) -m found }
+    http-request lua.crowdsec_captcha if { var(txn.crowdsec.remediation) -m str "captcha" }
+    http-request lua.crowdsec_ban if { var(txn.crowdsec.remediation) -m str "ban" }
+
+    default_backend app
 ```
 
-### SPOA Configuration
+Use a dedicated SPOE section (`crowdsec.cfg`) to declare the messages you want HAProxy to send (`crowdsec-ip`, `crowdsec-http`, `crowdsec-tcp`) and which request variables should be exported; the provided sample covers the mandatory ones.
 
-Configure the bouncer in `/etc/crowdsec/haproxy-spoa-bouncer.yaml`:
+## Monitoring & Troubleshooting
 
-```yaml
-crowdsec_lapi_url: http://localhost:8080
-crowdsec_lapi_key: YOUR_API_KEY
-crowdsec_update_frequency: 10s
-listen_addr: 0.0.0.0
-listen_port: 9000
-log_level: info
-```
+- **Prometheus metrics** – Enable the metrics endpoint to scrape `crowdsec_haproxy_spoa_bouncer_active_decisions`, `crowdsec_haproxy_spoa_bouncer_processed_requests`, and `crowdsec_haproxy_spoa_bouncer_blocked_requests`. Scope/IP-type labels make it simple to track noisy sources.
+- **Logging** – File or stdout logging is configurable; per-host log levels help when debugging only a subset of domains.
+- **Profiling** – Switch on `pprof` in non-production environments to inspect CPU, heap, or goroutines via standard Go tooling.
+- **Dataset inspection** – Use `log_level: trace` to watch BART operations and confirm that lists/ranges are loaded as expected.
 
-See `config/crowdsec-spoa-bouncer.yaml` for all available options.
+## Development
 
-## 📊 Monitoring
-
-The bouncer exposes Prometheus metrics on port `9998` (configurable):
-
-- `crowdsec_haproxy_spoa_bouncer_active_decisions`: Active decisions by origin, IP type, and scope
-- `crowdsec_haproxy_spoa_bouncer_processed_requests`: Total processed requests by IP type
-- `crowdsec_haproxy_spoa_bouncer_blocked_requests`: Blocked requests by origin, IP type, and remediation
-
-### Example Prometheus Query
-
-```promql
-# Total active decisions
-sum(crowdsec_haproxy_spoa_bouncer_active_decisions)
-
-# Block rate
-rate(crowdsec_haproxy_spoa_bouncer_blocked_requests[5m]) / 
-rate(crowdsec_haproxy_spoa_bouncer_processed_requests[5m])
-```
-
-## 🔧 Development
-
-### Building from Source
+Everything you need for local development is included in the repository:
 
 ```bash
 git clone https://github.com/crowdsecurity/cs-haproxy-spoa-bouncer.git
 cd cs-haproxy-spoa-bouncer
-make build
+make build    # builds the binary in ./crowdsec-spoa-bouncer
+make test     # runs Go tests, including dataset benchmarks
 ```
 
-### Running Tests
+Docker Compose files under `docker/` and `docker-compose*.yaml` spin up HAProxy, the bouncer, and a CrowdSec LAPI for integration testing.
 
-```bash
-make test
-```
+## Project Status & Roadmap
 
-### Profiling
+- AppSec request forwarding/parsing is in the tree, and enforcement is planned to land in 0.3.0.
+- Performance optimizations (batching, decision compression) continue so high-volume HAProxy tiers can rely on a single SPOA worker.
 
-The bouncer exposes pprof endpoints on port `9999` (configurable):
+## Contributing
 
-```bash
-# Heap profile
-go tool pprof http://localhost:9999/debug/pprof/heap
+Contributions are welcome—feel free to open an issue or PR:
+1. Fork the repo and create a topic branch (`git checkout -b feature/my-change`).
+2. Run `make test` (and any relevant integration checks) before submitting.
+3. Open a PR with context about the problem you solved or the feature you added.
 
-# CPU profile
-go tool pprof http://localhost:9999/debug/pprof/profile
-```
+## License
 
-## 📚 Documentation
+MIT – see `LICENSE` for the full text.
 
-- [Official Documentation](https://doc.crowdsec.net/u/bouncers/haproxy_spoa)
-- [HAProxy SPOE Documentation](https://www.haproxy.com/documentation/hapee/latest/configuration/spoe/)
-- [CrowdSec Documentation](https://doc.crowdsec.net/)
+## Acknowledgments
 
-## 🗺️ Roadmap
-
-This outlines the goals of the project, and the current status of each.
-
-### In Progress
-- **AppSec Integration**: WAF capabilities for advanced threat detection
-
-### Future Enhancements
-- Enhanced GeoIP support
-- Additional remediation types
-- Performance optimizations
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -S -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- [HAProxy](https://www.haproxy.org/) for the powerful load balancer and SPOE protocol
-- [BART](https://github.com/gaissmai/bart) for the efficient radix tree implementation
+- [HAProxy](https://www.haproxy.org/) for the SPOE protocol and Lua flexibility.
+- [BART](https://github.com/gaissmai/bart) for the radix tree implementation that backs range lookups.
