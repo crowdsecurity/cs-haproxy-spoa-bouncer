@@ -21,6 +21,7 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
+	"github.com/crowdsecurity/go-cs-lib/ptr"
 	"github.com/dropmorepackets/haproxy-go/pkg/encoding"
 	"github.com/dropmorepackets/haproxy-go/spop"
 	log "github.com/sirupsen/logrus"
@@ -52,20 +53,19 @@ var (
 
 	// Pre-allocated byte slices for key matching (avoid string conversions)
 	// Using bytes.Equal is more efficient than k.NameEquals() which allocates
-	keyRemediation   = []byte("remediation")
-	keySrcIP         = []byte("src-ip")
-	keyHost          = []byte("host")
-	keyCaptchaCookie = []byte("crowdsec_captcha_cookie")
-	keySSL           = []byte("ssl")
-	keyURL           = []byte("url")
-	keyMethod        = []byte("method")
-	keyPath          = []byte("path")
-	keyQuery         = []byte("query")
-	keyVersion       = []byte("version")
-	keyID            = []byte("id")
-	keySrcPort       = []byte("src-port")
-	keyHeaders       = []byte("headers")
-	keyBody          = []byte("body")
+	keyRemediation = []byte("remediation")
+	keySrcIP       = []byte("src-ip")
+	// Note: Host and captcha cookie are now extracted from headers, no longer needed as separate KV
+	keySSL     = []byte("ssl")
+	keyURL     = []byte("url")
+	keyMethod  = []byte("method")
+	keyPath    = []byte("path")
+	keyQuery   = []byte("query")
+	keyVersion = []byte("version")
+	keyID      = []byte("id")
+	keySrcPort = []byte("src-port")
+	keyHeaders = []byte("headers")
+	keyBody    = []byte("body")
 
 	// Pre-allocated byte slices for message name matching
 	messageCrowdsecHTTPBody   = []byte("crowdsec-http-body")
@@ -298,24 +298,6 @@ func (d *IPMessageData) reset() {
 	d.ID = nil
 }
 
-// Helper functions to allocate values on heap explicitly
-// These ensure values are heap-allocated rather than relying on escape analysis
-func stringPtr(s string) *string {
-	return &s
-}
-
-func boolPtr(b bool) *bool {
-	return &b
-}
-
-func int64Ptr(i int64) *int64 {
-	return &i
-}
-
-func addrPtr(a netip.Addr) *netip.Addr {
-	return &a
-}
-
 // extractHTTPMessageData extracts all KV entries from crowdsec-http message in a single pass
 // Uses byte slice comparisons to avoid string allocations for key matching
 // Returns a pooled struct that should be returned to pool via returnToPool()
@@ -337,40 +319,35 @@ func extractHTTPMessageData(mes *encoding.Message) *HTTPMessageData {
 		switch {
 		case bytes.Equal(nameBytes, keyRemediation):
 			val := string(k.ValueBytes())
-			data.Remediation = stringPtr(val)
+			data.Remediation = ptr.Of(val)
 		case bytes.Equal(nameBytes, keySrcIP):
 			val := k.ValueAddr()
-			data.SrcIP = addrPtr(val)
-		case bytes.Equal(nameBytes, keyHost):
-			val := string(k.ValueBytes())
-			data.Host = stringPtr(val)
-		case bytes.Equal(nameBytes, keyCaptchaCookie):
-			val := string(k.ValueBytes())
-			data.CaptchaCookie = stringPtr(val)
+			data.SrcIP = ptr.Of(val)
+		// Note: Host and captcha cookie are now extracted from headers, no longer needed as separate KV
 		case bytes.Equal(nameBytes, keySSL):
 			val := k.ValueBool()
-			data.SSL = boolPtr(val)
+			data.SSL = ptr.Of(val)
 		case bytes.Equal(nameBytes, keyURL):
 			val := string(k.ValueBytes())
-			data.URL = stringPtr(val)
+			data.URL = ptr.Of(val)
 		case bytes.Equal(nameBytes, keyMethod):
 			val := string(k.ValueBytes())
-			data.Method = stringPtr(val)
+			data.Method = ptr.Of(val)
 		case bytes.Equal(nameBytes, keyPath):
 			val := string(k.ValueBytes())
-			data.Path = stringPtr(val)
+			data.Path = ptr.Of(val)
 		case bytes.Equal(nameBytes, keyQuery):
 			val := string(k.ValueBytes())
-			data.Query = stringPtr(val)
+			data.Query = ptr.Of(val)
 		case bytes.Equal(nameBytes, keyVersion):
 			val := string(k.ValueBytes())
-			data.Version = stringPtr(val)
+			data.Version = ptr.Of(val)
 		case bytes.Equal(nameBytes, keyID):
 			val := string(k.ValueBytes())
-			data.ID = stringPtr(val)
+			data.ID = ptr.Of(val)
 		case bytes.Equal(nameBytes, keySrcPort):
 			val := k.ValueInt()
-			data.SrcPort = int64Ptr(val)
+			data.SrcPort = ptr.Of(val)
 		case bytes.Equal(nameBytes, keyHeaders):
 			// Copy borrowed slice immediately - k.ValueBytes() returns memory owned by KV entry
 			// which will be overwritten on next iteration, so we must copy now
@@ -407,10 +384,36 @@ func extractHTTPMessageData(mes *encoding.Message) *HTTPMessageData {
 		headers, err := readHeaders(data.HeadersCopied)
 		if err == nil {
 			data.HeadersParsed = headers
+			// Extract Host from headers if not provided as separate KV pair
+			// This avoids needing to send it separately since it's already in headers
+			if data.Host == nil {
+				if hostHeader := headers.Get("Host"); hostHeader != "" {
+					data.Host = ptr.Of(hostHeader)
+				}
+			}
+			// Extract captcha cookie from Cookie header if present
+			// This avoids needing to send it as a separate KV pair
+			if cookieHeader := headers.Get("Cookie"); cookieHeader != "" {
+				if captchaCookie := extractCookieValue(cookieHeader, "crowdsec_captcha_cookie"); captchaCookie != "" {
+					data.CaptchaCookie = ptr.Of(captchaCookie)
+				}
+			}
 		}
 	}
 
 	return data
+}
+
+// extractCookieValue extracts a specific cookie value from a Cookie header string
+func extractCookieValue(cookieHeader, cookieName string) string {
+	// Cookie header format: "name1=value1; name2=value2; ..."
+	prefix := cookieName + "="
+	for cookie := range strings.SplitSeq(cookieHeader, ";") {
+		if value, found := strings.CutPrefix(strings.TrimSpace(cookie), prefix); found {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // Handles checking the http request which has 2 stages
@@ -892,10 +895,10 @@ func extractIPMessageData(mes *encoding.Message) (*IPMessageData, error) {
 			foundIP = true
 		case bytes.Equal(nameBytes, keySrcPort):
 			val := k.ValueInt()
-			data.SrcPort = int64Ptr(val)
+			data.SrcPort = ptr.Of(val)
 		case bytes.Equal(nameBytes, keyID):
 			val := string(k.ValueBytes())
-			data.ID = stringPtr(val)
+			data.ID = ptr.Of(val)
 		default:
 			// Unknown key, ignore
 		}
