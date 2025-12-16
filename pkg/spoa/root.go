@@ -35,7 +35,7 @@ var (
 	// Message data struct pools for reducing GC pressure
 	// These pools reuse both the structs and their embedded buffers
 	httpMessageDataPool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			return &HTTPMessageData{
 				// Pre-allocate buffers with reasonable initial capacity
 				HeadersCopied: make([]byte, 0, 2048),
@@ -45,7 +45,7 @@ var (
 	}
 
 	ipMessageDataPool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			return &IPMessageData{}
 		},
 	}
@@ -451,53 +451,55 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	r, origin := s.getIPRemediation(ctx, writer, *msgData.SrcIP)
 
 	var matchedHost *host.Host
+	datasetRemediation := r // Track remediation after dataset check (before AppSec)
 
-	// defer a function that always add the remediation to the request at end of processing
+	// defer a function that always sets the remediation and counts metrics at end of processing
 	defer func() {
+		// Handle captcha without matched host - must revert to ban
 		if matchedHost == nil && r == remediation.Captcha {
 			s.logger.Warn("remediation is captcha, no matching host was found cannot issue captcha remediation reverting to ban")
 			r = remediation.Ban
 		}
-		rString := r.String()
-		_ = writer.SetString(encoding.VarScopeTransaction, "remediation", rString)
 
-		// Metrics logic:
-		// 1. If TCP handler didn't run (remediation == nil): count both processed and blocked
-		// 2. If TCP remediation was Allow and HTTP finds bad remediation: count only blocked
-		//    (new remediation may have been added since TCP check, or IP changed)
-		// 3. If TCP remediation was not Allow (Unknown/Ban/Captcha): don't count anything (already counted by TCP handler)
-		shouldCountProcessed := false
-		shouldCountBlocked := false
+		// Always set the final remediation in the transaction
+		_ = writer.SetString(encoding.VarScopeTransaction, "remediation", r.String())
 
-		if msgData.Remediation == nil {
-			// TCP handler didn't run - count both processed and blocked
-			shouldCountProcessed = true
-			if r > remediation.Unknown {
-				shouldCountBlocked = true
-			}
-		} else if tcpRemediation == remediation.Allow && r > remediation.Unknown {
-			// TCP found Allow but HTTP found bad remediation - count only blocked
-			// (processed was already counted by TCP handler)
-			shouldCountBlocked = true
+		// Metrics counting logic:
+		//
+		// Who counts what:
+		// - TCP handler: counts processed + blocked when it runs
+		// - HTTP handler (here): counts processed only when TCP didn't run
+		// - HTTP handler (here): counts dataset-blocked only when dataset escalated
+		// - AppSec: counts its own blocks in validateWithAppSec (origin="appsec")
+		//
+		// This prevents double-counting:
+		// - If TCP ran and blocked: TCP already counted, we skip
+		// - If TCP ran and allowed, dataset blocks: we count dataset metric
+		// - If TCP ran and allowed, only AppSec blocks: AppSec already counted, we skip
+		// - If TCP didn't run, dataset blocks: we count processed + dataset metric
+		// - If TCP didn't run, only AppSec blocks: we count processed, AppSec counts its block
+
+		tcpRan := msgData.Remediation != nil
+		tcpAllowed := tcpRan && tcpRemediation == remediation.Allow
+		datasetBlocked := datasetRemediation > remediation.Unknown
+
+		// Get IP type for metrics (compute once)
+		ipTypeLabel := "ipv4"
+		if msgData.SrcIP != nil && msgData.SrcIP.IsValid() && msgData.SrcIP.Is6() {
+			ipTypeLabel = "ipv6"
 		}
-		// If TCP remediation was already bad, don't count anything (already counted by TCP handler)
 
-		if shouldCountProcessed || shouldCountBlocked {
-			// Get IP from message for metrics
-			ipTypeLabel := "ipv4"
-			if msgData.SrcIP != nil && msgData.SrcIP.IsValid() && msgData.SrcIP.Is6() {
-				ipTypeLabel = "ipv6"
-			}
+		// Count processed if TCP didn't run (TCP counts it otherwise)
+		if !tcpRan {
+			metrics.TotalProcessedRequests.WithLabelValues(ipTypeLabel).Inc()
+		}
 
-			if shouldCountProcessed {
-				// Count processed request - use WithLabelValues to avoid map allocation on hot path
-				metrics.TotalProcessedRequests.WithLabelValues(ipTypeLabel).Inc()
-			}
-
-			if shouldCountBlocked {
-				// Count blocked request - Label order: origin, ip_type, remediation (as defined in metrics.go)
-				metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, r.String()).Inc()
-			}
+		// Count dataset-blocked if:
+		// 1. Dataset escalated (datasetRemediation > Unknown), AND
+		// 2. Either TCP didn't run, OR TCP found Allow
+		// (If TCP found bad remediation, it already counted the block)
+		if datasetBlocked && (!tcpRan || tcpAllowed) {
+			metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, datasetRemediation.String()).Inc()
 		}
 	}()
 
@@ -513,7 +515,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		// Use global AppSec if configured (no always_send check for global, but respect remediation)
 		// For global AppSec, we always check unless remediation is already restrictive (no always_send option)
 		if s.globalAppSec != nil && s.globalAppSec.IsValid() && r < remediation.Captcha {
-			r = s.validateWithAppSec(mes, msgData, nil, s.globalAppSec, r, s.globalAppSec.TimeoutOrDefault())
+			r = s.validateWithAppSec(ctx, msgData, nil, s.globalAppSec, r, s.globalAppSec.TimeoutOrDefault())
 		}
 		return
 	}
@@ -577,7 +579,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
 	// Use >= Captcha to make intent explicit: skip AppSec for restrictive remediations (Captcha/Ban)
 	if appSecToUse != nil && (r < remediation.Captcha || alwaysSend) {
-		r = s.validateWithAppSec(mes, msgData, matchedHost, appSecToUse, r, requestTimeout)
+		r = s.validateWithAppSec(ctx, msgData, matchedHost, appSecToUse, r, requestTimeout)
 		// If AppSec returns ban, inject ban values
 		if r == remediation.Ban {
 			matchedHost.Ban.InjectKeyValues(writer)
@@ -588,112 +590,103 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 // validateWithAppSec performs AppSec validation and returns the remediation
 // Returns the more restrictive remediation between the current remediation and AppSec result
 func (s *Spoa) validateWithAppSec(
-	mes *encoding.Message,
+	ctx context.Context,
 	msgData *HTTPMessageData,
 	matchedHost *host.Host,
 	appSecToUse *appsec.AppSec,
 	currentRemediation remediation.Remediation,
 	requestTimeout time.Duration,
 ) remediation.Remediation {
-	// Build AppSec request from msgData (already extracted and parsed)
-	hostString := ""
-	if msgData.Host != nil {
-		hostString = *msgData.Host
-	}
+	appSecReq := msgData.buildAppSecRequest()
 
-	srcIPString := ""
-	if msgData.SrcIP != nil {
-		srcIPString = msgData.SrcIP.String()
-	}
-
-	userAgent := ""
-	if msgData.HeadersParsed != nil {
-		userAgent = msgData.HeadersParsed.Get("User-Agent")
-	}
-
-	versionString := ""
-	if msgData.Version != nil {
-		versionString = *msgData.Version
-	}
-
-	appSecReq := &appsec.AppSecRequest{
-		Host:      hostString,
-		Method:    "",
-		URL:       "",
-		RemoteIP:  srcIPString,
-		UserAgent: userAgent,
-		Version:   versionString,
-		Headers:   msgData.HeadersParsed,
-		Body:      nil,
-	}
-
-	if msgData.Method != nil {
-		appSecReq.Method = *msgData.Method
-	}
-	if msgData.URL != nil {
-		appSecReq.URL = *msgData.URL
-	}
-	if len(msgData.BodyCopied) > 0 {
-		// Copy body to avoid issues with pooled buffer
-		bodyCopy := make([]byte, len(msgData.BodyCopied))
-		copy(bodyCopy, msgData.BodyCopied)
-		appSecReq.Body = bodyCopy
-	}
-
-	// Create logger with host context for better logging
+	// Create logger with host context
 	logger := s.logger
-	if hostString != "" {
-		logger = logger.WithField("host", hostString)
+	if appSecReq.Host != "" {
+		logger = logger.WithField("host", appSecReq.Host)
 	}
 	if matchedHost != nil {
 		logger = logger.WithField("matched_host", matchedHost.Host)
 	}
 
-	// Validate with AppSec using the configured timeout: on success we return quickly, otherwise HAProxy falls back
-	appSecCtx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	// Validate with AppSec - derive context from handler so requests cancel on shutdown
+	appSecCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
+
 	appSecRemediation, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
 	if err != nil {
 		logger.WithError(err).Warn("AppSec validation failed, using original remediation")
 		return currentRemediation
 	}
 
-	// Track metrics if AppSec returns a more restrictive remediation than Allow
-	if appSecRemediation > remediation.Allow && srcIPString != "" {
-		// Parse IP to determine type for metrics
-		ipAddr, parseErr := netip.ParseAddr(srcIPString)
-		if parseErr == nil {
-			ipTypeLabel := "ipv4"
+	// Track AppSec block metrics
+	if appSecRemediation > remediation.Allow && appSecReq.RemoteIP != "" {
+		if ipAddr, parseErr := netip.ParseAddr(appSecReq.RemoteIP); parseErr == nil {
+			ipType := "ipv4"
 			if ipAddr.Is6() {
-				ipTypeLabel = "ipv6"
+				ipType = "ipv6"
 			}
-
-			// Label order: origin, ip_type, remediation (as defined in metrics.go)
-			metrics.TotalBlockedRequests.WithLabelValues("appsec", ipTypeLabel, appSecRemediation.String()).Inc()
+			metrics.TotalBlockedRequests.WithLabelValues("appsec", ipType, appSecRemediation.String()).Inc()
 		}
 	}
 
 	// Return the more restrictive remediation (never downgrade security)
-	// Higher remediation values are more restrictive: Allow(0) < Unknown(1) < Captcha(2) < Ban(3)
 	if appSecRemediation > currentRemediation {
 		if appSecRemediation == remediation.Ban && matchedHost == nil {
 			logger.Warn("AppSec returned ban but no host matched - remediation set but ban values not injected")
 		}
 		return appSecRemediation
 	}
-	// Current remediation is more restrictive, keep it
 	return currentRemediation
+}
+
+// buildAppSecRequest constructs an AppSecRequest from HTTPMessageData
+func (d *HTTPMessageData) buildAppSecRequest() *appsec.AppSecRequest {
+	req := &appsec.AppSecRequest{
+		Headers: d.HeadersParsed,
+	}
+
+	if d.Host != nil {
+		req.Host = *d.Host
+	}
+	if d.SrcIP != nil {
+		req.RemoteIP = d.SrcIP.String()
+	}
+	if d.Method != nil {
+		req.Method = *d.Method
+	}
+	if d.URL != nil {
+		req.URL = *d.URL
+	}
+	if d.Version != nil {
+		req.Version = *d.Version
+	}
+	if d.HeadersParsed != nil {
+		req.UserAgent = d.HeadersParsed.Get("User-Agent")
+	}
+	if len(d.BodyCopied) > 0 {
+		// Copy body to avoid issues with pooled buffer
+		req.Body = make([]byte, len(d.BodyCopied))
+		copy(req.Body, d.BodyCopied)
+	}
+
+	return req
+}
+
+// getSessionString safely extracts a string value from a session key
+func getSessionString(ses *session.Session, key string) string {
+	val := ses.Get(key)
+	if val == nil {
+		return ""
+	}
+	if s, ok := val.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // createNewSessionAndCookie creates a new session, generates a cookie, and sets it in the request.
 // Returns the session, uuid, and an error if any step fails.
-func (s *Spoa) createNewSessionAndCookie(_ context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (*session.Session, string, error) {
-	var ssl *bool
-	if msgData.SSL != nil {
-		ssl = msgData.SSL
-	}
-
-	// Create a new session using global session manager
+func (s *Spoa) createNewSessionAndCookie(writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (*session.Session, string, error) {
 	ses, err := s.globalSessions.NewRandomSession()
 	if err != nil {
 		s.logger.WithFields(log.Fields{
@@ -703,186 +696,135 @@ func (s *Spoa) createNewSessionAndCookie(_ context.Context, writer *encoding.Act
 		return nil, "", err
 	}
 
-	cookie, err := matchedHost.Captcha.CookieGenerator.GenerateCookie(ses, ssl)
+	cookie, err := matchedHost.Captcha.CookieGenerator.GenerateCookie(ses, msgData.SSL)
 	if err != nil {
 		s.logger.WithFields(log.Fields{
 			"host":  matchedHost.Host,
-			"ssl":   ssl,
+			"ssl":   msgData.SSL,
 			"error": err,
 		}).Error("Failed to generate host cookie")
 		return nil, "", err
 	}
 
-	// Set initial captcha status to pending
 	ses.Set(session.CaptchaStatus, captcha.Pending)
-	uuid := ses.UUID
-
-	// Set the captcha cookie - status will be set later based on session state
 	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", cookie.String())
 
-	return ses, uuid, nil
+	return ses, ses.UUID, nil
 }
 
 // handleCaptchaRemediation handles all captcha-related logic including cookie validation,
 // session management, captcha validation, and status updates.
-// Returns the remediation.
 func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) remediation.Remediation {
+	fallback := remediation.FromString(matchedHost.Captcha.FallbackRemediation)
+
 	if err := matchedHost.Captcha.InjectKeyValues(writer); err != nil {
-		return remediation.FromString(matchedHost.Captcha.FallbackRemediation)
+		return fallback
 	}
 
-	uuid := ""
-	var ses *session.Session
-
-	// Check for both nil and empty string (HAProxy may send empty string when cookie doesn't exist)
-	if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
-		var err error
-		uuid, err = matchedHost.Captcha.CookieGenerator.ValidateCookie(*msgData.CaptchaCookie)
-		if err != nil {
-			s.logger.WithFields(log.Fields{
-				"host":  matchedHost.Host,
-				"error": err,
-			}).Warn("Failed to validate existing cookie")
-			uuid = "" // Reset to generate new cookie
-		}
-	}
-
-	if uuid == "" {
-		// No valid cookie, create new session and cookie
-		var err error
-		ses, uuid, err = s.createNewSessionAndCookie(ctx, writer, msgData, matchedHost)
-		if err != nil {
-			// Session creation is critical for captcha to work - without it we can't track captcha status
-			// This is a critical failure, so we must fall back to fallback remediation
-			s.logger.WithFields(log.Fields{
-				"host":  matchedHost.Host,
-				"error": err,
-			}).Error("Failed to create new session and cookie, falling back to fallback remediation")
-			return remediation.FromString(matchedHost.Captcha.FallbackRemediation)
-		}
-	}
-
-	if uuid == "" {
-		// We should never hit this but safety net
-		// As a fallback we set the remediation to the fallback remediation
-		s.logger.Error("failed to get uuid from cookie")
-		return remediation.FromString(matchedHost.Captcha.FallbackRemediation)
-	}
-
-	// Get the session only if we didn't just create it (i.e., we have an existing cookie)
+	// Get or create session
+	ses, uuid := s.getOrCreateCaptchaSession(writer, msgData, matchedHost)
 	if ses == nil {
-		ses = s.globalSessions.GetSession(uuid)
-		if ses == nil {
-			// Session lost from memory (e.g., after reload), create a new session and cookie
-			s.logger.WithFields(log.Fields{
-				"host":    matchedHost.Host,
-				"session": uuid,
-			}).Warn("Session not found in memory (likely lost after reload), creating new session and cookie")
-			var err error
-			ses, uuid, err = s.createNewSessionAndCookie(ctx, writer, msgData, matchedHost)
-			if err != nil {
-				// Session creation is critical for captcha to work - without it we can't track captcha status
-				// This is a critical failure, so we must fall back to fallback remediation
-				s.logger.WithFields(log.Fields{
-					"host":  matchedHost.Host,
-					"error": err,
-				}).Error("Failed to create new session after reload, falling back to fallback remediation")
-				return remediation.FromString(matchedHost.Captcha.FallbackRemediation)
-			}
-		}
+		return fallback
 	}
 
-	// Get the current captcha status from the session (cache it to avoid redundant fetches)
-	captchaStatusVal := ses.Get(session.CaptchaStatus)
-	var captchaStatus string
-	if captchaStatusVal == nil {
-		captchaStatus = captcha.Pending // Assume pending if not set
-	} else {
-		var ok bool
-		captchaStatus, ok = captchaStatusVal.(string)
-		if !ok {
-			captchaStatus = captcha.Pending // Fallback to pending if type assertion fails
-		}
+	// Get captcha status (defaults to pending if not set)
+	captchaStatus := getSessionString(ses, session.CaptchaStatus)
+	if captchaStatus == "" {
+		captchaStatus = captcha.Pending
 	}
-
-	// Set the captcha status in the transaction for HAProxy
 	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", captchaStatus)
 
-	// Read URL - this is not critical for showing the captcha page, only for redirect after validation
-	if msgData.URL == nil {
-		s.logger.WithFields(log.Fields{
-			"host": matchedHost.Host,
-		}).Warn("failed to read url from message, captcha will still be shown but redirect after validation may not work - ensure HAProxy is sending the 'url' variable in crowdsec-http message")
-		// Continue with captcha even without URL - we just won't be able to redirect after validation
-	} else if captchaStatus != captcha.Valid {
-		// Update the incoming url if it is different from the stored url for the session ignore favicon requests
-		storedURLVal := ses.Get(session.URI)
-		storedURL := ""
-		if storedURLVal != nil {
-			var ok bool
-			storedURL, ok = storedURLVal.(string)
-			if !ok {
-				storedURL = ""
-			}
-		}
-
-		// msgData.URL is guaranteed to be non-nil here (checked at line 649)
+	// Store URL for redirect after validation (skip favicon requests)
+	if msgData.URL != nil && captchaStatus != captcha.Valid {
+		storedURL := getSessionString(ses, session.URI)
 		if (storedURL == "" || *msgData.URL != storedURL) && !strings.HasSuffix(*msgData.URL, ".ico") {
-			s.logger.WithField("session", uuid).Debugf("updating stored url %s", *msgData.URL)
 			ses.Set(session.URI, *msgData.URL)
 		}
 	}
 
-	if msgData.Method == nil {
-		s.logger.WithFields(log.Fields{
-			"host": matchedHost.Host,
-		}).Error("failed to read method from message, cannot validate captcha form submission - ensure HAProxy is sending the 'method' variable in crowdsec-http message")
-		return remediation.Captcha
+	// Try to validate captcha if this is a form submission
+	if captchaStatus == captcha.Pending {
+		captchaStatus = s.tryValidateCaptcha(ctx, ses, msgData, matchedHost, uuid)
 	}
 
-	// Check if the request is a captcha validation request
-	if captchaStatus == captcha.Pending && *msgData.Method == http.MethodPost && msgData.HeadersParsed != nil && msgData.HeadersParsed.Get("Content-Type") == "application/x-www-form-urlencoded" {
-		if len(msgData.BodyCopied) == 0 {
-			s.logger.WithFields(log.Fields{
-				"host":    matchedHost.Host,
-				"session": uuid,
-			}).Error("failed to read body from message, cannot validate captcha response - ensure HAProxy is sending the 'body' variable in crowdsec-http message for POST requests")
-			return remediation.Captcha
-		}
-
-		// Validate captcha (use msgData.BodyCopied directly since it's synchronous and msgData is still valid)
-		isValid, err := matchedHost.Captcha.Validate(ctx, uuid, string(msgData.BodyCopied))
-		if err != nil {
-			s.logger.WithFields(log.Fields{
-				"host":    matchedHost.Host,
-				"session": uuid,
-				"error":   err,
-			}).Error("Failed to validate captcha")
-		} else if isValid {
-			ses.Set(session.CaptchaStatus, captcha.Valid)
-			captchaStatus = captcha.Valid // Update cached value
-		}
-	}
-
-	// if the session has a valid captcha status we allow the request
+	// Allow if captcha is valid, with redirect to original URL
 	if captchaStatus == captcha.Valid {
-		storedURLVal := ses.Get(session.URI)
-		if storedURLVal != nil {
-			storedURL, ok := storedURLVal.(string)
-			if !ok {
-				storedURL = ""
-			}
-			if storedURL != "" {
-				s.logger.Debug("redirecting to: ", storedURL)
-				_ = writer.SetString(encoding.VarScopeTransaction, "redirect", storedURL)
-				// Delete the URI from the session so we dont redirect loop
-				ses.Delete(session.URI)
-			}
+		if storedURL := getSessionString(ses, session.URI); storedURL != "" {
+			s.logger.Debug("redirecting to: ", storedURL)
+			_ = writer.SetString(encoding.VarScopeTransaction, "redirect", storedURL)
+			ses.Delete(session.URI)
 		}
 		return remediation.Allow
 	}
 
 	return remediation.Captcha
+}
+
+// getOrCreateCaptchaSession retrieves an existing session from cookie or creates a new one
+func (s *Spoa) getOrCreateCaptchaSession(writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (*session.Session, string) {
+	// Try to get session from existing cookie
+	if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
+		uuid, err := matchedHost.Captcha.CookieGenerator.ValidateCookie(*msgData.CaptchaCookie)
+		if err != nil {
+			s.logger.WithFields(log.Fields{
+				"host":  matchedHost.Host,
+				"error": err,
+			}).Warn("Failed to validate existing cookie")
+		} else if ses := s.globalSessions.GetSession(uuid); ses != nil {
+			return ses, uuid
+		} else {
+			s.logger.WithFields(log.Fields{
+				"host":    matchedHost.Host,
+				"session": uuid,
+			}).Warn("Session not found in memory (likely lost after reload)")
+		}
+	}
+
+	// Create new session
+	ses, uuid, err := s.createNewSessionAndCookie(writer, msgData, matchedHost)
+	if err != nil {
+		s.logger.WithFields(log.Fields{
+			"host":  matchedHost.Host,
+			"error": err,
+		}).Error("Failed to create captcha session, falling back")
+		return nil, ""
+	}
+	return ses, uuid
+}
+
+// tryValidateCaptcha attempts to validate a captcha form submission
+// Returns the new captcha status (Valid if successful, Pending otherwise)
+func (s *Spoa) tryValidateCaptcha(ctx context.Context, ses *session.Session, msgData *HTTPMessageData, matchedHost *host.Host, uuid string) string {
+	// Check if this is a captcha form submission
+	if msgData.Method == nil || *msgData.Method != http.MethodPost {
+		return captcha.Pending
+	}
+	if msgData.HeadersParsed == nil || msgData.HeadersParsed.Get("Content-Type") != "application/x-www-form-urlencoded" {
+		return captcha.Pending
+	}
+	if len(msgData.BodyCopied) == 0 {
+		s.logger.WithFields(log.Fields{
+			"host":    matchedHost.Host,
+			"session": uuid,
+		}).Error("No body in captcha POST request")
+		return captcha.Pending
+	}
+
+	isValid, err := matchedHost.Captcha.Validate(ctx, uuid, string(msgData.BodyCopied))
+	if err != nil {
+		s.logger.WithFields(log.Fields{
+			"host":    matchedHost.Host,
+			"session": uuid,
+			"error":   err,
+		}).Error("Failed to validate captcha")
+		return captcha.Pending
+	}
+
+	if isValid {
+		ses.Set(session.CaptchaStatus, captcha.Valid)
+		return captcha.Valid
+	}
+	return captcha.Pending
 }
 
 // getIPRemediation performs IP and geo/country remediation checks
