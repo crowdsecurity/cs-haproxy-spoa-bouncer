@@ -328,7 +328,7 @@ func extractHTTPMessageData(mes *encoding.Message) *HTTPMessageData {
 			BodyCopied:    make([]byte, 0, 4096),
 		}
 	}
-	data.reset() // Clear any previous data
+	// Note: reset() is called before Put() in the defer block, so no need to reset here
 	k := encoding.AcquireKVEntry()
 	defer encoding.ReleaseKVEntry(k)
 
@@ -879,7 +879,7 @@ func extractIPMessageData(mes *encoding.Message) (*IPMessageData, error) {
 		// This should never happen, but handle gracefully
 		data = &IPMessageData{}
 	}
-	data.reset() // Clear any previous data
+	// Note: reset() is called before Put() in the defer block, so no need to reset here
 	k := encoding.AcquireKVEntry()
 	defer encoding.ReleaseKVEntry(k)
 
