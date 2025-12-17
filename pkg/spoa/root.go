@@ -431,9 +431,6 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		httpMessageDataPool.Put(msgData)
 	}()
 
-	//log body length here
-	s.logger.Tracef("body length: %d", len(msgData.BodyCopied))
-
 	var tcpRemediation remediation.Remediation
 
 	// Get remediation passed from crowdsec-tcp handler (if any)
@@ -672,9 +669,9 @@ func (d *HTTPMessageData) buildAppSecRequest() *appsec.AppSecRequest {
 		req.UserAgent = d.HeadersParsed.Get("User-Agent")
 	}
 	if len(d.BodyCopied) > 0 {
-		// Copy body to avoid issues with pooled buffer
-		req.Body = make([]byte, len(d.BodyCopied))
-		copy(req.Body, d.BodyCopied)
+		// No copy needed - BodyCopied remains valid until handler returns
+		// (pool return happens in defer after ValidateRequest completes synchronously)
+		req.Body = d.BodyCopied
 	}
 
 	return req
