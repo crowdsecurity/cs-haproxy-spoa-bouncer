@@ -499,26 +499,25 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 
 		// Count dataset-blocked if:
 		// 1. Dataset escalated (datasetRemediation > Unknown), AND
-		// 2. Either TCP didn't run, OR TCP found Allow
+		// 2. Final remediation is still restrictive (user didn't solve captcha), AND
+		// 3. Either TCP didn't run, OR TCP found Allow
 		// (If TCP found bad remediation, it already counted the block)
-		if datasetBlocked && (!tcpRan || tcpAllowed) {
+		if datasetBlocked && r > remediation.Allow && (!tcpRan || tcpAllowed) {
 			metrics.TotalBlockedRequests.WithLabelValues(origin, ipTypeLabel, datasetRemediation.String()).Inc()
 		}
 	}()
 
 	if msgData.Host == nil {
 		s.logger.Warn("failed to read host header from message, cannot match host configuration - ensure HAProxy is sending the 'host' variable in crowdsec-http message")
-		return
+	} else {
+		matchedHost = s.hostManager.MatchFirstHost(*msgData.Host)
 	}
 
-	matchedHost = s.hostManager.MatchFirstHost(*msgData.Host)
-
-	// if the host is not found, we can still do AppSec checks if global AppSec is configured
+	// If no host matched, we can still do AppSec checks with global config
 	if matchedHost == nil {
-		// Use global AppSec if configured (no always_send check for global, but respect remediation)
-		// For global AppSec, we always check unless remediation is already restrictive (no always_send option)
-		if s.globalAppSec != nil && s.globalAppSec.IsValid() && r < remediation.Captcha {
-			r = s.validateWithAppSec(ctx, msgData, nil, s.globalAppSec, r, s.globalAppSec.TimeoutOrDefault())
+		appSec, timeout, alwaysSend := s.getAppSecConfig(nil)
+		if appSec != nil && shouldRunAppSec(r, alwaysSend) {
+			r = s.validateWithAppSec(ctx, msgData, nil, appSec, r, timeout)
 		}
 		return
 	}
@@ -555,39 +554,38 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		matchedHost.Ban.InjectKeyValues(writer)
 	case remediation.Captcha:
 		r = s.handleCaptchaRemediation(ctx, writer, msgData, matchedHost)
-		// If remediation changed to fallback, return early
-		// If it became Allow, continue for AppSec processing
-		if r != remediation.Captcha && r != remediation.Allow {
-			return
-		}
 	}
 
-	// Validate with AppSec - check remediation and always_send logic
-	// Use host-specific AppSec if valid, otherwise fall back to global AppSec
-	var appSecToUse *appsec.AppSec
-	alwaysSend := matchedHost.AppSec.AlwaysSend
-	if matchedHost.AppSec.IsValid() {
-		appSecToUse = &matchedHost.AppSec
-	} else if s.globalAppSec != nil && s.globalAppSec.IsValid() {
-		appSecToUse = s.globalAppSec
-		s.logger.Debug("Using global AppSec config (host-specific AppSec not configured)")
-	}
-
-	requestTimeout := matchedHost.AppSec.TimeoutOrDefault()
-	if matchedHost.AppSec.Timeout <= 0 && appSecToUse != nil {
-		// Host didn't override timeout, use whichever AppSec client we call (host or global)
-		requestTimeout = appSecToUse.TimeoutOrDefault()
-	}
-
-	// If remediation is ban/captcha we dont need to create a request to send to appsec unless always send is on
-	// Use >= Captcha to make intent explicit: skip AppSec for restrictive remediations (Captcha/Ban)
-	if appSecToUse != nil && (r < remediation.Captcha || alwaysSend) {
-		r = s.validateWithAppSec(ctx, msgData, matchedHost, appSecToUse, r, requestTimeout)
+	// Validate with AppSec if configured
+	appSec, timeout, alwaysSend := s.getAppSecConfig(matchedHost)
+	if appSec != nil && shouldRunAppSec(r, alwaysSend) {
+		r = s.validateWithAppSec(ctx, msgData, matchedHost, appSec, r, timeout)
 		// If AppSec returns ban, inject ban values
 		if r == remediation.Ban {
 			matchedHost.Ban.InjectKeyValues(writer)
 		}
 	}
+}
+
+// getAppSecConfig returns the AppSec configuration to use based on host and global settings.
+// Returns the AppSec instance, timeout, and whether always_send is enabled.
+// If no AppSec is configured, returns nil.
+func (s *Spoa) getAppSecConfig(matchedHost *host.Host) (appSec *appsec.AppSec, timeout time.Duration, alwaysSend bool) {
+	// Try host-specific AppSec first
+	if matchedHost != nil && matchedHost.AppSec.IsValid() {
+		return &matchedHost.AppSec, matchedHost.AppSec.TimeoutOrDefault(), matchedHost.AppSec.AlwaysSend
+	}
+	// Fall back to global AppSec
+	if s.globalAppSec != nil && s.globalAppSec.IsValid() {
+		return s.globalAppSec, s.globalAppSec.TimeoutOrDefault(), false
+	}
+	return nil, 0, false
+}
+
+// shouldRunAppSec determines if AppSec validation should run based on current remediation.
+// AppSec runs if remediation is not yet restrictive (< Captcha) OR if always_send is enabled.
+func shouldRunAppSec(r remediation.Remediation, alwaysSend bool) bool {
+	return r < remediation.Captcha || alwaysSend
 }
 
 // validateWithAppSec performs AppSec validation and returns the remediation
