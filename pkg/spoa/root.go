@@ -162,7 +162,7 @@ func New(config *SpoaConfig) (*Spoa, error) {
 func (s *Spoa) HandleSPOE(ctx context.Context, writer *encoding.ActionWriter, message *encoding.Message) {
 	messageNameBytes := message.NameBytes()
 
-	s.logger.Debugf("Received message: %s", messageNameBytes)
+	s.logger.Tracef("Received message: %s", messageNameBytes)
 
 	switch {
 	case bytes.Equal(messageNameBytes, messageCrowdsecTCP): //TCP message type always runs so match it first
@@ -174,7 +174,7 @@ func (s *Spoa) HandleSPOE(ctx context.Context, writer *encoding.ActionWriter, me
 		s.handleHTTPRequest(ctx, writer, message)
 	default:
 		// Unknown message type
-		s.logger.Debugf("Unknown message type: %s", messageNameBytes)
+		s.logger.Tracef("Unknown message type: %s", messageNameBytes)
 	}
 }
 
@@ -431,6 +431,9 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		httpMessageDataPool.Put(msgData)
 	}()
 
+	//log body length here
+	s.logger.Tracef("body length: %d", len(msgData.BodyCopied))
+
 	var tcpRemediation remediation.Remediation
 
 	// Get remediation passed from crowdsec-tcp handler (if any)
@@ -620,6 +623,8 @@ func (s *Spoa) validateWithAppSec(
 		logger.WithError(err).Warn("AppSec validation failed, using original remediation")
 		return currentRemediation
 	}
+
+	logger.WithField("remediation", appSecRemediation.String()).Debug("AppSec validation result")
 
 	// Track AppSec block metrics
 	if appSecRemediation > remediation.Allow && appSecReq.RemoteIP != "" {
