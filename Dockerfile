@@ -9,6 +9,10 @@ COPY . .
 
 RUN make build DOCKER_BUILD=1
 
+# Create directory structure for scratch image (with .keep files so COPY works)
+RUN mkdir -p /run/crowdsec-spoa /var/log/crowdsec-spoa && \
+    touch /run/crowdsec-spoa/.keep /var/log/crowdsec-spoa/.keep
+
 # Final minimal image
 FROM scratch
 
@@ -26,6 +30,10 @@ COPY --from=build /go/src/cs-spoa-bouncer/lua/ /usr/lib/crowdsec-haproxy-spoa-bo
 
 # Copy HTML templates for ban/captcha pages
 COPY --from=build /go/src/cs-spoa-bouncer/templates/ /var/lib/crowdsec-haproxy-spoa-bouncer/html/
+
+# Copy runtime directories (required for Unix socket and logs)
+COPY --from=build /run/crowdsec-spoa/ /run/crowdsec-spoa/
+COPY --from=build /var/log/crowdsec-spoa/ /var/log/crowdsec-spoa/
 
 EXPOSE 9000
 
