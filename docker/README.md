@@ -19,7 +19,7 @@ docker run -d \
   --name crowdsec-spoa-bouncer \
   -e API_KEY=your-api-key \
   -p 9000:9000 \
-  crowdsec/haproxy-spoa-bouncer
+  crowdsecurity/spoa-bouncer
 ```
 
 ## Configuration
@@ -35,7 +35,7 @@ docker run -d \
   --name crowdsec-spoa-bouncer \
   -v /path/to/your/config.yaml:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml:ro \
   -p 9000:9000 \
-  crowdsec/haproxy-spoa-bouncer
+  crowdsecurity/spoa-bouncer
 ```
 
 Or specify a different config path:
@@ -45,7 +45,7 @@ docker run -d \
   --name crowdsec-spoa-bouncer \
   -v /path/to/config.yaml:/config.yaml:ro \
   -p 9000:9000 \
-  crowdsec/haproxy-spoa-bouncer -c /config.yaml
+  crowdsecurity/spoa-bouncer -c /config.yaml
 ```
 
 ### Unix Socket (Recommended for Same-Host HAProxy)
@@ -55,7 +55,7 @@ docker run -d \
   --name crowdsec-spoa-bouncer \
   -v /path/to/config.yaml:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml:ro \
   -v /run/crowdsec-spoa:/run/crowdsec-spoa \
-  crowdsec/haproxy-spoa-bouncer
+  crowdsecurity/spoa-bouncer
 ```
 
 Ensure the socket directory exists and has appropriate permissions for HAProxy to connect.
@@ -65,7 +65,7 @@ Ensure the socket directory exists and has appropriate permissions for HAProxy t
 ```yaml
 services:
   crowdsec-spoa-bouncer:
-    image: crowdsec/haproxy-spoa-bouncer
+    image: crowdsecurity/spoa-bouncer
     restart: unless-stopped
     environment:
       - API_KEY=${CROWDSEC_API_KEY}
@@ -105,7 +105,7 @@ docker run -d \
   --user 1000:1000 \
   --name crowdsec-spoa-bouncer \
   -p 9000:9000 \
-  crowdsec/haproxy-spoa-bouncer
+  crowdsecurity/spoa-bouncer
 ```
 
 Note: Ensure mounted volumes have appropriate permissions for the specified user.
@@ -130,7 +130,7 @@ docker run -d \
   --health-interval=30s \
   -p 9000:9000 \
   -p 60601:60601 \
-  crowdsec/haproxy-spoa-bouncer
+  crowdsecurity/spoa-bouncer
 ```
 
 Note: Since this is a scratch image, `wget` is not available. Use an external health check or a sidecar container for HTTP health probes.
@@ -164,7 +164,7 @@ Set `log_level: debug` in your config file for verbose logging.
 ## Building the Image
 
 ```bash
-docker build -t crowdsec/haproxy-spoa-bouncer .
+docker build -t crowdsecurity/spoa-bouncer .
 ```
 
 ### Build Arguments
