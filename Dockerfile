@@ -16,6 +16,17 @@ RUN mkdir -p /run/crowdsec-spoa /var/log/crowdsec-spoa && \
 # Final minimal image
 FROM scratch
 
+# Default environment variables (can be overridden at runtime)
+ENV LOG_MODE=stdout \
+    LOG_LEVEL=info \
+    CROWDSEC_URL=http://crowdsec:8080/ \
+    UPDATE_FREQUENCY=10s \
+    INSECURE_SKIP_VERIFY=false \
+    LISTEN_TCP=0.0.0.0:9000 \
+    PROMETHEUS_ENABLED=true \
+    PROMETHEUS_ADDR=0.0.0.0 \
+    PROMETHEUS_PORT=6060
+
 # Copy CA certificates for HTTPS connections to LAPI
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 

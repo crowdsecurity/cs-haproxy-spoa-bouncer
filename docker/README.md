@@ -32,20 +32,19 @@ The Docker image uses a configuration file optimized for containers with extensi
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CROWDSEC_KEY` | *(required)* | API key for CrowdSec LAPI |
+| `CROWDSEC_KEY` | **required** | API key for CrowdSec LAPI |
 | `CROWDSEC_URL` | `http://crowdsec:8080/` | CrowdSec LAPI URL |
 | `LOG_MODE` | `stdout` | Log output: `stdout` or `file` |
 | `LOG_LEVEL` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
 | `UPDATE_FREQUENCY` | `10s` | How often to poll LAPI for decisions |
 | `INSECURE_SKIP_VERIFY` | `false` | Skip TLS verification for LAPI |
 | `LISTEN_TCP` | `0.0.0.0:9000` | TCP listener address |
-| `LISTEN_UNIX` | *(disabled)* | Unix socket path (uncomment in config) |
 | `PROMETHEUS_ENABLED` | `true` | Enable Prometheus metrics |
 | `PROMETHEUS_ADDR` | `0.0.0.0` | Prometheus listen address |
 | `PROMETHEUS_PORT` | `6060` | Prometheus listen port |
-| `APPSEC_URL` | *(disabled)* | AppSec endpoint URL |
-| `APPSEC_TIMEOUT` | `200ms` | AppSec request timeout |
 | `GOMEMLIMIT` | *(unset)* | Go memory limit (e.g., `200MiB`) |
+
+**Note:** Default values are set in the Docker image. Only `CROWDSEC_KEY` must be provided.
 
 ### Custom Configuration
 
