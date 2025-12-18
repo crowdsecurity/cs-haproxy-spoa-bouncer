@@ -46,6 +46,10 @@ COPY --from=build /go/src/cs-spoa-bouncer/templates/ /var/lib/crowdsec-haproxy-s
 COPY --from=build /run/crowdsec-spoa/ /run/crowdsec-spoa/
 COPY --from=build /var/log/crowdsec-spoa/ /var/log/crowdsec-spoa/
 
+# Declare volumes for customizable content
+VOLUME /usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
+VOLUME /var/lib/crowdsec-haproxy-spoa-bouncer/html/
+
 EXPOSE 9000 6060
 
 ENTRYPOINT ["/crowdsec-spoa-bouncer"]
