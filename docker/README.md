@@ -17,8 +17,10 @@ This is a minimal scratch-based Docker image containing only the statically-link
 ```bash
 docker run -d \
   --name crowdsec-spoa-bouncer \
-  -e API_KEY=your-api-key \
+  -e CROWDSEC_KEY=your-api-key \
+  -e CROWDSEC_URL=http://crowdsec:8080/ \
   -p 9000:9000 \
+  -p 6060:6060 \
   crowdsecurity/spoa-bouncer
 ```
 
@@ -26,7 +28,24 @@ docker run -d \
 
 ### Environment Variables
 
-The default config supports environment variable substitution for `API_KEY`. For other settings, mount a custom config file.
+The Docker image uses a configuration file optimized for containers with extensive environment variable support:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CROWDSEC_KEY` | *(required)* | API key for CrowdSec LAPI |
+| `CROWDSEC_URL` | `http://crowdsec:8080/` | CrowdSec LAPI URL |
+| `LOG_MODE` | `stdout` | Log output: `stdout` or `file` |
+| `LOG_LEVEL` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
+| `UPDATE_FREQUENCY` | `10s` | How often to poll LAPI for decisions |
+| `INSECURE_SKIP_VERIFY` | `false` | Skip TLS verification for LAPI |
+| `LISTEN_TCP` | `0.0.0.0:9000` | TCP listener address |
+| `LISTEN_UNIX` | *(disabled)* | Unix socket path (uncomment in config) |
+| `PROMETHEUS_ENABLED` | `true` | Enable Prometheus metrics |
+| `PROMETHEUS_ADDR` | `0.0.0.0` | Prometheus listen address |
+| `PROMETHEUS_PORT` | `6060` | Prometheus listen port |
+| `APPSEC_URL` | *(disabled)* | AppSec endpoint URL |
+| `APPSEC_TIMEOUT` | `200ms` | AppSec request timeout |
+| `GOMEMLIMIT` | *(unset)* | Go memory limit (e.g., `200MiB`) |
 
 ### Custom Configuration
 
@@ -68,32 +87,33 @@ services:
     image: crowdsecurity/spoa-bouncer
     restart: unless-stopped
     environment:
-      - API_KEY=${CROWDSEC_API_KEY}
-    volumes:
-      - ./config/crowdsec-spoa-bouncer.yaml:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml:ro
-      - spoa-socket:/run/crowdsec-spoa
-    # Optional: resource limits
+      - CROWDSEC_KEY=${CROWDSEC_API_KEY}
+      - CROWDSEC_URL=http://crowdsec:8080/
+      - LOG_LEVEL=info
+      - GOMEMLIMIT=200MiB
+    ports:
+      - "6060:6060"  # Prometheus metrics
+    networks:
+      - crowdsec
     deploy:
       resources:
         limits:
           memory: 256M
-    # Optional: set GOMEMLIMIT for better memory management
-    # environment:
-    #   - GOMEMLIMIT=200MiB
 
   haproxy:
     image: haproxy:latest
     volumes:
       - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-      - spoa-socket:/run/crowdsec-spoa
     ports:
       - "80:80"
       - "443:443"
+    networks:
+      - crowdsec
     depends_on:
       - crowdsec-spoa-bouncer
 
-volumes:
-  spoa-socket:
+networks:
+  crowdsec:
 ```
 
 ## Running as Non-Root
@@ -112,36 +132,37 @@ Note: Ensure mounted volumes have appropriate permissions for the specified user
 
 ## Health Checks
 
-The bouncer exposes Prometheus metrics when enabled in config:
+Prometheus metrics are enabled by default on port 6060. Since this is a scratch image with no shell, use external health checks:
 
 ```yaml
-prometheus:
-  enabled: true
-  listen_addr: 0.0.0.0
-  listen_port: 60601
+# Docker Compose with healthcheck via curl sidecar
+services:
+  crowdsec-spoa-bouncer:
+    image: crowdsecurity/spoa-bouncer
+    environment:
+      - CROWDSEC_KEY=${API_KEY}
+    # Use depends_on with service_healthy for dependent services
+
+  healthcheck:
+    image: curlimages/curl:latest
+    command: ["sh", "-c", "while true; do curl -sf http://crowdsec-spoa-bouncer:6060/metrics > /dev/null && echo healthy || echo unhealthy; sleep 30; done"]
+    depends_on:
+      - crowdsec-spoa-bouncer
 ```
 
-Then use for health checks:
+Or check from the host:
 
 ```bash
-docker run -d \
-  --name crowdsec-spoa-bouncer \
-  --health-cmd="wget -q --spider http://localhost:60601/metrics || exit 1" \
-  --health-interval=30s \
-  -p 9000:9000 \
-  -p 60601:60601 \
-  crowdsecurity/spoa-bouncer
+curl -sf http://localhost:6060/metrics > /dev/null && echo "healthy" || echo "unhealthy"
 ```
-
-Note: Since this is a scratch image, `wget` is not available. Use an external health check or a sidecar container for HTTP health probes.
 
 ## Ports
 
-| Port | Description |
-|------|-------------|
-| 9000 | SPOA TCP listener (default) |
-| 60601 | Prometheus metrics (when enabled) |
-| 6060 | pprof debug endpoint (when enabled) |
+| Port | Default | Description |
+|------|---------|-------------|
+| 9000 | Yes | SPOA TCP listener |
+| 6060 | Yes | Prometheus metrics (enabled by default) |
+| 6070 | No | pprof debug endpoint (disabled by default) |
 
 ## Troubleshooting
 
@@ -153,7 +174,11 @@ docker logs -f crowdsec-spoa-bouncer
 
 ### Debug Mode
 
-Set `log_level: debug` in your config file for verbose logging.
+Set the `LOG_LEVEL` environment variable:
+
+```bash
+docker run -e LOG_LEVEL=debug -e CROWDSEC_KEY=... crowdsecurity/spoa-bouncer
+```
 
 ### Connection Issues
 

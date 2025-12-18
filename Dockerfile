@@ -22,8 +22,8 @@ COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 # Copy the static binary
 COPY --from=build /go/src/cs-spoa-bouncer/crowdsec-spoa-bouncer /crowdsec-spoa-bouncer
 
-# Copy default config file
-COPY --from=build /go/src/cs-spoa-bouncer/config/crowdsec-spoa-bouncer.yaml /etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml
+# Copy Docker-optimized config file
+COPY --from=build /go/src/cs-spoa-bouncer/config/crowdsec-spoa-bouncer.docker.yaml /etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml
 
 # Copy Lua files for HAProxy integration
 COPY --from=build /go/src/cs-spoa-bouncer/lua/ /usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
@@ -35,7 +35,7 @@ COPY --from=build /go/src/cs-spoa-bouncer/templates/ /var/lib/crowdsec-haproxy-s
 COPY --from=build /run/crowdsec-spoa/ /run/crowdsec-spoa/
 COPY --from=build /var/log/crowdsec-spoa/ /var/log/crowdsec-spoa/
 
-EXPOSE 9000
+EXPOSE 9000 6060
 
 ENTRYPOINT ["/crowdsec-spoa-bouncer"]
 CMD ["-c", "/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml"]

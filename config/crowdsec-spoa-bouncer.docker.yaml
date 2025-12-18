@@ -1,0 +1,41 @@
+## Docker-optimized configuration for CrowdSec SPOA Bouncer
+## Environment variables can be used for configuration: ${VAR_NAME}
+
+## Log configuration
+## stdout is recommended for Docker (use `docker logs` to view)
+log_mode: ${LOG_MODE:-stdout}
+log_level: ${LOG_LEVEL:-info}
+
+## LAPI configuration
+api_url: ${CROWDSEC_URL:-http://crowdsec:8080/}
+api_key: ${CROWDSEC_KEY}
+update_frequency: ${UPDATE_FREQUENCY:-10s}
+insecure_skip_verify: ${INSECURE_SKIP_VERIFY:-false}
+
+## SPOA listener configuration
+## TCP listener - recommended for Docker networking
+listen_tcp: ${LISTEN_TCP:-0.0.0.0:9000}
+## Unix socket - uncomment if using shared volume with HAProxy
+#listen_unix: ${LISTEN_UNIX:-/run/crowdsec-spoa/spoa.sock}
+
+## GeoIP databases (optional, mount as volumes)
+#asn_database_path: ${ASN_DB_PATH:-/var/lib/crowdsec/data/GeoLite2-ASN.mmdb}
+#city_database_path: ${CITY_DB_PATH:-/var/lib/crowdsec/data/GeoLite2-City.mmdb}
+
+## Global AppSec configuration (optional)
+#appsec_url: ${APPSEC_URL}
+#appsec_timeout: ${APPSEC_TIMEOUT:-200ms}
+
+## Prometheus metrics endpoint
+prometheus:
+  enabled: ${PROMETHEUS_ENABLED:-true}
+  listen_addr: ${PROMETHEUS_ADDR:-0.0.0.0}
+  listen_port: ${PROMETHEUS_PORT:-6060}
+
+## pprof debug endpoint (disabled by default)
+## WARNING: Only enable for debugging, exposes internal runtime data
+#pprof:
+#  enabled: ${PPROF_ENABLED:-false}
+#  listen_addr: ${PPROF_ADDR:-0.0.0.0}
+#  listen_port: ${PPROF_PORT:-6070}
+
