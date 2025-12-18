@@ -100,7 +100,7 @@ services:
           memory: 256M
 
   haproxy:
-    image: haproxy:latest
+    image: haproxy:3.1
     volumes:
       - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     ports:
@@ -143,7 +143,7 @@ services:
     # Use depends_on with service_healthy for dependent services
 
   healthcheck:
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.11.1
     command: ["sh", "-c", "while true; do curl -sf http://crowdsec-spoa-bouncer:6060/metrics > /dev/null && echo healthy || echo unhealthy; sleep 30; done"]
     depends_on:
       - crowdsec-spoa-bouncer
