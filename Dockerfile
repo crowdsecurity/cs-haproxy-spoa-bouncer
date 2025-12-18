@@ -4,43 +4,30 @@ FROM golang:${GOVERSION}-alpine AS build
 
 WORKDIR /go/src/cs-spoa-bouncer
 
-RUN apk add --update --no-cache make git
+RUN apk add --update --no-cache make git ca-certificates
 COPY . .
 
 RUN make build DOCKER_BUILD=1
 
-FROM alpine:latest
-COPY --from=build /go/src/cs-spoa-bouncer/crowdsec-spoa-bouncer /usr/local/bin/crowdsec-spoa-bouncer
+# Final minimal image
+FROM scratch
+
+# Copy CA certificates for HTTPS connections to LAPI
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Copy the static binary
+COPY --from=build /go/src/cs-spoa-bouncer/crowdsec-spoa-bouncer /crowdsec-spoa-bouncer
+
+# Copy default config file
 COPY --from=build /go/src/cs-spoa-bouncer/config/crowdsec-spoa-bouncer.yaml /etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml
-COPY --from=build /go/src/cs-spoa-bouncer/docker/docker_start.sh /docker_start.sh
 
-# Set permissions for config file and binary
-RUN chmod 644 /etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml && \
-    chmod 755 /usr/local/bin/crowdsec-spoa-bouncer
+# Copy Lua files for HAProxy integration
+COPY --from=build /go/src/cs-spoa-bouncer/lua/ /usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
 
-## Add the same haproxy user as the official haproxy image
-RUN addgroup -g 99 -S haproxy && adduser -S -D -H -u 99 -h /var/lib/haproxy -s /sbin/nologin -G haproxy -g haproxy haproxy
-## Add worker user
-RUN addgroup -S crowdsec-spoa && adduser -S -D -H -s /sbin/nologin -g crowdsec-spoa crowdsec-spoa
+# Copy HTML templates for ban/captcha pages
+COPY --from=build /go/src/cs-spoa-bouncer/templates/ /var/lib/crowdsec-haproxy-spoa-bouncer/html/
 
-## Create a socket for the spoa to inherit crowdsec-spoa:haproxy user from official haproxy image
-RUN mkdir -p /run/crowdsec-spoa/ && chown crowdsec-spoa:haproxy /run/crowdsec-spoa/ && chmod 770 /run/crowdsec-spoa/
+EXPOSE 9000
 
-## Copy Lua files (matching Debian/RPM paths)
-RUN mkdir -p /usr/lib/crowdsec-haproxy-spoa-bouncer/lua
-COPY --from=build /go/src/cs-spoa-bouncer/lua/* /usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
-
-## Copy templates (matching Debian/RPM paths)
-RUN mkdir -p /var/lib/crowdsec-haproxy-spoa-bouncer/html
-COPY --from=build /go/src/cs-spoa-bouncer/templates/* /var/lib/crowdsec-haproxy-spoa-bouncer/html/
-
-RUN chown -R root:haproxy /usr/lib/crowdsec-haproxy-spoa-bouncer/lua /var/lib/crowdsec-haproxy-spoa-bouncer/html
-
-VOLUME [ "/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/", "/var/lib/crowdsec-haproxy-spoa-bouncer/html/" ]
-
-RUN chmod +x /docker_start.sh
-
-# Run as user
-USER crowdsec-spoa
-
-ENTRYPOINT ["/docker_start.sh"]
+ENTRYPOINT ["/crowdsec-spoa-bouncer"]
+CMD ["-c", "/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml"]
