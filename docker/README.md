@@ -26,26 +26,9 @@ docker run -d \
 
 ## Configuration
 
-### Environment Variables
+### Custom Configuration File
 
-The Docker image uses a configuration file optimized for containers with extensive environment variable support:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CROWDSEC_KEY` | **required** | API key for CrowdSec LAPI |
-| `CROWDSEC_URL` | `http://crowdsec:8080/` | CrowdSec LAPI URL |
-| `LOG_MODE` | `stdout` | Log output: `stdout` or `file` |
-| `LOG_LEVEL` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
-| `UPDATE_FREQUENCY` | `10s` | How often to poll LAPI for decisions |
-| `INSECURE_SKIP_VERIFY` | `false` | Skip TLS verification for LAPI |
-| `LISTEN_TCP` | `0.0.0.0:9000` | TCP listener address |
-| `PROMETHEUS_ENABLED` | `true` | Enable Prometheus metrics |
-| `PROMETHEUS_ADDR` | `0.0.0.0` | Prometheus listen address |
-| `PROMETHEUS_PORT` | `6060` | Prometheus listen port |
-
-**Note:** Default values are set in the Docker image. Only `CROWDSEC_KEY` must be provided.
-
-### Custom Configuration
+Mount your own configuration file for full control:
 
 ```bash
 docker run -d \
@@ -64,6 +47,25 @@ docker run -d \
   -p 9000:9000 \
   crowdsecurity/spoa-bouncer -c /config.yaml
 ```
+
+### Environment Variables
+
+For simple deployments, the default configuration supports environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CROWDSEC_KEY` | **required** | API key for CrowdSec LAPI |
+| `CROWDSEC_URL` | `http://crowdsec:8080/` | CrowdSec LAPI URL |
+| `LOG_MODE` | `stdout` | Log output: `stdout` or `file` |
+| `LOG_LEVEL` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
+| `UPDATE_FREQUENCY` | `10s` | How often to poll LAPI for decisions |
+| `INSECURE_SKIP_VERIFY` | `false` | Skip TLS verification for LAPI |
+| `LISTEN_TCP` | `0.0.0.0:9000` | TCP listener address |
+| `PROMETHEUS_ENABLED` | `true` | Enable Prometheus metrics |
+| `PROMETHEUS_ADDR` | `0.0.0.0` | Prometheus listen address |
+| `PROMETHEUS_PORT` | `6060` | Prometheus listen port |
+
+**Note:** Default values are set in the Docker image. Only `CROWDSEC_KEY` must be provided.
 
 ### Unix Socket (Recommended for Same-Host HAProxy)
 
