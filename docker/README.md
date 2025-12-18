@@ -42,7 +42,6 @@ The Docker image uses a configuration file optimized for containers with extensi
 | `PROMETHEUS_ENABLED` | `true` | Enable Prometheus metrics |
 | `PROMETHEUS_ADDR` | `0.0.0.0` | Prometheus listen address |
 | `PROMETHEUS_PORT` | `6060` | Prometheus listen port |
-| `GOMEMLIMIT` | *(unset)* | Go memory limit (e.g., `200MiB`) |
 
 **Note:** Default values are set in the Docker image. Only `CROWDSEC_KEY` must be provided.
 
@@ -89,7 +88,6 @@ services:
       - CROWDSEC_KEY=${CROWDSEC_API_KEY}
       - CROWDSEC_URL=http://crowdsec:8080/
       - LOG_LEVEL=info
-      - GOMEMLIMIT=200MiB
     ports:
       - "6060:6060"  # Prometheus metrics
     networks:
