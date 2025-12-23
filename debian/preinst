@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+PKG="crowdsec-haproxy-spoa-bouncer"
+STATE_DIR="/var/lib/${PKG}"
+OLD_VERSION_FILE="${STATE_DIR}/old-version"
+
+# preinst is called with 'upgrade' <old-version> when upgrading
+# We capture the old version and persist it for postinst to read
+if [ "$1" = "upgrade" ] && [ -n "${2:-}" ]; then
+    # Create state directory if it doesn't exist
+    mkdir -p "$STATE_DIR"
+    # Write old version to state file
+    echo "$2" > "$OLD_VERSION_FILE"
+fi
+
+exit 0
