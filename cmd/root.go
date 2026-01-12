@@ -124,16 +124,36 @@ func Execute() error {
 	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests)
 
 	if config.PrometheusConfig.Enabled {
-		go func() {
-			http.Handle("/metrics", promhttp.Handler())
+		promMux := http.NewServeMux()
+		promMux.Handle("/metrics", promhttp.Handler())
 
-			listenOn := net.JoinHostPort(
-				config.PrometheusConfig.ListenAddress,
-				config.PrometheusConfig.ListenPort,
-			)
+		listenOn := net.JoinHostPort(
+			config.PrometheusConfig.ListenAddress,
+			config.PrometheusConfig.ListenPort,
+		)
+
+		promServer := &http.Server{
+			Addr:    listenOn,
+			Handler: promMux,
+		}
+
+		g.Go(func() error {
 			log.Infof("Serving metrics at %s", listenOn+"/metrics")
-			log.Error(http.ListenAndServe(listenOn, nil))
-		}()
+			if err := promServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("prometheus server error: %w", err)
+			}
+			return nil
+		})
+
+		g.Go(func() error {
+			<-ctx.Done()
+			log.Info("Shutting down prometheus server...")
+			// Use background context since parent ctx is already canceled
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			//nolint:contextcheck // parent ctx is canceled, need fresh context for shutdown
+			return promServer.Shutdown(shutdownCtx)
+		})
 	}
 
 	// pprof debug endpoint for runtime profiling (memory, CPU, goroutines)
