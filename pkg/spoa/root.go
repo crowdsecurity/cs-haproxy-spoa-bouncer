@@ -24,6 +24,7 @@ import (
 	"github.com/crowdsecurity/go-cs-lib/ptr"
 	"github.com/dropmorepackets/haproxy-go/pkg/encoding"
 	"github.com/dropmorepackets/haproxy-go/spop"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -813,7 +814,11 @@ func (s *Spoa) tryValidateCaptcha(ctx context.Context, ses *session.Session, msg
 		return captcha.Pending
 	}
 
+	// Track captcha validation duration
+	captchaTimer := prometheus.NewTimer(metrics.CaptchaValidationDuration)
 	isValid, err := matchedHost.Captcha.Validate(ctx, uuid, string(msgData.BodyCopied))
+	captchaTimer.ObserveDuration()
+
 	if err != nil {
 		s.logger.WithFields(log.Fields{
 			"host":    matchedHost.Host,
@@ -847,7 +852,11 @@ func (s *Spoa) getIPRemediation(_ context.Context, writer *encoding.ActionWriter
 	// Always try to get and set ISO code if geo database is available
 	// This allows upstream services to use the ISO code regardless of remediation status
 	if s.geoDatabase.IsValid() {
+		// Track geo lookup duration
+		geoTimer := prometheus.NewTimer(metrics.GeoLookupDuration)
 		record, err := s.geoDatabase.GetCity(ip)
+		geoTimer.ObserveDuration()
+
 		if err != nil && !errors.Is(err, geo.ErrNotValidConfig) {
 			s.logger.WithFields(log.Fields{
 				"ip":    ip.String(),
