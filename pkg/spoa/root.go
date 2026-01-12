@@ -758,16 +758,12 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 		len(msgData.BodyCopied) > 0 {
 
 		// Validate captcha using UUID for traceability
-		tokenUUID := ""
-		if tok != nil {
-			tokenUUID = tok.UUID
-		}
-		// Use logger with UUID for validation logs
-		vlog := clog.WithField("uuid", tokenUUID)
+		// tok is guaranteed non-nil at this point (created earlier if needed)
+		vlog := clog.WithField("uuid", tok.UUID)
 
 		// Track captcha validation duration
 		captchaTimer := prometheus.NewTimer(metrics.CaptchaValidationDuration)
-		isValid, err := matchedHost.Captcha.Validate(ctx, tokenUUID, string(msgData.BodyCopied))
+		isValid, err := matchedHost.Captcha.Validate(ctx, tok.UUID, string(msgData.BodyCopied))
 		captchaTimer.ObserveDuration()
 
 		if err != nil {
@@ -776,14 +772,16 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 			// Create new token with passed status, reusing UUID from existing token
 			newTok := matchedHost.Captcha.NewPassedToken(tok)
 
+			// Update token and HAProxy status even if cookie generation fails
+			// This prevents users from being stuck after successful captcha validation
+			tok = &newTok
+			_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", captcha.Valid)
+
 			cookie, err := matchedHost.Captcha.GenerateCookie(newTok, msgData.SSL)
 			if err != nil {
 				vlog.WithField("uuid", newTok.UUID).WithError(err).Error("Failed to generate passed captcha cookie")
 			} else {
 				_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", cookie.String())
-				// Update token and HAProxy status
-				tok = &newTok
-				_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", captcha.Valid)
 			}
 		}
 	}

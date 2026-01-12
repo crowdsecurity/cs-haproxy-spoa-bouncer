@@ -88,7 +88,10 @@ func (c *CookieGenerator) GenerateUnsetCookie(ssl *bool) (*http.Cookie, error) {
 }
 
 func urlEncodeValue(cookie *http.Cookie) error {
-	cookie.Value = base64.URLEncoding.EncodeToString([]byte(cookie.Value))
+	// Skip encoding for empty values (unset cookies)
+	if cookie.Value != "" {
+		cookie.Value = base64.URLEncoding.EncodeToString([]byte(cookie.Value))
+	}
 	if len(cookie.String()) > 4096 {
 		return fmt.Errorf("cookie value too long")
 	}
@@ -347,7 +350,7 @@ func (c *Captcha) IsValid() error {
 	// Require explicit signing_key configuration (breaking change in 0.3.0)
 	// This ensures proper secret management and compliance requirements
 	if c.SigningKey == "" {
-		return fmt.Errorf("signing_key is required for JWT token signing. Please configure signing_key with at least 32 bytes. This is a breaking change in 0.3.0 - signing_key must be explicitly set")
+		return fmt.Errorf("signing_key is required for JWT token signing (minimum 32 bytes). This is a breaking change in 0.3.0")
 	}
 
 	// Validate signing_key meets minimum security requirements
@@ -383,7 +386,10 @@ func (c *Captcha) NewPassedToken(existingToken *CaptchaToken) CaptchaToken {
 		tokenUUID = existingToken.UUID
 	} else {
 		// Generate new UUID if none exists (shouldn't happen in normal flow)
-		if newUUID, err := uuid.NewRandom(); err == nil {
+		newUUID, err := uuid.NewRandom()
+		if err != nil {
+			c.logger.WithError(err).Error("Failed to generate UUID for passed token")
+		} else {
 			tokenUUID = newUUID.String()
 		}
 	}
@@ -416,7 +422,7 @@ func (c *Captcha) GenerateCookie(tok CaptchaToken, ssl *bool) (*http.Cookie, err
 	)
 }
 
-// ValidateCookie validates a base64-encoded captcha cookie value using the host's signing key
+// ValidateCookie validates a JWT captcha cookie value using the host's signing key
 // Note: signing_key is validated in InjectKeyValues() before this method is called
 func (c *Captcha) ValidateCookie(b64Value string) (*CaptchaToken, error) {
 	return ValidateCaptchaCookie(b64Value, c.SigningKey)
