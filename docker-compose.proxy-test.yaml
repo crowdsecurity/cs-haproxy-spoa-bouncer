@@ -33,7 +33,7 @@ services:
     image: haproxy:2.9.7-alpine
     volumes:
       - ./config/haproxy-upstreamproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
-      - ./config/crowdsec-upstreamproxy.cfg:/etc/haproxy/crowdsec.cfg
+      - ./config/crowdsec.cfg:/etc/haproxy/crowdsec.cfg
       - sockets:/run/
       - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
       - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
@@ -51,7 +51,7 @@ services:
     volumes:
       - ./config/nginx-proxy.conf:/etc/nginx/nginx.conf:ro
     ports:
-      - "8080:80"
+      - "9090:80"
     depends_on:
       - haproxy
     networks:
@@ -63,8 +63,10 @@ services:
       - BOUNCER_KEY_SPOA=+4iYgItcalc9+0tWrvrj9R6Wded/W1IRwRtNmcWR9Ws
       - DISABLE_ONLINE_API=true
       - CROWDSEC_BYPASS_DB_VOLUME_CHECK=true
+      - COLLECTIONS=crowdsecurity/appsec-virtual-patching crowdsecurity/appsec-generic-rules
     volumes:
       - geodb:/staging/var/lib/crowdsec/data/
+      - ./docker/crowdsec/acquisitions/appsec.yaml:/etc/crowdsec/acquis.d/appsec.yaml
     networks:
       - crowdsec
 

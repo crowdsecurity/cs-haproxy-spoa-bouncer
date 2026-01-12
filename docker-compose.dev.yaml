@@ -1,0 +1,58 @@
+# Development/Debug overlay for docker-compose.yaml
+# Usage: podman compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d
+#
+# This adds a debug container with network tools for troubleshooting
+
+services:
+  # Debug sidecar with network tools
+  debug:
+    image: alpine:latest
+    container_name: debug
+    command: >
+      sh -c "apk add --no-cache tcpdump socat curl bind-tools netcat-openbsd strace && sleep infinity"
+    networks:
+      - crowdsec
+    cap_add:
+      - NET_RAW      # Required for tcpdump
+      - NET_ADMIN    # Required for some network debugging
+    volumes:
+      # Mount shared sockets volume
+      - sockets:/run:ro
+      # Mount HAProxy tmp for stats socket access
+      - haproxy-tmp:/haproxy-tmp:ro
+      # Mount configs for inspection
+      - ./config:/config:ro
+    depends_on:
+      - haproxy
+      - spoa
+
+  # Override HAProxy to share /tmp via named volume
+  haproxy:
+    volumes:
+      - haproxy-tmp:/tmp
+
+volumes:
+  haproxy-tmp:
+
+# Example debug commands:
+# 
+# Enter debug container:
+#   podman compose -f docker-compose.yaml -f docker-compose.dev.yaml exec debug ash
+#
+# Install tools (once inside):
+#   apk add --no-cache tcpdump socat curl bind-tools netcat-openbsd strace
+#
+# Capture SPOE traffic:
+#   tcpdump -i any -X port 9000
+#
+# Test HAProxy stats socket:
+#   echo "show info" | socat /haproxy-tmp/haproxy.sock stdio
+#
+# DNS debugging:
+#   dig crowdsec
+#   nslookup spoa
+#
+# Test connectivity:
+#   curl -v http://haproxy:8080/
+#   nc -zv spoa 9000
+

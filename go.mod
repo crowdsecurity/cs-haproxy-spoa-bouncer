@@ -6,9 +6,9 @@ require (
 	github.com/crowdsecurity/crowdsec v1.7.3
 	github.com/crowdsecurity/go-cs-bouncer v0.0.19
 	github.com/crowdsecurity/go-cs-lib v0.0.23
+	github.com/dropmorepackets/haproxy-go v0.0.7
 	github.com/gaissmai/bart v0.25.0
 	github.com/google/uuid v1.6.0
-	github.com/negasus/haproxy-spoe-go v1.0.7
 	github.com/oschwald/geoip2-golang/v2 v2.0.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
@@ -44,6 +44,7 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect

@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"errors"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -15,7 +16,6 @@ type BartAddOp struct {
 	Prefix netip.Prefix
 	Origin string
 	R      remediation.Remediation
-	ID     int64
 	IPType string
 	Scope  string
 }
@@ -24,27 +24,26 @@ type BartAddOp struct {
 type BartRemoveOp struct {
 	Prefix netip.Prefix
 	R      remediation.Remediation
-	ID     int64
 	Origin string
 	IPType string
 	Scope  string
 }
 
-// BartUnifiedIPSet provides a unified interface for IP and CIDR operations using bart library.
+// BartRangeSet provides a unified interface for IP and CIDR operations using bart library.
 // Uses atomic pointer for lock-free reads and mutex-protected writes
 // following the pattern recommended in bart's documentation.
-type BartUnifiedIPSet struct {
-	tableAtomicPtr atomic.Pointer[bart.Table[RemediationIdsMap]]
+type BartRangeSet struct {
+	tableAtomicPtr atomic.Pointer[bart.Table[RemediationMap]]
 	writeMutex     sync.Mutex // Protects writers only
 	logger         *log.Entry
 }
 
-// NewBartUnifiedIPSet creates a new BartUnifiedIPSet
+// NewBartRangeSet creates a new BartRangeSet
 // The table starts as nil and will be created on first use for better memory efficiency
 // Initialize with nil; the table will be allocated during the first AddBatch operation.
 // This approach enables using Insert for the initial table population, which is more memory efficient than incremental updates.
-func NewBartUnifiedIPSet(logAlias string) *BartUnifiedIPSet {
-	return &BartUnifiedIPSet{
+func NewBartRangeSet(logAlias string) *BartRangeSet {
+	return &BartRangeSet{
 		logger: log.WithField("alias", logAlias),
 	}
 }
@@ -55,7 +54,7 @@ func NewBartUnifiedIPSet(logAlias string) *BartUnifiedIPSet {
 // For the initial load (when table is nil), uses Insert for better memory efficiency.
 // For subsequent updates, uses ModifyPersist for incremental changes.
 // All operations always succeed (duplicates are merged, new entries are created).
-func (s *BartUnifiedIPSet) AddBatch(operations []BartAddOp) {
+func (s *BartRangeSet) AddBatch(operations []BartAddOp) {
 	if len(operations) == 0 {
 		return
 	}
@@ -78,14 +77,14 @@ func (s *BartUnifiedIPSet) AddBatch(operations []BartAddOp) {
 
 // initializeBatch creates a new table and initializes it with the given operations using Insert.
 // This is more memory efficient than using ModifyPersist for the initial load.
-// Handles duplicate prefixes by merging IDs before inserting.
+// Handles duplicate prefixes by merging remediations before inserting.
 // All operations always succeed.
-func (s *BartUnifiedIPSet) initializeBatch(operations []BartAddOp) {
+func (s *BartRangeSet) initializeBatch(operations []BartAddOp) {
 	// Create a new table for the initial load
-	next := &bart.Table[RemediationIdsMap]{}
+	next := &bart.Table[RemediationMap]{}
 
 	// First, collect all operations by prefix to handle duplicates
-	prefixMap := make(map[netip.Prefix]RemediationIdsMap)
+	prefixMap := make(map[netip.Prefix]RemediationMap)
 	for _, op := range operations {
 		prefix := op.Prefix.Masked()
 
@@ -99,10 +98,10 @@ func (s *BartUnifiedIPSet) initializeBatch(operations []BartAddOp) {
 		// Get or create the data for this prefix
 		data, exists := prefixMap[prefix]
 		if !exists {
-			data = RemediationIdsMap{}
+			data = RemediationMap{}
 		}
-		// Add the ID (this handles merging if prefix already seen)
-		data.AddID(valueLog, op.R, op.ID, op.Origin)
+		// Add the remediation (this handles merging if prefix already seen)
+		data.Add(valueLog, op.R, op.Origin)
 		prefixMap[prefix] = data
 	}
 
@@ -126,7 +125,7 @@ func (s *BartUnifiedIPSet) initializeBatch(operations []BartAddOp) {
 // updateBatch updates an existing table with the given operations using ModifyPersist.
 // This handles incremental updates efficiently.
 // All operations always succeed.
-func (s *BartUnifiedIPSet) updateBatch(cur *bart.Table[RemediationIdsMap], operations []BartAddOp) {
+func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationMap], operations []BartAddOp) {
 	// Process all operations, chaining the table updates
 	next := cur
 	for _, op := range operations {
@@ -141,21 +140,21 @@ func (s *BartUnifiedIPSet) updateBatch(cur *bart.Table[RemediationIdsMap], opera
 
 		// Use ModifyPersist to atomically update or create the prefix entry
 		// This is more efficient than DeletePersist + InsertPersist as it only traverses once
-		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationIdsMap, exists bool) (RemediationIdsMap, bool) {
+		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationMap, exists bool) (RemediationMap, bool) {
 			if exists {
 				if valueLog != nil {
-					valueLog.Trace("exact prefix exists, merging IDs")
+					valueLog.Trace("exact prefix exists, merging remediations")
 				}
 				// bart already cloned via our Cloner interface, modify directly
-				existingData.AddID(valueLog, op.R, op.ID, op.Origin)
+				existingData.Add(valueLog, op.R, op.Origin)
 				return existingData, false // false = don't delete
 			}
 			if valueLog != nil {
 				valueLog.Trace("creating new entry")
 			}
 			// Create new data
-			newData := make(RemediationIdsMap)
-			newData.AddID(valueLog, op.R, op.ID, op.Origin)
+			newData := make(RemediationMap)
+			newData.Add(valueLog, op.R, op.Origin)
 			return newData, false // false = don't delete
 		})
 	}
@@ -165,10 +164,11 @@ func (s *BartUnifiedIPSet) updateBatch(cur *bart.Table[RemediationIdsMap], opera
 }
 
 // RemoveBatch removes multiple prefixes from the bart table in a single atomic operation.
-// Returns a slice of pointers to successfully removed operations (nil for failures).
+// Returns a slice of pointers to actually removed operations (nil for duplicate deletes or non-existent prefixes).
 // This allows callers to access operation metadata (Origin, IPType, Scope) for metrics.
+// Since Remove() never fails, we only return the operation pointer if the remediation actually existed.
 // IPs should be converted to /32 or /128 prefixes before calling this method.
-func (s *BartUnifiedIPSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
+func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 	if len(operations) == 0 {
 		return nil
 	}
@@ -199,7 +199,7 @@ func (s *BartUnifiedIPSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveO
 
 		// Use ModifyPersist to atomically update or remove the prefix entry
 		// This is more efficient than DeletePersist + InsertPersist as it only traverses once
-		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationIdsMap, exists bool) (RemediationIdsMap, bool) {
+		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationMap, exists bool) (RemediationMap, bool) {
 			if !exists {
 				if valueLog != nil {
 					valueLog.Trace("exact prefix not found")
@@ -208,19 +208,38 @@ func (s *BartUnifiedIPSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveO
 				return existingData, false // false = don't delete (prefix doesn't exist anyway)
 			}
 
-			// bart already cloned via our Cloner interface, modify directly
-			err := existingData.RemoveID(valueLog, op.R, op.ID)
-			if err != nil {
+			// Check if the remediation exists with the matching origin before removing
+			// This prevents removing decisions when the origin has been overwritten (e.g., by CAPI)
+			if !existingData.HasRemediationWithOrigin(op.R, op.Origin) {
+				// Origin doesn't match - this decision was likely overwritten by another origin
+				// Don't remove it, as it's not the decision we're trying to delete
 				if valueLog != nil {
-					valueLog.Trace("ID not found")
+					storedOrigin, exists := existingData[op.R]
+					if exists {
+						valueLog.Tracef("remediation exists but origin mismatch (stored: %s, requested: %s), skipping removal", storedOrigin, op.Origin)
+					} else {
+						valueLog.Tracef("remediation not found, skipping removal")
+					}
 				}
 				results[i] = nil
-				return existingData, false // false = don't delete, keep data unchanged
+				return existingData, false // false = don't delete, keep existing data
 			}
 
-			// ID was successfully removed - return pointer to the operation for metadata access
-			// Use index to get pointer to original operation (safe since we don't modify the slice)
-			results[i] = &operations[i]
+			// bart already cloned via our Cloner interface, modify directly
+			// Remove returns an error if remediation doesn't exist (duplicate delete)
+			// We already checked origin above, so this should succeed
+			err := existingData.Remove(valueLog, op.R)
+			if errors.Is(err, ErrRemediationNotFound) {
+				// This shouldn't happen since we checked above, but handle it gracefully
+				if valueLog != nil {
+					valueLog.Trace("remediation not found after origin check, duplicate delete")
+				}
+				results[i] = nil
+			} else {
+				// Remediation was successfully removed - return pointer for metrics
+				// Use index to get pointer to original operation (safe since we don't modify the slice)
+				results[i] = &operations[i]
+			}
 
 			if existingData.IsEmpty() {
 				if valueLog != nil {
@@ -229,7 +248,7 @@ func (s *BartUnifiedIPSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveO
 				return existingData, true // true = delete the prefix (it's now empty)
 			}
 			if valueLog != nil {
-				valueLog.Trace("removed ID from existing prefix")
+				valueLog.Trace("removed remediation from existing prefix")
 			}
 			return existingData, false // false = don't delete, keep modified data
 		})
@@ -244,7 +263,7 @@ func (s *BartUnifiedIPSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveO
 // Contains checks if an IP address matches any prefix in the bart table.
 // Returns the longest matching prefix's remediation and origin.
 // This method uses lock-free reads via atomic pointer for optimal performance.
-func (s *BartUnifiedIPSet) Contains(ip netip.Addr) (remediation.Remediation, string) {
+func (s *BartRangeSet) Contains(ip netip.Addr) (remediation.Remediation, string) {
 	// Lock-free read: atomically load the current table pointer
 	table := s.tableAtomicPtr.Load()
 
@@ -274,4 +293,55 @@ func (s *BartUnifiedIPSet) Contains(ip netip.Addr) (remediation.Remediation, str
 		valueLog.Tracef("bart result: %s (data: %+v)", remediationResult.String(), data)
 	}
 	return remediationResult, origin
+}
+
+// HasRemediation checks if an exact prefix has a specific remediation with a specific origin.
+// Uses Get() for exact prefix lookup (not LPM like Contains/Lookup).
+// Returns true if the exact prefix exists and has the given remediation with the given origin.
+// This method uses lock-free reads via atomic pointer for optimal performance.
+func (s *BartRangeSet) HasRemediation(prefix netip.Prefix, r remediation.Remediation, origin string) bool {
+	// Lock-free read: atomically load the current table pointer
+	table := s.tableAtomicPtr.Load()
+
+	// Check for nil table (not yet initialized)
+	if table == nil {
+		return false
+	}
+
+	// Use Get() for exact prefix lookup (not LPM)
+	maskedPrefix := prefix.Masked()
+	data, found := table.Get(maskedPrefix)
+	if !found {
+		return false
+	}
+
+	return data.HasRemediationWithOrigin(r, origin)
+}
+
+// GetOriginForRemediation returns the origin for a specific remediation on an exact prefix.
+// Uses Get() for exact prefix lookup (not LPM).
+// Returns the origin and true if the exact prefix exists and has the given remediation, false otherwise.
+// This method uses lock-free reads via atomic pointer for optimal performance.
+func (s *BartRangeSet) GetOriginForRemediation(prefix netip.Prefix, r remediation.Remediation) (string, bool) {
+	// Lock-free read: atomically load the current table pointer
+	table := s.tableAtomicPtr.Load()
+
+	// Check for nil table (not yet initialized)
+	if table == nil {
+		return "", false
+	}
+
+	// Use Get() for exact prefix lookup (not LPM)
+	maskedPrefix := prefix.Masked()
+	data, found := table.Get(maskedPrefix)
+	if !found {
+		return "", false
+	}
+
+	// Check if the remediation exists and return its origin
+	if existingOrigin, ok := data[r]; ok {
+		return existingOrigin, true
+	}
+
+	return "", false
 }
