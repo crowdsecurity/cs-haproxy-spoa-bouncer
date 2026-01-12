@@ -17,7 +17,6 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
@@ -79,22 +78,20 @@ type Spoa struct {
 	ListenSocket net.Listener
 	logger       *log.Entry
 	// Direct access to shared data (no IPC needed)
-	dataset        *dataset.DataSet
-	hostManager    *host.Manager
-	geoDatabase    *geo.GeoDatabase
-	globalSessions *session.Sessions // Global session manager for all hosts
-	globalAppSec   *appsec.AppSec    // Global AppSec config (used when no host matched)
+	dataset      *dataset.DataSet
+	hostManager  *host.Manager
+	geoDatabase  *geo.GeoDatabase
+	globalAppSec *appsec.AppSec // Global AppSec config (used when no host matched)
 }
 
 type SpoaConfig struct {
-	TcpAddr        string
-	UnixAddr       string
-	Dataset        *dataset.DataSet
-	HostManager    *host.Manager
-	GeoDatabase    *geo.GeoDatabase
-	GlobalSessions *session.Sessions // Global session manager for all hosts
-	GlobalAppSec   *appsec.AppSec    // Global AppSec config (used when no host matched)
-	Logger         *log.Entry        // Parent logger to inherit from
+	TcpAddr      string
+	UnixAddr     string
+	Dataset      *dataset.DataSet
+	HostManager  *host.Manager
+	GeoDatabase  *geo.GeoDatabase
+	GlobalAppSec *appsec.AppSec // Global AppSec config (used when no host matched)
+	Logger       *log.Entry     // Parent logger to inherit from
 }
 
 func New(config *SpoaConfig) (*Spoa, error) {
@@ -117,12 +114,11 @@ func New(config *SpoaConfig) (*Spoa, error) {
 	// No worker-specific log level; inherits from parent logger
 
 	s := &Spoa{
-		logger:         workerLogger,
-		dataset:        config.Dataset,
-		hostManager:    config.HostManager,
-		geoDatabase:    config.GeoDatabase,
-		globalSessions: config.GlobalSessions,
-		globalAppSec:   config.GlobalAppSec,
+		logger:       workerLogger,
+		dataset:      config.Dataset,
+		hostManager:  config.HostManager,
+		geoDatabase:  config.GeoDatabase,
+		globalAppSec: config.GlobalAppSec,
 	}
 
 	if config.TcpAddr != "" {
@@ -529,16 +525,11 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		// We don't set captcha_status, so HAProxy knows to clear the cookie
 		// Check for both nil and empty string (HAProxy may send empty string when cookie doesn't exist)
 		if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
-			var ssl *bool
-			if msgData.SSL != nil {
-				ssl = msgData.SSL
-			}
-
-			unsetCookie, err := matchedHost.Captcha.CookieGenerator.GenerateUnsetCookie(ssl)
+			unsetCookie, err := matchedHost.Captcha.CookieGenerator.GenerateUnsetCookie(msgData.SSL)
 			if err != nil {
 				s.logger.WithFields(log.Fields{
 					"host":  matchedHost.Host,
-					"ssl":   ssl,
+					"ssl":   msgData.SSL,
 					"error": err,
 				}).Error("Failed to generate unset cookie")
 				return // Cannot proceed without unset cookie
@@ -676,163 +667,139 @@ func (d *HTTPMessageData) buildAppSecRequest() *appsec.AppSecRequest {
 	return req
 }
 
-// getSessionString safely extracts a string value from a session key
-func getSessionString(ses *session.Session, key string) string {
-	val := ses.Get(key)
-	if val == nil {
-		return ""
-	}
-	if s, ok := val.(string); ok {
-		return s
-	}
-	return ""
-}
-
-// createNewSessionAndCookie creates a new session, generates a cookie, and sets it in the request.
-// Returns the session, uuid, and an error if any step fails.
-func (s *Spoa) createNewSessionAndCookie(writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (*session.Session, string, error) {
-	ses, err := s.globalSessions.NewRandomSession()
+// createNewCaptchaCookie creates a new stateless captcha token cookie and sets it in the request.
+// Returns the token and an error if any step fails.
+func (s *Spoa) createNewCaptchaCookie(writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (*captcha.CaptchaToken, error) {
+	// Create a new pending token using host's configuration
+	tok, err := matchedHost.Captcha.NewPendingToken()
 	if err != nil {
 		s.logger.WithFields(log.Fields{
 			"host":  matchedHost.Host,
 			"error": err,
-		}).Error("Failed to create new session")
-		return nil, "", err
+		}).Error("Failed to create pending captcha token")
+		return nil, err
 	}
 
-	cookie, err := matchedHost.Captcha.CookieGenerator.GenerateCookie(ses, msgData.SSL)
+	// Generate cookie from token using host's configuration
+	cookie, err := matchedHost.Captcha.GenerateCookie(tok, msgData.SSL)
 	if err != nil {
 		s.logger.WithFields(log.Fields{
 			"host":  matchedHost.Host,
+			"uuid":  tok.UUID,
 			"ssl":   msgData.SSL,
 			"error": err,
-		}).Error("Failed to generate host cookie")
-		return nil, "", err
+		}).Error("Failed to generate captcha cookie")
+		return nil, err
 	}
 
-	ses.Set(session.CaptchaStatus, captcha.Pending)
+	// Set the captcha cookie
 	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", cookie.String())
 
-	return ses, ses.UUID, nil
+	return &tok, nil
 }
 
-// handleCaptchaRemediation handles all captcha-related logic including cookie validation,
-// session management, captcha validation, and status updates.
+// handleCaptchaRemediation handles all captcha-related logic using stateless tokens.
+// Returns the remediation after processing captcha state.
 func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) remediation.Remediation {
 	fallback := remediation.FromString(matchedHost.Captcha.FallbackRemediation)
 
 	if err := matchedHost.Captcha.InjectKeyValues(writer); err != nil {
+		s.logger.WithFields(log.Fields{
+			"host":  matchedHost.Host,
+			"error": err,
+		}).Error("Captcha configuration is invalid, falling back to fallback remediation")
 		return fallback
 	}
 
-	// Get or create session
-	ses, uuid := s.getOrCreateCaptchaSession(writer, msgData, matchedHost)
-	if ses == nil {
-		return fallback
-	}
+	// Create logger with host field set once for reuse throughout the function
+	clog := s.logger.WithField("host", matchedHost.Host)
 
-	// Get captcha status (defaults to pending if not set)
-	captchaStatus := getSessionString(ses, session.CaptchaStatus)
-	if captchaStatus == "" {
-		captchaStatus = captcha.Pending
-	}
-	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", captchaStatus)
+	var tok *captcha.CaptchaToken
 
-	// Store URL for redirect after validation (skip favicon requests)
-	if msgData.URL != nil && captchaStatus != captcha.Valid {
-		storedURL := getSessionString(ses, session.URI)
-		if (storedURL == "" || *msgData.URL != storedURL) && !strings.HasSuffix(*msgData.URL, ".ico") {
-			ses.Set(session.URI, *msgData.URL)
+	// Try to parse and validate the existing cookie using host's configuration
+	// Note: Old format cookies (pre-JWT) will fail validation and trigger creation of a new JWT cookie
+	// This provides backward compatibility during the migration period
+	if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
+		parsedTok, err := matchedHost.Captcha.ValidateCookie(*msgData.CaptchaCookie)
+		if err != nil {
+			clog.WithError(err).Debug("Failed to validate existing captcha cookie, will create new one")
+		} else {
+			tok = parsedTok
+			clog.WithField("uuid", tok.UUID).Debug("Validated existing captcha cookie")
 		}
 	}
 
-	// Try to validate captcha if this is a form submission
-	if captchaStatus == captcha.Pending {
-		captchaStatus = s.tryValidateCaptcha(ctx, ses, msgData, matchedHost, uuid)
+	// Create new cookie if token is missing or invalid (including old format cookies)
+	if tok == nil {
+		var err error
+		tok, err = s.createNewCaptchaCookie(writer, msgData, matchedHost)
+		if err != nil {
+			clog.WithError(err).Error("Failed to create new captcha cookie, falling back to fallback remediation")
+			return fallback
+		}
+		clog.WithField("uuid", tok.UUID).Debug("Created new captcha token")
 	}
 
-	// Allow if captcha is valid, with redirect to original URL
-	if captchaStatus == captcha.Valid {
-		if storedURL := getSessionString(ses, session.URI); storedURL != "" {
-			s.logger.Debug("redirecting to: ", storedURL)
-			_ = writer.SetString(encoding.VarScopeTransaction, "redirect", storedURL)
-			ses.Delete(session.URI)
+	// Track initial token status to detect state transitions
+	initialStatus := captcha.Pending
+	if tok != nil && tok.IsPassed() {
+		initialStatus = captcha.Valid
+	}
+
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", initialStatus)
+
+	// Check if the request is a captcha validation request (only if token is pending)
+	// Note: Use HasPrefix with ToLower to handle:
+	//  - Common variants: "application/x-www-form-urlencoded; charset=UTF-8"
+	//  - Case variations: "Application/X-WWW-Form-URLEncoded" (HTTP headers are case-insensitive per RFC)
+	if initialStatus == captcha.Pending &&
+		msgData.Method != nil && *msgData.Method == http.MethodPost &&
+		msgData.HeadersParsed != nil && strings.HasPrefix(strings.ToLower(msgData.HeadersParsed.Get("Content-Type")), "application/x-www-form-urlencoded") &&
+		len(msgData.BodyCopied) > 0 {
+
+		// Validate captcha using UUID for traceability
+		tokenUUID := ""
+		if tok != nil {
+			tokenUUID = tok.UUID
+		}
+		// Use logger with UUID for validation logs
+		vlog := clog.WithField("uuid", tokenUUID)
+
+		// Track captcha validation duration
+		captchaTimer := prometheus.NewTimer(metrics.CaptchaValidationDuration)
+		isValid, err := matchedHost.Captcha.Validate(ctx, tokenUUID, string(msgData.BodyCopied))
+		captchaTimer.ObserveDuration()
+
+		if err != nil {
+			vlog.WithError(err).Error("Failed to validate captcha")
+		} else if isValid {
+			// Create new token with passed status, reusing UUID from existing token
+			newTok := matchedHost.Captcha.NewPassedToken(tok)
+
+			cookie, err := matchedHost.Captcha.GenerateCookie(newTok, msgData.SSL)
+			if err != nil {
+				vlog.WithField("uuid", newTok.UUID).WithError(err).Error("Failed to generate passed captcha cookie")
+			} else {
+				_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", cookie.String())
+				// Update token and HAProxy status
+				tok = &newTok
+				_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", captcha.Valid)
+			}
+		}
+	}
+
+	// If the token indicates a valid captcha, allow the request
+	if tok != nil && tok.IsPassed() {
+		// Only set redirect flag if status changed from pending to valid (just validated)
+		// This prevents redirect loops on subsequent requests with valid tokens
+		if initialStatus == captcha.Pending {
+			clog.WithField("uuid", tok.UUID).Debug("Captcha just validated, setting redirect flag for HAProxy")
+			_ = writer.SetString(encoding.VarScopeTransaction, "redirect", "1")
 		}
 		return remediation.Allow
 	}
 
 	return remediation.Captcha
-}
-
-// getOrCreateCaptchaSession retrieves an existing session from cookie or creates a new one
-func (s *Spoa) getOrCreateCaptchaSession(writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (*session.Session, string) {
-	// Try to get session from existing cookie
-	if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
-		uuid, err := matchedHost.Captcha.CookieGenerator.ValidateCookie(*msgData.CaptchaCookie)
-		if err != nil {
-			s.logger.WithFields(log.Fields{
-				"host":  matchedHost.Host,
-				"error": err,
-			}).Warn("Failed to validate existing cookie")
-		} else if ses := s.globalSessions.GetSession(uuid); ses != nil {
-			return ses, uuid
-		} else {
-			s.logger.WithFields(log.Fields{
-				"host":    matchedHost.Host,
-				"session": uuid,
-			}).Warn("Session not found in memory (likely lost after reload)")
-		}
-	}
-
-	// Create new session
-	ses, uuid, err := s.createNewSessionAndCookie(writer, msgData, matchedHost)
-	if err != nil {
-		s.logger.WithFields(log.Fields{
-			"host":  matchedHost.Host,
-			"error": err,
-		}).Error("Failed to create captcha session, falling back")
-		return nil, ""
-	}
-	return ses, uuid
-}
-
-// tryValidateCaptcha attempts to validate a captcha form submission
-// Returns the new captcha status (Valid if successful, Pending otherwise)
-func (s *Spoa) tryValidateCaptcha(ctx context.Context, ses *session.Session, msgData *HTTPMessageData, matchedHost *host.Host, uuid string) string {
-	// Check if this is a captcha form submission
-	if msgData.Method == nil || *msgData.Method != http.MethodPost {
-		return captcha.Pending
-	}
-	if msgData.HeadersParsed == nil || msgData.HeadersParsed.Get("Content-Type") != "application/x-www-form-urlencoded" {
-		return captcha.Pending
-	}
-	if len(msgData.BodyCopied) == 0 {
-		s.logger.WithFields(log.Fields{
-			"host":    matchedHost.Host,
-			"session": uuid,
-		}).Error("No body in captcha POST request")
-		return captcha.Pending
-	}
-
-	// Track captcha validation duration
-	captchaTimer := prometheus.NewTimer(metrics.CaptchaValidationDuration)
-	isValid, err := matchedHost.Captcha.Validate(ctx, uuid, string(msgData.BodyCopied))
-	captchaTimer.ObserveDuration()
-
-	if err != nil {
-		s.logger.WithFields(log.Fields{
-			"host":    matchedHost.Host,
-			"session": uuid,
-			"error":   err,
-		}).Error("Failed to validate captcha")
-		return captcha.Pending
-	}
-
-	if isValid {
-		ses.Set(session.CaptchaStatus, captcha.Valid)
-		return captcha.Valid
-	}
-	return captcha.Pending
 }
 
 // getIPRemediation performs IP and geo/country remediation checks
