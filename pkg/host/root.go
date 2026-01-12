@@ -1,7 +1,6 @@
 package host
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,19 +15,6 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-const (
-	OpAdd    Op = "add"
-	OpRemove Op = "remove"
-	OpPatch  Op = "patch"
-)
-
-type Op string
-
-type HostOp struct {
-	Host *Host
-	Op   Op
-}
-
 type Host struct {
 	Host     string          `yaml:"host"`
 	Captcha  captcha.Captcha `yaml:"captcha"`
@@ -40,10 +26,8 @@ type Host struct {
 
 type Manager struct {
 	Hosts  []*Host
-	Chan   chan HostOp
 	Logger *log.Entry
-	cache  map[string]*Host
-	sync.RWMutex
+	cache  sync.Map // map[string]*Host - thread-safe cache for matched hosts
 }
 
 const t = `
@@ -67,59 +51,34 @@ func (h *Manager) String() string {
 func NewManager(l *log.Entry) *Manager {
 	return &Manager{
 		Hosts:  make([]*Host, 0),
-		Chan:   make(chan HostOp),
 		Logger: l,
-		cache:  make(map[string]*Host),
+		// cache is a sync.Map, zero value is ready to use
 	}
 }
 
 func (h *Manager) MatchFirstHost(toMatch string) *Host {
-	h.RLock()
-	defer h.RUnlock()
+	// Check cache first (thread-safe via sync.Map)
+	if cached, ok := h.cache.Load(toMatch); ok {
+		if host, ok := cached.(*Host); ok {
+			host.logger.WithField("requested_host", toMatch).Debug("matched host from cache")
+			return host
+		}
+	}
 
 	if len(h.Hosts) == 0 {
 		return nil
-	}
-
-	if host, ok := h.cache[toMatch]; ok {
-		host.logger.WithField("requested_host", toMatch).Debug("matched host from cache")
-		return host
 	}
 
 	for _, host := range h.Hosts {
 		matched, err := filepath.Match(host.Host, toMatch)
 		if matched && err == nil {
 			host.logger.WithField("requested_host", toMatch).Debug("matched host pattern")
-			h.cache[toMatch] = host
+			h.cache.Store(toMatch, host) // Thread-safe via sync.Map
 			return host
 		}
 	}
 	h.Logger.WithField("requested_host", toMatch).Debug("no matching host found")
 	return nil
-}
-
-func (h *Manager) Run(ctx context.Context) {
-
-	for {
-		select {
-		case instruction := <-h.Chan:
-			h.Lock()
-			switch instruction.Op {
-			case OpRemove:
-				h.cache = make(map[string]*Host)
-				h.removeHost(instruction.Host)
-			case OpAdd:
-				h.cache = make(map[string]*Host)
-				h.addHost(instruction.Host)
-				h.sort()
-			case OpPatch:
-				h.patchHost(instruction.Host)
-			}
-			h.Unlock()
-		case <-ctx.Done():
-			return
-		}
-	}
 }
 
 func (h *Manager) LoadFromDirectory(path string) error {
@@ -132,10 +91,7 @@ func (h *Manager) LoadFromDirectory(path string) error {
 		if err != nil {
 			return err
 		}
-		h.Chan <- HostOp{
-			Host: host,
-			Op:   OpAdd,
-		}
+		h.AddHost(host)
 	}
 	return nil
 }
@@ -229,7 +185,9 @@ func (h *Manager) createHostLogger(host *Host) *log.Entry {
 	return hostLogger.WithField("host", host.Host)
 }
 
-func (h *Manager) addHost(host *Host) {
+// AddHost adds a host to the manager.
+// This should only be called during initialization before concurrent access begins.
+func (h *Manager) AddHost(host *Host) {
 	// Create a logger for this host that inherits base logger values
 	host.logger = h.createHostLogger(host)
 
@@ -246,8 +204,15 @@ func (h *Manager) addHost(host *Host) {
 	if err := host.Ban.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
+	// Initialize AppSec with only host-specific config (no global fallback)
+	// Global AppSec is handled at SPOA level
 	if err := host.AppSec.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
+
+	// Add to Hosts slice
 	h.Hosts = append(h.Hosts, host)
+
+	// Sort hosts for priority matching
+	h.sort()
 }

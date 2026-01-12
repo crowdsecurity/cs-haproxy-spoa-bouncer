@@ -14,8 +14,8 @@ import (
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/go-cs-lib/ptr"
+	"github.com/dropmorepackets/haproxy-go/pkg/encoding"
 	"github.com/google/uuid"
-	"github.com/negasus/haproxy-spoe-go/action"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -191,15 +191,15 @@ func (c *Captcha) getTimeout() int {
 
 // Inject key values injects the captcha provider key values into the HAProxy transaction
 // Validates configuration before injecting values
-func (c *Captcha) InjectKeyValues(actions *action.Actions) error {
+func (c *Captcha) InjectKeyValues(writer *encoding.ActionWriter) error {
 	// Validate configuration before injecting values
 	if err := c.IsValid(); err != nil {
 		return err
 	}
 
-	actions.SetVar(action.ScopeTransaction, "captcha_site_key", c.SiteKey)
-	actions.SetVar(action.ScopeTransaction, "captcha_frontend_key", providers[c.Provider].key)
-	actions.SetVar(action.ScopeTransaction, "captcha_frontend_js", providers[c.Provider].js)
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_site_key", c.SiteKey)
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_frontend_key", providers[c.Provider].key)
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_frontend_js", providers[c.Provider].js)
 
 	return nil
 }

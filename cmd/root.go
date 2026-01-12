@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
@@ -118,19 +120,87 @@ func Execute() error {
 		return metricsProvider.Run(ctx)
 	})
 
-	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests)
+	prometheus.MustRegister(
+		csbouncer.TotalLAPICalls,
+		csbouncer.TotalLAPIError,
+		metrics.TotalActiveDecisions,
+		metrics.TotalBlockedRequests,
+		metrics.TotalProcessedRequests,
+		metrics.IPCheckDuration,
+		metrics.CaptchaValidationDuration,
+		metrics.GeoLookupDuration,
+	)
 
 	if config.PrometheusConfig.Enabled {
-		go func() {
-			http.Handle("/metrics", promhttp.Handler())
+		promMux := http.NewServeMux()
+		promMux.Handle("/metrics", promhttp.Handler())
 
-			listenOn := net.JoinHostPort(
-				config.PrometheusConfig.ListenAddress,
-				config.PrometheusConfig.ListenPort,
-			)
+		listenOn := net.JoinHostPort(
+			config.PrometheusConfig.ListenAddress,
+			config.PrometheusConfig.ListenPort,
+		)
+
+		promServer := &http.Server{
+			Addr:    listenOn,
+			Handler: promMux,
+		}
+
+		g.Go(func() error {
 			log.Infof("Serving metrics at %s", listenOn+"/metrics")
-			log.Error(http.ListenAndServe(listenOn, nil))
-		}()
+			if err := promServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("prometheus server error: %w", err)
+			}
+			return nil
+		})
+
+		g.Go(func() error {
+			<-ctx.Done()
+			log.Info("Shutting down prometheus server...")
+			// Use background context since parent ctx is already canceled
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			//nolint:contextcheck // parent ctx is canceled, need fresh context for shutdown
+			return promServer.Shutdown(shutdownCtx)
+		})
+	}
+
+	// pprof debug endpoint for runtime profiling (memory, CPU, goroutines)
+	// WARNING: Only enable in development/debugging scenarios
+	if config.PprofConfig.Enabled {
+		pprofMux := http.NewServeMux()
+		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
+		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+		listenOn := net.JoinHostPort(
+			config.PprofConfig.ListenAddress,
+			config.PprofConfig.ListenPort,
+		)
+
+		pprofServer := &http.Server{
+			Addr:    listenOn,
+			Handler: pprofMux,
+		}
+
+		g.Go(func() error {
+			log.Warnf("pprof debug endpoint enabled at %s/debug/pprof/ - DO NOT USE IN PRODUCTION", listenOn)
+			if err := pprofServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("pprof server error: %w", err)
+			}
+			return nil
+		})
+
+		g.Go(func() error {
+			<-ctx.Done()
+			log.Info("Shutting down pprof server...")
+			// Use background context since parent ctx is already canceled
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			//nolint:contextcheck // parent ctx is canceled, need fresh context for shutdown
+			return pprofServer.Shutdown(shutdownCtx)
+		})
 	}
 
 	dataSet := dataset.New()
@@ -146,14 +216,13 @@ func Execute() error {
 				if decisions == nil {
 					continue
 				}
-				if len(decisions.New) > 0 {
-					log.Debugf("Processing %d new decisions", len(decisions.New))
-					dataSet.Add(decisions.New)
-				}
-				if len(decisions.Deleted) > 0 {
-					log.Debugf("Processing %d deleted decisions", len(decisions.Deleted))
-					dataSet.Remove(decisions.Deleted)
-				}
+				dataSet.Add(decisions.New)
+				dataSet.Remove(decisions.Deleted)
+				// Clear references to allow GC of the DecisionsStreamResponse
+				// The Decision structs contain pointer fields (*string) that we may have
+				// extracted strings from. Clearing these references helps GC reclaim memory.
+				decisions.New = nil
+				decisions.Deleted = nil
 			}
 		}
 	})
@@ -162,16 +231,23 @@ func Execute() error {
 	hostManagerLogger := log.WithField("component", "host_manager")
 	HostManager := host.NewManager(hostManagerLogger)
 
-	g.Go(func() error {
-		HostManager.Run(ctx)
-		return nil
-	})
-
-	for _, h := range config.Hosts {
-		HostManager.Chan <- host.HostOp{
-			Host: h,
-			Op:   host.OpAdd,
+	// Create and initialize global AppSec (for use when no host is matched or as fallback)
+	var globalAppSec *appsec.AppSec
+	if config.AppSecURL != "" {
+		globalAppSec = &appsec.AppSec{
+			URL:     config.AppSecURL,
+			APIKey:  config.APIKey,
+			Timeout: config.AppSecTimeout,
 		}
+		appSecLogger := log.WithField("component", "global_appsec")
+		if err := globalAppSec.Init(appSecLogger); err != nil {
+			return fmt.Errorf("failed to initialize global AppSec: %w", err)
+		}
+	}
+
+	// Add hosts from config
+	for _, h := range config.Hosts {
+		HostManager.AddHost(h)
 	}
 
 	if config.HostsDir != "" {
@@ -185,12 +261,13 @@ func Execute() error {
 
 	// Create single SPOA directly with minimal configuration
 	spoaConfig := &spoa.SpoaConfig{
-		TcpAddr:     config.ListenTCP,
-		UnixAddr:    config.ListenUnix,
-		Dataset:     dataSet,
-		HostManager: HostManager,
-		GeoDatabase: &config.Geo,
-		Logger:      spoaLogger,
+		TcpAddr:      config.ListenTCP,
+		UnixAddr:     config.ListenUnix,
+		Dataset:      dataSet,
+		HostManager:  HostManager,
+		GeoDatabase:  &config.Geo,
+		GlobalAppSec: globalAppSec,
+		Logger:       spoaLogger,
 	}
 
 	singleSpoa, err := spoa.New(spoaConfig)
