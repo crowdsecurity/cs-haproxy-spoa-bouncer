@@ -30,20 +30,18 @@ const (
 )
 
 // CookieGenerator handles cookie configuration and generation for captcha
+// Note: This struct handles HTTP cookie attributes only (Secure, HttpOnly, etc.)
+// JWT signing is handled at the Captcha level using signing_key
 type CookieGenerator struct {
 	Secure   string     `yaml:"secure"`    // Secure sets the secure flag on the cookie, valid arguments are "auto", "always", "never". "auto" relies on the `ssl_fc` flag from HAProxy
 	HTTPOnly *bool      `yaml:"http_only"` // HttpOnly sets the HttpOnly flag on the cookie
-	Secret   string     `yaml:"secret"`    // Secret used for signing cookies (required for stateless cookies)
 	Name     string     `yaml:"-"`         // Name of the cookie, usually set by the remediation. EG "crowdsec_captcha"
 	logger   *log.Entry `yaml:"-"`         // logger passed from the remediation
 }
 
-func (c *CookieGenerator) Init(logger *log.Entry, name, secret string) {
+func (c *CookieGenerator) Init(logger *log.Entry, name string) {
 	c.logger = logger.WithField("type", "cookie")
 	c.Name = name
-	if c.Secret == "" {
-		c.Secret = secret
-	}
 	c.SetDefaults()
 }
 
@@ -99,14 +97,14 @@ func urlEncodeValue(cookie *http.Cookie) error {
 
 type Captcha struct {
 	Provider            string          `yaml:"provider"`             // Captcha Provider
-	SecretKey           string          `yaml:"secret_key"`           // Captcha Provider Secret Key
+	SecretKey           string          `yaml:"secret_key"`           // Captcha Provider Secret Key (for API validation)
 	SiteKey             string          `yaml:"site_key"`             // Captcha Provider Site Key
 	FallbackRemediation string          `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
 	Timeout             int             `yaml:"timeout"`              // HTTP client timeout in seconds (default: 5)
-	CookieGenerator     CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies
+	CookieGenerator     CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies (HTTP attributes only)
 	PendingTTL          string          `yaml:"pending_ttl"`          // TTL for pending captcha tokens (default: 30m)
 	PassedTTL           string          `yaml:"passed_ttl"`           // TTL for passed captcha tokens (default: 24h)
-	CookieSecret        string          `yaml:"cookie_secret"`        // Secret for signing captcha cookies (required, minimum 32 bytes) - breaking change in 0.3.0
+	SigningKey          string          `yaml:"signing_key"`          // Key for signing JWT captcha tokens (required, minimum 32 bytes) - breaking change in 0.3.0
 	logger              *log.Entry      `yaml:"-"`
 	client              *http.Client    `yaml:"-"`
 	parsedPendingTTL    time.Duration   `yaml:"-"`
@@ -167,7 +165,7 @@ func (c *Captcha) Init(logger *log.Entry) error {
 	}
 
 	// Initialize cookie generator (cookie_secret is validated in IsValid())
-	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie", c.CookieSecret)
+	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie")
 
 	return nil
 }
@@ -346,15 +344,15 @@ func (c *Captcha) IsValid() error {
 		return fmt.Errorf("empty captcha secret key")
 	}
 
-	// Require explicit cookie_secret configuration (breaking change in 0.3.0)
+	// Require explicit signing_key configuration (breaking change in 0.3.0)
 	// This ensures proper secret management and compliance requirements
-	if c.CookieSecret == "" {
-		return fmt.Errorf("cookie_secret is required for captcha cookie signing. Please configure cookie_secret with at least 32 bytes. This is a breaking change in 0.3.0 - cookie_secret must be explicitly set")
+	if c.SigningKey == "" {
+		return fmt.Errorf("signing_key is required for JWT token signing. Please configure signing_key with at least 32 bytes. This is a breaking change in 0.3.0 - signing_key must be explicitly set")
 	}
 
-	// Validate cookie_secret meets minimum security requirements
-	if len(c.CookieSecret) < 32 {
-		return fmt.Errorf("cookie_secret must be at least 32 bytes for security. Current length: %d bytes. Please use a cryptographically secure random key of at least 32 bytes", len(c.CookieSecret))
+	// Validate signing_key meets minimum security requirements
+	if len(c.SigningKey) < 32 {
+		return fmt.Errorf("signing_key must be at least 32 bytes for security. Current length: %d bytes. Please use a cryptographically secure random key of at least 32 bytes", len(c.SigningKey))
 	}
 
 	return nil
@@ -399,7 +397,7 @@ func (c *Captcha) NewPassedToken(existingToken *CaptchaToken) CaptchaToken {
 }
 
 // GenerateCookie generates an HTTP cookie from a captcha token using the host's configuration
-// Note: cookie_secret is validated in InjectKeyValues() before this method is called
+// Note: signing_key is validated in InjectKeyValues() before this method is called
 func (c *Captcha) GenerateCookie(tok CaptchaToken, ssl *bool) (*http.Cookie, error) {
 	secure := false
 	if ssl != nil {
@@ -411,15 +409,15 @@ func (c *Captcha) GenerateCookie(tok CaptchaToken, ssl *bool) (*http.Cookie, err
 
 	return GenerateCaptchaCookie(
 		tok,
-		c.CookieSecret,
+		c.SigningKey,
 		c.CookieGenerator.Name,
 		*c.CookieGenerator.HTTPOnly,
 		secure,
 	)
 }
 
-// ValidateCookie validates a base64-encoded captcha cookie value using the host's secret
-// Note: cookie_secret is validated in InjectKeyValues() before this method is called
+// ValidateCookie validates a base64-encoded captcha cookie value using the host's signing key
+// Note: signing_key is validated in InjectKeyValues() before this method is called
 func (c *Captcha) ValidateCookie(b64Value string) (*CaptchaToken, error) {
-	return ValidateCaptchaCookie(b64Value, c.CookieSecret)
+	return ValidateCaptchaCookie(b64Value, c.SigningKey)
 }

@@ -749,9 +749,12 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", initialStatus)
 
 	// Check if the request is a captcha validation request (only if token is pending)
+	// Note: Use HasPrefix with ToLower to handle:
+	//  - Common variants: "application/x-www-form-urlencoded; charset=UTF-8"
+	//  - Case variations: "Application/X-WWW-Form-URLEncoded" (HTTP headers are case-insensitive per RFC)
 	if initialStatus == captcha.Pending &&
 		msgData.Method != nil && *msgData.Method == http.MethodPost &&
-		msgData.HeadersParsed != nil && msgData.HeadersParsed.Get("Content-Type") == "application/x-www-form-urlencoded" &&
+		msgData.HeadersParsed != nil && strings.HasPrefix(strings.ToLower(msgData.HeadersParsed.Get("Content-Type")), "application/x-www-form-urlencoded") &&
 		len(msgData.BodyCopied) > 0 {
 
 		// Validate captcha using UUID for traceability
