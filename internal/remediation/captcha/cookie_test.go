@@ -31,7 +31,7 @@ func TestSignAndVerifyCaptchaToken(t *testing.T) {
 
 	// JWT format check: header.payload.signature
 	parts := strings.Split(signed, ".")
-	assert.Equal(t, 3, len(parts), "JWT should have 3 parts")
+	assert.Len(t, parts, 3, "JWT should have 3 parts")
 
 	// Verify the token
 	verified, err := ParseAndVerifyCaptchaToken(signed, []byte(testSecret))
@@ -54,7 +54,7 @@ func TestSignCaptchaTokenEmptySecret(t *testing.T) {
 	// Signing with empty secret should still work (HMAC accepts any key length)
 	// but it's cryptographically weak - validation should catch this in config
 	signed, err := SignCaptchaToken(tok, []byte(""))
-	assert.NoError(t, err, "signing with empty secret succeeds (validation happens at config level)")
+	require.NoError(t, err, "signing with empty secret succeeds (validation happens at config level)")
 	assert.NotEmpty(t, signed)
 }
 
@@ -73,7 +73,7 @@ func TestParseAndVerifyExpiredToken(t *testing.T) {
 
 	// Verification should fail due to expiration
 	_, err = ParseAndVerifyCaptchaToken(signed, []byte(testSecret))
-	assert.Error(t, err, "expired token should be rejected")
+	require.Error(t, err, "expired token should be rejected")
 	assert.Contains(t, strings.ToLower(err.Error()), "token is expired", "error should mention expiration")
 }
 
@@ -113,7 +113,7 @@ func TestParseAndVerifyTamperedPayload(t *testing.T) {
 
 	// Tamper with the payload (change middle part)
 	parts := strings.Split(signed, ".")
-	require.Equal(t, 3, len(parts))
+	require.Len(t, parts, 3)
 	parts[1] = parts[1][:len(parts[1])-5] + "XXXXX" // Tamper with payload
 	tampered := strings.Join(parts, ".")
 
@@ -145,7 +145,7 @@ func TestParseAndVerifyWrongSecret(t *testing.T) {
 // TestParseAndVerifyEmptyToken tests parsing an empty token
 func TestParseAndVerifyEmptyToken(t *testing.T) {
 	_, err := ParseAndVerifyCaptchaToken("", []byte(testSecret))
-	assert.Error(t, err, "empty token should be rejected")
+	require.Error(t, err, "empty token should be rejected")
 	assert.Contains(t, err.Error(), "empty token")
 }
 
@@ -285,7 +285,7 @@ func TestGenerateCaptchaCookie(t *testing.T) {
 
 	// Value should be a valid JWT
 	parts := strings.Split(cookie.Value, ".")
-	assert.Equal(t, 3, len(parts), "cookie value should be a JWT")
+	assert.Len(t, parts, 3, "cookie value should be a JWT")
 }
 
 // TestGenerateCaptchaCookieInsecure tests cookie generation without secure flag
@@ -361,7 +361,7 @@ func TestCookieLengthLimit(t *testing.T) {
 	}
 
 	_, err := GenerateCaptchaCookie(tok, testSecret, "test_cookie", true, true)
-	assert.Error(t, err, "cookie exceeding 4096 bytes should be rejected")
+	require.Error(t, err, "cookie exceeding 4096 bytes should be rejected")
 	assert.Contains(t, err.Error(), "cookie value too long")
 }
 

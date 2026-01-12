@@ -133,24 +133,6 @@ func (h *Manager) sort() {
 	})
 }
 
-func (h *Manager) removeHost(host *Host) {
-	for i, th := range h.Hosts {
-		if th == host {
-			// No cleanup needed
-			if i == len(h.Hosts)-1 {
-				h.Hosts = h.Hosts[:i]
-			} else {
-				h.Hosts = append(h.Hosts[:i], h.Hosts[i+1:]...)
-			}
-			return
-		}
-	}
-}
-
-func (h *Manager) patchHost(host *Host) {
-	//TODO
-}
-
 // createHostLogger creates a logger for a host that inherits from the base logger
 // while allowing host-specific overrides like log level
 func (h *Manager) createHostLogger(host *Host) *log.Entry {
