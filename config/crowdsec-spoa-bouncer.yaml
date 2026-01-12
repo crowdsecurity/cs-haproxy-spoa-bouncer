@@ -17,8 +17,12 @@ insecure_skip_verify: false
 # Configure TCP and/or Unix socket listeners
 listen_tcp: 0.0.0.0:9000
 listen_unix: /run/crowdsec-spoa/spoa.sock
-#asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
-#city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
+
+## GeoIP database configuration (nested structure)
+#geo:
+#  asn: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
+#  city: /var/lib/crowdsec/data/GeoLite2-City.mmdb
+#  stat: false  # Set to true to use stat polling instead of fsnotify (for SMB/network shares)
 
 prometheus:
   enabled: false

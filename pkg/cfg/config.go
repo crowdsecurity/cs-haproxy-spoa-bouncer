@@ -32,7 +32,7 @@ type BouncerConfig struct {
 	Logging          cslogging.LoggingConfig `yaml:",inline"`
 	Hosts            []*host.Host            `yaml:"hosts"`
 	HostsDir         string                  `yaml:"hosts_dir"`
-	Geo              geo.GeoDatabase         `yaml:",inline"`
+	Geo              geo.GeoDatabase         `yaml:"geo"`                  // Nested geo configuration
 	ListenTCP        string                  `yaml:"listen_tcp"`
 	ListenUnix       string                  `yaml:"listen_unix"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`

@@ -76,3 +76,38 @@ listen_tcp: 0.0.0.0:9000
 	assert.Empty(t, cfg.PprofConfig.ListenAddress)
 	assert.Empty(t, cfg.PprofConfig.ListenPort)
 }
+
+func TestGeoConfigNestedStructure(t *testing.T) {
+	const configYAML = `
+log_mode: stdout
+listen_tcp: 0.0.0.0:9000
+geo:
+  asn: /path/to/GeoLite2-ASN.mmdb
+  city: /path/to/GeoLite2-City.mmdb
+  stat: true
+`
+
+	cfg, err := NewConfig(strings.NewReader(configYAML))
+
+	require.NoError(t, err)
+	assert.Equal(t, "/path/to/GeoLite2-ASN.mmdb", cfg.Geo.ASNPath)
+	assert.Equal(t, "/path/to/GeoLite2-City.mmdb", cfg.Geo.CityPath)
+	assert.True(t, cfg.Geo.UseStat, "stat should be true when configured")
+}
+
+func TestGeoConfigDefaults(t *testing.T) {
+	const configYAML = `
+log_mode: stdout
+listen_tcp: 0.0.0.0:9000
+geo:
+  asn: /path/to/GeoLite2-ASN.mmdb
+  city: /path/to/GeoLite2-City.mmdb
+`
+
+	cfg, err := NewConfig(strings.NewReader(configYAML))
+
+	require.NoError(t, err)
+	assert.Equal(t, "/path/to/GeoLite2-ASN.mmdb", cfg.Geo.ASNPath)
+	assert.Equal(t, "/path/to/GeoLite2-City.mmdb", cfg.Geo.CityPath)
+	assert.False(t, cfg.Geo.UseStat, "stat should be false by default (use fsnotify)")
+}
