@@ -653,141 +653,102 @@ func (d *HTTPMessageData) buildAppSecRequest() *appsec.AppSecRequest {
 	return req
 }
 
-// createNewCaptchaCookie creates a new stateless captcha token cookie and sets it in the request.
-// Returns the token and an error if any step fails.
-func (s *Spoa) createNewCaptchaCookie(writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) (*captcha.CaptchaToken, error) {
-	// Create a new pending token using host's configuration
-	tok, err := matchedHost.Captcha.NewPendingToken()
-	if err != nil {
-		s.logger.WithFields(log.Fields{
-			"host":  matchedHost.Host,
-			"error": err,
-		}).Error("Failed to create pending captcha token")
-		return nil, err
-	}
-
-	// Generate cookie from token using host's configuration
-	cookie, err := matchedHost.Captcha.GenerateCookie(tok, msgData.SSL)
-	if err != nil {
-		s.logger.WithFields(log.Fields{
-			"host":  matchedHost.Host,
-			"uuid":  tok.UUID,
-			"ssl":   msgData.SSL,
-			"error": err,
-		}).Error("Failed to generate captcha cookie")
-		return nil, err
-	}
-
-	// Set the captcha cookie
-	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", cookie.String())
-
-	return &tok, nil
-}
-
-// handleCaptchaRemediation handles all captcha-related logic using stateless tokens.
-// Returns the remediation after processing captcha state.
+// handleCaptchaRemediation handles captcha verification using stateless JWT tokens.
+// Flow: get/create token → if passed, allow → if pending, try validate → show captcha
 func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) remediation.Remediation {
 	fallback := remediation.FromString(matchedHost.Captcha.FallbackRemediation)
 
 	if err := matchedHost.Captcha.InjectKeyValues(writer); err != nil {
-		s.logger.WithFields(log.Fields{
-			"host":  matchedHost.Host,
-			"error": err,
-		}).Error("Captcha configuration is invalid, falling back to fallback remediation")
+		s.logger.WithField("host", matchedHost.Host).WithError(err).Error("Invalid captcha configuration")
 		return fallback
 	}
 
-	// Create logger with host field set once for reuse throughout the function
-	clog := s.logger.WithField("host", matchedHost.Host)
-
-	var tok *captcha.CaptchaToken
-
-	// Try to parse and validate the existing cookie using host's configuration
-	// Note: Old format cookies (pre-JWT) will fail validation and trigger creation of a new JWT cookie
-	// This provides backward compatibility during the migration period
-	if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
-		parsedTok, err := matchedHost.Captcha.ValidateCookie(*msgData.CaptchaCookie)
-		if err != nil {
-			clog.WithError(err).Debug("Failed to validate existing captcha cookie, will create new one")
-		} else {
-			tok = parsedTok
-			clog.WithField("uuid", tok.UUID).Debug("Validated existing captcha cookie")
-		}
-	}
-
-	// Create new cookie if token is missing or invalid (including old format cookies)
+	// Get existing token or create new one
+	tok := s.getOrCreateCaptchaToken(writer, msgData, matchedHost)
 	if tok == nil {
-		var err error
-		tok, err = s.createNewCaptchaCookie(writer, msgData, matchedHost)
-		if err != nil {
-			clog.WithError(err).Error("Failed to create new captcha cookie, falling back to fallback remediation")
-			return fallback
-		}
-		clog.WithField("uuid", tok.UUID).Debug("Created new captcha token")
+		return fallback
 	}
 
-	// Track initial token status to detect state transitions
-	initialStatus := captcha.Pending
-	if tok != nil && tok.IsPassed() {
-		initialStatus = captcha.Valid
-	}
-
-	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", initialStatus)
-
-	// Check if the request is a captcha validation request (only if token is pending)
-	// Requirements for captcha validation:
-	//  1. Token must be pending (not already validated)
-	//  2. Must be a POST request with form-urlencoded content
-	//  3. Body must contain the captcha provider's response field (e.g., "g-recaptcha-response")
-	// This prevents treating unrelated form submissions as captcha validation attempts
-	// (e.g., user was filling a form when decision was added)
-	if initialStatus == captcha.Pending &&
-		msgData.Method != nil && *msgData.Method == http.MethodPost &&
-		msgData.HeadersParsed != nil && strings.HasPrefix(strings.ToLower(msgData.HeadersParsed.Get("Content-Type")), "application/x-www-form-urlencoded") &&
-		len(msgData.BodyCopied) > 0 &&
-		matchedHost.Captcha.IsCaptchaSubmission(string(msgData.BodyCopied)) {
-
-		// Validate captcha using UUID for traceability
-		// tok is guaranteed non-nil at this point (created earlier if needed)
-		vlog := clog.WithField("uuid", tok.UUID)
-
-		// Track captcha validation duration
-		captchaTimer := prometheus.NewTimer(metrics.CaptchaValidationDuration)
-		isValid, err := matchedHost.Captcha.Validate(ctx, tok.UUID, string(msgData.BodyCopied))
-		captchaTimer.ObserveDuration()
-
-		if err != nil {
-			vlog.WithError(err).Error("Failed to validate captcha")
-		} else if isValid {
-			// Create new token with passed status, reusing UUID from existing token
-			newTok := matchedHost.Captcha.NewPassedToken(tok)
-
-			// Update token and HAProxy status even if cookie generation fails
-			// This prevents users from being stuck after successful captcha validation
-			tok = &newTok
-			_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", captcha.Valid)
-
-			cookie, err := matchedHost.Captcha.GenerateCookie(newTok, msgData.SSL)
-			if err != nil {
-				vlog.WithField("uuid", newTok.UUID).WithError(err).Error("Failed to generate passed captcha cookie")
-			} else {
-				_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", cookie.String())
-			}
-		}
-	}
-
-	// If the token indicates a valid captcha, allow the request
-	if tok != nil && tok.IsPassed() {
-		// Only set redirect flag if status changed from pending to valid (just validated)
-		// This prevents redirect loops on subsequent requests with valid tokens
-		if initialStatus == captcha.Pending {
-			clog.WithField("uuid", tok.UUID).Debug("Captcha just validated, setting redirect flag for HAProxy")
-			_ = writer.SetString(encoding.VarScopeTransaction, "redirect", "1")
-		}
+	// If token is passed, return allow
+	if tok.IsPassed() {
+		_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", captcha.Valid)
 		return remediation.Allow
 	}
 
+	// Token is pending - set status and check for validation attempt
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", captcha.Pending)
+
+	if msgData.isCaptchaSubmission(matchedHost) {
+		if s.validateAndUpdateCaptcha(ctx, writer, msgData, matchedHost, tok) {
+			_ = writer.SetString(encoding.VarScopeTransaction, "redirect", "1")
+			return remediation.Allow
+		}
+	}
+
 	return remediation.Captcha
+}
+
+// getOrCreateCaptchaToken returns an existing valid token from cookie or creates a new one
+func (s *Spoa) getOrCreateCaptchaToken(writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) *captcha.CaptchaToken {
+	// Try existing cookie first
+	if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
+		if tok, err := matchedHost.Captcha.ValidateCookie(*msgData.CaptchaCookie); err == nil {
+			return tok
+		}
+	}
+
+	// Create new pending token
+	tok, err := matchedHost.Captcha.NewPendingToken()
+	if err != nil {
+		s.logger.WithField("host", matchedHost.Host).WithError(err).Error("Failed to create captcha token")
+		return nil
+	}
+
+	// Generate and set cookie
+	if cookie, err := matchedHost.Captcha.GenerateCookie(tok, msgData.SSL); err == nil {
+		_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", cookie.String())
+	} else {
+		s.logger.WithField("host", matchedHost.Host).WithError(err).Error("Failed to generate captcha cookie")
+		return nil
+	}
+
+	return &tok
+}
+
+// isCaptchaSubmission checks if this request is a captcha form submission
+func (d *HTTPMessageData) isCaptchaSubmission(matchedHost *host.Host) bool {
+	if d.Method == nil || *d.Method != http.MethodPost {
+		return false
+	}
+	if d.HeadersParsed == nil || len(d.BodyCopied) == 0 {
+		return false
+	}
+	contentType := strings.ToLower(d.HeadersParsed.Get("Content-Type"))
+	if !strings.HasPrefix(contentType, "application/x-www-form-urlencoded") {
+		return false
+	}
+	return matchedHost.Captcha.IsCaptchaSubmission(string(d.BodyCopied))
+}
+
+// validateAndUpdateCaptcha validates the captcha submission and updates the token/cookie if successful
+func (s *Spoa) validateAndUpdateCaptcha(ctx context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host, tok *captcha.CaptchaToken) bool {
+	timer := prometheus.NewTimer(metrics.CaptchaValidationDuration)
+	isValid, err := matchedHost.Captcha.Validate(ctx, tok.UUID, string(msgData.BodyCopied))
+	timer.ObserveDuration()
+
+	if err != nil || !isValid {
+		return false
+	}
+
+	// Success - create passed token and update cookie
+	newTok := matchedHost.Captcha.NewPassedToken(tok)
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", captcha.Valid)
+
+	if cookie, err := matchedHost.Captcha.GenerateCookie(newTok, msgData.SSL); err == nil {
+		_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", cookie.String())
+	}
+
+	return true
 }
 
 // getIPRemediation performs IP and geo/country remediation checks
