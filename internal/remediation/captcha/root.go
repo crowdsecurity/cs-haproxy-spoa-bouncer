@@ -2,7 +2,6 @@ package captcha
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,12 +53,6 @@ func (c *CookieGenerator) SetDefaults() {
 	if c.HTTPOnly == nil {
 		c.HTTPOnly = ptr.Of(true)
 	}
-	// Note: Cookies are always signed (required for stateless design)
-}
-
-func (c *CookieGenerator) IsValid() error {
-	//TODO
-	return nil
 }
 
 func (c *CookieGenerator) GenerateUnsetCookie(ssl *bool) (*http.Cookie, error) {
@@ -84,18 +77,7 @@ func (c *CookieGenerator) GenerateUnsetCookie(ssl *bool) (*http.Cookie, error) {
 		cookie.Secure = true
 	}
 
-	return cookie, urlEncodeValue(cookie)
-}
-
-func urlEncodeValue(cookie *http.Cookie) error {
-	// Skip encoding for empty values (unset cookies)
-	if cookie.Value != "" {
-		cookie.Value = base64.URLEncoding.EncodeToString([]byte(cookie.Value))
-	}
-	if len(cookie.String()) > 4096 {
-		return fmt.Errorf("cookie value too long")
-	}
-	return nil
+	return cookie, nil
 }
 
 type Captcha struct {
@@ -406,11 +388,14 @@ func (c *Captcha) NewPassedToken(existingToken *CaptchaToken) CaptchaToken {
 // Note: signing_key is validated in InjectKeyValues() before this method is called
 func (c *Captcha) GenerateCookie(tok CaptchaToken, ssl *bool) (*http.Cookie, error) {
 	secure := false
-	if ssl != nil {
-		secure = *ssl
-	}
-	if c.CookieGenerator.Secure == "always" {
+	switch c.CookieGenerator.Secure {
+	case "auto":
+		if ssl != nil {
+			secure = *ssl
+		}
+	case "always":
 		secure = true
+	// case "never": secure remains false
 	}
 
 	return GenerateCaptchaCookie(
@@ -426,4 +411,19 @@ func (c *Captcha) GenerateCookie(tok CaptchaToken, ssl *bool) (*http.Cookie, err
 // Note: signing_key is validated in InjectKeyValues() before this method is called
 func (c *Captcha) ValidateCookie(b64Value string) (*CaptchaToken, error) {
 	return ValidateCaptchaCookie(b64Value, c.SigningKey)
+}
+
+// IsCaptchaSubmission checks if the body appears to be a captcha form submission
+// by looking for the provider-specific response field (e.g., "g-recaptcha-response", "h-captcha-response")
+// This prevents treating unrelated form submissions as captcha validation attempts
+func (c *Captcha) IsCaptchaSubmission(body string) bool {
+	if body == "" {
+		return false
+	}
+	values, err := url.ParseQuery(body)
+	if err != nil {
+		return false
+	}
+	responseField := fmt.Sprintf("%s-response", providers[c.Provider].key)
+	return values.Has(responseField)
 }

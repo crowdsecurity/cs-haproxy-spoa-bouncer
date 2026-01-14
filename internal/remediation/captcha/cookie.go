@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // CaptchaToken represents the payload stored in a signed captcha cookie
@@ -67,9 +67,14 @@ func ParseAndVerifyCaptchaToken(raw string, secret []byte) (*CaptchaToken, error
 		return nil, fmt.Errorf("failed to parse/verify token: %w", err)
 	}
 
+	// Verify token is valid (signature, expiration, etc.)
+	if !token.Valid {
+		return nil, fmt.Errorf("invalid token")
+	}
+
 	// Extract claims
 	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok || !token.Valid {
+	if !ok {
 		return nil, fmt.Errorf("invalid token claims")
 	}
 

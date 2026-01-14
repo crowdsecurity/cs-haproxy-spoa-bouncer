@@ -749,13 +749,17 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_status", initialStatus)
 
 	// Check if the request is a captcha validation request (only if token is pending)
-	// Note: Use HasPrefix with ToLower to handle:
-	//  - Common variants: "application/x-www-form-urlencoded; charset=UTF-8"
-	//  - Case variations: "Application/X-WWW-Form-URLEncoded" (HTTP headers are case-insensitive per RFC)
+	// Requirements for captcha validation:
+	//  1. Token must be pending (not already validated)
+	//  2. Must be a POST request with form-urlencoded content
+	//  3. Body must contain the captcha provider's response field (e.g., "g-recaptcha-response")
+	// This prevents treating unrelated form submissions as captcha validation attempts
+	// (e.g., user was filling a form when decision was added)
 	if initialStatus == captcha.Pending &&
 		msgData.Method != nil && *msgData.Method == http.MethodPost &&
 		msgData.HeadersParsed != nil && strings.HasPrefix(strings.ToLower(msgData.HeadersParsed.Get("Content-Type")), "application/x-www-form-urlencoded") &&
-		len(msgData.BodyCopied) > 0 {
+		len(msgData.BodyCopied) > 0 &&
+		matchedHost.Captcha.IsCaptchaSubmission(string(msgData.BodyCopied)) {
 
 		// Validate captcha using UUID for traceability
 		// tok is guaranteed non-nil at this point (created earlier if needed)

@@ -8,6 +8,7 @@ require (
 	github.com/crowdsecurity/go-cs-lib v0.0.23
 	github.com/dropmorepackets/haproxy-go v0.0.7
 	github.com/gaissmai/bart v0.25.0
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/oschwald/geoip2-golang/v2 v2.0.0
 	github.com/prometheus/client_golang v1.23.2

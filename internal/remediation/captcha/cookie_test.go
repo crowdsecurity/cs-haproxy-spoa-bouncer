@@ -9,10 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	testSecret      = "test-secret-key-minimum-32-bytes-long-for-hmac-sha256"
-	testSecretShort = "too-short"
-)
+const testSecret = "test-secret-key-minimum-32-bytes-long-for-hmac-sha256"
 
 // TestSignAndVerifyCaptchaToken tests the basic JWT signing and verification flow
 func TestSignAndVerifyCaptchaToken(t *testing.T) {
