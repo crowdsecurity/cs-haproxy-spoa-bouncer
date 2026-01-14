@@ -705,12 +705,12 @@ func (s *Spoa) getOrCreateCaptchaToken(writer *encoding.ActionWriter, msgData *H
 	}
 
 	// Generate and set cookie
-	if cookie, err := matchedHost.Captcha.GenerateCookie(tok, msgData.SSL); err == nil {
-		_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", cookie.String())
-	} else {
+	cookie, err := matchedHost.Captcha.GenerateCookie(tok, msgData.SSL)
+	if err != nil {
 		s.logger.WithField("host", matchedHost.Host).WithError(err).Error("Failed to generate captcha cookie")
 		return nil
 	}
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", cookie.String())
 
 	return &tok
 }
