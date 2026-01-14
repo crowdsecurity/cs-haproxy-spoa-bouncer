@@ -2,7 +2,6 @@ package captcha
 
 import (
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -55,7 +54,7 @@ func ParseAndVerifyCaptchaToken(raw string, secret []byte) (*CaptchaToken, error
 	}
 
 	// Parse and verify the JWT token
-	token, err := jwt.Parse(raw, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.Parse(raw, func(token *jwt.Token) (any, error) {
 		// Validate signing method
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
@@ -121,46 +120,4 @@ func (t *CaptchaToken) IsPassed() bool {
 // IsPending checks if the token indicates the captcha is pending (not expired and status is pending)
 func (t *CaptchaToken) IsPending() bool {
 	return time.Now().Unix() <= t.Exp && t.St == Pending
-}
-
-// GenerateCaptchaCookie generates an HTTP cookie from a captcha token (stateless)
-// The cookie is a session cookie (no Expires/MaxAge) with the signed JWT token as the value
-// JWT tokens are already base64url-encoded, so no additional encoding is needed
-func GenerateCaptchaCookie(tok CaptchaToken, secret string, name string, httpOnly bool, secure bool) (*http.Cookie, error) {
-	// Sign the token (JWT is already base64url-encoded)
-	signedToken, err := SignCaptchaToken(tok, []byte(secret))
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign captcha token: %w", err)
-	}
-
-	cookie := &http.Cookie{
-		Name:     name,
-		Value:    signedToken, // JWT is already URL-safe, no need for additional encoding
-		MaxAge:   0,           // Session cookie (no Expires/MaxAge)
-		HttpOnly: httpOnly,
-		Secure:   secure,
-		SameSite: http.SameSiteStrictMode,
-		Path:     "/",
-	}
-
-	// Check cookie length (JWT format: header.payload.signature, all base64url-encoded)
-	if len(cookie.String()) > 4096 {
-		return nil, fmt.Errorf("cookie value too long")
-	}
-
-	return cookie, nil
-}
-
-// ValidateCaptchaCookie validates a captcha cookie value and returns the parsed token
-// Returns the token if valid, or an error if invalid, expired, or tampered with
-// JWT tokens are already base64url-encoded, so the cookie value can be used directly
-func ValidateCaptchaCookie(cookieValue string, secret string) (*CaptchaToken, error) {
-	// JWT tokens are already base64url-encoded and URL-safe
-	// Parse and verify the signed token directly
-	tok, err := ParseAndVerifyCaptchaToken(cookieValue, []byte(secret))
-	if err != nil {
-		return nil, err
-	}
-
-	return tok, nil
 }

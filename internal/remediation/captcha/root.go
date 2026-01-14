@@ -45,39 +45,39 @@ func (c *CookieGenerator) Init(logger *log.Entry, name string) {
 }
 
 func (c *CookieGenerator) SetDefaults() {
-	// Default Secure to auto
 	if c.Secure == "" {
 		c.Secure = "auto"
 	}
-	// Default httpOnly to true
 	if c.HTTPOnly == nil {
 		c.HTTPOnly = ptr.Of(true)
 	}
 }
 
-func (c *CookieGenerator) GenerateUnsetCookie(ssl *bool) (*http.Cookie, error) {
-	cookie := &http.Cookie{
+// resolveSecure determines the secure flag value based on configuration and SSL state
+func (c *CookieGenerator) resolveSecure(ssl *bool) bool {
+	switch c.Secure {
+	case "always":
+		return true
+	case "auto":
+		if ssl != nil {
+			return *ssl
+		}
+		return false
+	default: // "never" or any other value
+		return false
+	}
+}
+
+func (c *CookieGenerator) GenerateUnsetCookie(ssl *bool) *http.Cookie {
+	return &http.Cookie{
 		Name:     c.Name,
 		Value:    "",
 		MaxAge:   -1,
 		HttpOnly: *c.HTTPOnly,
-		Secure:   false,
+		Secure:   c.resolveSecure(ssl),
 		SameSite: http.SameSiteStrictMode,
 		Path:     "/",
 	}
-
-	switch c.Secure {
-	case "auto":
-		if ssl != nil {
-			cookie.Secure = *ssl
-		} else {
-			c.logger.Warn("ssl flag not set, defaulting to false")
-		}
-	case "always":
-		cookie.Secure = true
-	}
-
-	return cookie, nil
 }
 
 type Captcha struct {
@@ -385,32 +385,32 @@ func (c *Captcha) NewPassedToken(existingToken *CaptchaToken) CaptchaToken {
 }
 
 // GenerateCookie generates an HTTP cookie from a captcha token using the host's configuration
-// Note: signing_key is validated in InjectKeyValues() before this method is called
 func (c *Captcha) GenerateCookie(tok CaptchaToken, ssl *bool) (*http.Cookie, error) {
-	secure := false
-	switch c.CookieGenerator.Secure {
-	case "auto":
-		if ssl != nil {
-			secure = *ssl
-		}
-	case "always":
-		secure = true
-	// case "never": secure remains false
+	signedToken, err := SignCaptchaToken(tok, []byte(c.SigningKey))
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign captcha token: %w", err)
 	}
 
-	return GenerateCaptchaCookie(
-		tok,
-		c.SigningKey,
-		c.CookieGenerator.Name,
-		*c.CookieGenerator.HTTPOnly,
-		secure,
-	)
+	cookie := &http.Cookie{
+		Name:     c.CookieGenerator.Name,
+		Value:    signedToken,
+		MaxAge:   0, // Session cookie
+		HttpOnly: *c.CookieGenerator.HTTPOnly,
+		Secure:   c.CookieGenerator.resolveSecure(ssl),
+		SameSite: http.SameSiteStrictMode,
+		Path:     "/",
+	}
+
+	if len(cookie.String()) > 4096 {
+		return nil, fmt.Errorf("cookie value too long")
+	}
+
+	return cookie, nil
 }
 
 // ValidateCookie validates a JWT captcha cookie value using the host's signing key
-// Note: signing_key is validated in InjectKeyValues() before this method is called
-func (c *Captcha) ValidateCookie(b64Value string) (*CaptchaToken, error) {
-	return ValidateCaptchaCookie(b64Value, c.SigningKey)
+func (c *Captcha) ValidateCookie(cookieValue string) (*CaptchaToken, error) {
+	return ParseAndVerifyCaptchaToken(cookieValue, []byte(c.SigningKey))
 }
 
 // IsCaptchaSubmission checks if the body appears to be a captcha form submission

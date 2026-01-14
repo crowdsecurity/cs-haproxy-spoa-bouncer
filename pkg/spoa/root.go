@@ -521,25 +521,11 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 
 	switch r {
 	case remediation.Allow:
-		// If user has a captcha cookie but decision is Allow, generate unset cookie
-		// We don't set captcha_status, so HAProxy knows to clear the cookie
-		// Check for both nil and empty string (HAProxy may send empty string when cookie doesn't exist)
+		// If user has a captcha cookie but decision is Allow, clear it
 		if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
-			unsetCookie, err := matchedHost.Captcha.CookieGenerator.GenerateUnsetCookie(msgData.SSL)
-			if err != nil {
-				s.logger.WithFields(log.Fields{
-					"host":  matchedHost.Host,
-					"ssl":   msgData.SSL,
-					"error": err,
-				}).Error("Failed to generate unset cookie")
-				return // Cannot proceed without unset cookie
-			}
-
-			s.logger.WithFields(log.Fields{
-				"host": matchedHost.Host,
-			}).Debug("Allow decision but captcha cookie present, will clear cookie")
+			unsetCookie := matchedHost.Captcha.CookieGenerator.GenerateUnsetCookie(msgData.SSL)
+			s.logger.WithField("host", matchedHost.Host).Debug("Allow decision but captcha cookie present, will clear cookie")
 			_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", unsetCookie.String())
-			// Note: We deliberately don't set captcha_status here
 		}
 	case remediation.Ban:
 		//Handle ban

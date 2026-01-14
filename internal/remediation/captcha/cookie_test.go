@@ -260,50 +260,8 @@ func TestCaptchaTokenIsPending(t *testing.T) {
 	}
 }
 
-// TestGenerateCaptchaCookie tests cookie generation
-func TestGenerateCaptchaCookie(t *testing.T) {
-	now := time.Now().Unix()
-	tok := CaptchaToken{
-		UUID: "test-uuid",
-		St:   Pending,
-		Iat:  now,
-		Exp:  now + 3600,
-	}
-
-	cookie, err := GenerateCaptchaCookie(tok, testSecret, "test_captcha_cookie", true, true)
-	require.NoError(t, err, "cookie generation should succeed")
-
-	assert.Equal(t, "test_captcha_cookie", cookie.Name)
-	assert.True(t, cookie.HttpOnly, "HttpOnly should be set")
-	assert.True(t, cookie.Secure, "Secure should be set")
-	assert.Equal(t, "/", cookie.Path)
-	assert.NotEmpty(t, cookie.Value, "cookie value should not be empty")
-	assert.Equal(t, 0, cookie.MaxAge, "should be session cookie (MaxAge=0)")
-
-	// Value should be a valid JWT
-	parts := strings.Split(cookie.Value, ".")
-	assert.Len(t, parts, 3, "cookie value should be a JWT")
-}
-
-// TestGenerateCaptchaCookieInsecure tests cookie generation without secure flag
-func TestGenerateCaptchaCookieInsecure(t *testing.T) {
-	now := time.Now().Unix()
-	tok := CaptchaToken{
-		UUID: "test-uuid",
-		St:   Pending,
-		Iat:  now,
-		Exp:  now + 3600,
-	}
-
-	cookie, err := GenerateCaptchaCookie(tok, testSecret, "test_cookie", false, false)
-	require.NoError(t, err)
-
-	assert.False(t, cookie.HttpOnly, "HttpOnly should not be set")
-	assert.False(t, cookie.Secure, "Secure should not be set")
-}
-
-// TestValidateCaptchaCookie tests full cookie validation flow
-func TestValidateCaptchaCookie(t *testing.T) {
+// TestSignedTokenRoundTrip tests that a signed token can be verified
+func TestSignedTokenRoundTrip(t *testing.T) {
 	now := time.Now().Unix()
 	tok := CaptchaToken{
 		UUID: "test-uuid-456",
@@ -312,54 +270,22 @@ func TestValidateCaptchaCookie(t *testing.T) {
 		Exp:  now + 3600,
 	}
 
-	// Generate cookie
-	cookie, err := GenerateCaptchaCookie(tok, testSecret, "test_cookie", true, true)
+	// Sign token
+	signed, err := SignCaptchaToken(tok, []byte(testSecret))
 	require.NoError(t, err)
 
-	// Validate cookie value
-	validated, err := ValidateCaptchaCookie(cookie.Value, testSecret)
-	require.NoError(t, err, "cookie validation should succeed")
+	// Verify it's a valid JWT format
+	parts := strings.Split(signed, ".")
+	assert.Len(t, parts, 3, "signed token should be a JWT")
+
+	// Parse and verify
+	validated, err := ParseAndVerifyCaptchaToken(signed, []byte(testSecret))
+	require.NoError(t, err, "token validation should succeed")
 
 	assert.Equal(t, tok.UUID, validated.UUID)
 	assert.Equal(t, tok.St, validated.St)
 	assert.Equal(t, tok.Iat, validated.Iat)
 	assert.Equal(t, tok.Exp, validated.Exp)
-}
-
-// TestValidateCaptchaCookieInvalid tests cookie validation with invalid values
-func TestValidateCaptchaCookieInvalid(t *testing.T) {
-	testCases := []struct {
-		name        string
-		cookieValue string
-	}{
-		{"empty value", ""},
-		{"random string", "not-a-valid-jwt-token"},
-		{"invalid base64", "not!!!valid!!!base64!!!"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := ValidateCaptchaCookie(tc.cookieValue, testSecret)
-			assert.Error(t, err, "invalid cookie should be rejected")
-		})
-	}
-}
-
-// TestCookieLengthLimit tests that very long cookies are rejected
-func TestCookieLengthLimit(t *testing.T) {
-	now := time.Now().Unix()
-	// Create a token with a very long UUID to make the cookie large
-	longUUID := strings.Repeat("x", 4000)
-	tok := CaptchaToken{
-		UUID: longUUID,
-		St:   Pending,
-		Iat:  now,
-		Exp:  now + 3600,
-	}
-
-	_, err := GenerateCaptchaCookie(tok, testSecret, "test_cookie", true, true)
-	require.Error(t, err, "cookie exceeding 4096 bytes should be rejected")
-	assert.Contains(t, err.Error(), "cookie value too long")
 }
 
 // TestSigningMethodValidation tests that non-HMAC signing methods are rejected
