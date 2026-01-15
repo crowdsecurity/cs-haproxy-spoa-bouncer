@@ -1,4 +1,4 @@
-package captcha
+package jwt
 
 import (
 	"strings"
@@ -11,10 +11,10 @@ import (
 
 const testSecret = "test-secret-key-minimum-32-bytes-long-for-hmac-sha256"
 
-// TestSignAndVerifyCaptchaToken tests the basic JWT signing and verification flow
-func TestSignAndVerifyCaptchaToken(t *testing.T) {
+// TestSignAndVerifyToken tests the basic JWT signing and verification flow
+func TestSignAndVerifyToken(t *testing.T) {
 	now := time.Now().Unix()
-	tok := CaptchaToken{
+	tok := Token{
 		UUID: "test-uuid-123",
 		St:   Pending,
 		Iat:  now,
@@ -22,7 +22,7 @@ func TestSignAndVerifyCaptchaToken(t *testing.T) {
 	}
 
 	// Sign the token
-	signed, err := SignCaptchaToken(tok, []byte(testSecret))
+	signed, err := Sign(tok, []byte(testSecret))
 	require.NoError(t, err, "signing should succeed")
 	assert.NotEmpty(t, signed, "signed token should not be empty")
 
@@ -31,7 +31,7 @@ func TestSignAndVerifyCaptchaToken(t *testing.T) {
 	assert.Len(t, parts, 3, "JWT should have 3 parts")
 
 	// Verify the token
-	verified, err := ParseAndVerifyCaptchaToken(signed, []byte(testSecret))
+	verified, err := ParseAndVerify(signed, []byte(testSecret))
 	require.NoError(t, err, "verification should succeed")
 	assert.Equal(t, tok.UUID, verified.UUID, "UUID should match")
 	assert.Equal(t, tok.St, verified.St, "status should match")
@@ -39,9 +39,9 @@ func TestSignAndVerifyCaptchaToken(t *testing.T) {
 	assert.Equal(t, tok.Exp, verified.Exp, "expiration should match")
 }
 
-// TestSignCaptchaTokenEmptySecret tests signing with an empty secret
-func TestSignCaptchaTokenEmptySecret(t *testing.T) {
-	tok := CaptchaToken{
+// TestSignEmptySecret tests signing with an empty secret
+func TestSignEmptySecret(t *testing.T) {
+	tok := Token{
 		UUID: "test-uuid",
 		St:   Pending,
 		Iat:  time.Now().Unix(),
@@ -50,7 +50,7 @@ func TestSignCaptchaTokenEmptySecret(t *testing.T) {
 
 	// Signing with empty secret should still work (HMAC accepts any key length)
 	// but it's cryptographically weak - validation should catch this in config
-	signed, err := SignCaptchaToken(tok, []byte(""))
+	signed, err := Sign(tok, []byte(""))
 	require.NoError(t, err, "signing with empty secret succeeds (validation happens at config level)")
 	assert.NotEmpty(t, signed)
 }
@@ -58,18 +58,18 @@ func TestSignCaptchaTokenEmptySecret(t *testing.T) {
 // TestParseAndVerifyExpiredToken tests that expired tokens are rejected
 func TestParseAndVerifyExpiredToken(t *testing.T) {
 	now := time.Now().Unix()
-	tok := CaptchaToken{
+	tok := Token{
 		UUID: "test-uuid-expired",
 		St:   Pending,
 		Iat:  now - 7200, // 2 hours ago
 		Exp:  now - 3600, // 1 hour ago (expired)
 	}
 
-	signed, err := SignCaptchaToken(tok, []byte(testSecret))
+	signed, err := Sign(tok, []byte(testSecret))
 	require.NoError(t, err)
 
 	// Verification should fail due to expiration
-	_, err = ParseAndVerifyCaptchaToken(signed, []byte(testSecret))
+	_, err = ParseAndVerify(signed, []byte(testSecret))
 	require.Error(t, err, "expired token should be rejected")
 	assert.Contains(t, strings.ToLower(err.Error()), "token is expired", "error should mention expiration")
 }
@@ -77,35 +77,35 @@ func TestParseAndVerifyExpiredToken(t *testing.T) {
 // TestParseAndVerifyTamperedSignature tests that tampered tokens are rejected
 func TestParseAndVerifyTamperedSignature(t *testing.T) {
 	now := time.Now().Unix()
-	tok := CaptchaToken{
+	tok := Token{
 		UUID: "test-uuid",
 		St:   Pending,
 		Iat:  now,
 		Exp:  now + 3600,
 	}
 
-	signed, err := SignCaptchaToken(tok, []byte(testSecret))
+	signed, err := Sign(tok, []byte(testSecret))
 	require.NoError(t, err)
 
 	// Tamper with the signature (change last character)
 	tampered := signed[:len(signed)-5] + "XXXXX"
 
 	// Verification should fail
-	_, err = ParseAndVerifyCaptchaToken(tampered, []byte(testSecret))
+	_, err = ParseAndVerify(tampered, []byte(testSecret))
 	assert.Error(t, err, "tampered token should be rejected")
 }
 
 // TestParseAndVerifyTamperedPayload tests that tampered payload is detected
 func TestParseAndVerifyTamperedPayload(t *testing.T) {
 	now := time.Now().Unix()
-	tok := CaptchaToken{
+	tok := Token{
 		UUID: "test-uuid",
 		St:   Pending,
 		Iat:  now,
 		Exp:  now + 3600,
 	}
 
-	signed, err := SignCaptchaToken(tok, []byte(testSecret))
+	signed, err := Sign(tok, []byte(testSecret))
 	require.NoError(t, err)
 
 	// Tamper with the payload (change middle part)
@@ -115,14 +115,14 @@ func TestParseAndVerifyTamperedPayload(t *testing.T) {
 	tampered := strings.Join(parts, ".")
 
 	// Verification should fail (signature won't match tampered payload)
-	_, err = ParseAndVerifyCaptchaToken(tampered, []byte(testSecret))
+	_, err = ParseAndVerify(tampered, []byte(testSecret))
 	assert.Error(t, err, "token with tampered payload should be rejected")
 }
 
 // TestParseAndVerifyWrongSecret tests verification with wrong secret
 func TestParseAndVerifyWrongSecret(t *testing.T) {
 	now := time.Now().Unix()
-	tok := CaptchaToken{
+	tok := Token{
 		UUID: "test-uuid",
 		St:   Pending,
 		Iat:  now,
@@ -130,18 +130,18 @@ func TestParseAndVerifyWrongSecret(t *testing.T) {
 	}
 
 	// Sign with one secret
-	signed, err := SignCaptchaToken(tok, []byte(testSecret))
+	signed, err := Sign(tok, []byte(testSecret))
 	require.NoError(t, err)
 
 	// Try to verify with different secret
 	wrongSecret := "different-secret-key-32-bytes-long-for-hmac-test"
-	_, err = ParseAndVerifyCaptchaToken(signed, []byte(wrongSecret))
+	_, err = ParseAndVerify(signed, []byte(wrongSecret))
 	assert.Error(t, err, "verification with wrong secret should fail")
 }
 
 // TestParseAndVerifyEmptyToken tests parsing an empty token
 func TestParseAndVerifyEmptyToken(t *testing.T) {
-	_, err := ParseAndVerifyCaptchaToken("", []byte(testSecret))
+	_, err := ParseAndVerify("", []byte(testSecret))
 	require.Error(t, err, "empty token should be rejected")
 	assert.Contains(t, err.Error(), "empty token")
 }
@@ -160,24 +160,24 @@ func TestParseAndVerifyMalformedToken(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseAndVerifyCaptchaToken(tc.token, []byte(testSecret))
+			_, err := ParseAndVerify(tc.token, []byte(testSecret))
 			assert.Error(t, err, "malformed token should be rejected")
 		})
 	}
 }
 
-// TestCaptchaTokenIsPassed tests the IsPassed method
-func TestCaptchaTokenIsPassed(t *testing.T) {
+// TestTokenIsPassed tests the IsPassed method
+func TestTokenIsPassed(t *testing.T) {
 	now := time.Now().Unix()
 
 	testCases := []struct {
 		name     string
-		token    CaptchaToken
+		token    Token
 		expected bool
 	}{
 		{
 			name: "valid passed token",
-			token: CaptchaToken{
+			token: Token{
 				St:  Valid,
 				Exp: now + 3600, // not expired
 			},
@@ -185,7 +185,7 @@ func TestCaptchaTokenIsPassed(t *testing.T) {
 		},
 		{
 			name: "expired passed token",
-			token: CaptchaToken{
+			token: Token{
 				St:  Valid,
 				Exp: now - 3600, // expired
 			},
@@ -193,7 +193,7 @@ func TestCaptchaTokenIsPassed(t *testing.T) {
 		},
 		{
 			name: "pending token",
-			token: CaptchaToken{
+			token: Token{
 				St:  Pending,
 				Exp: now + 3600,
 			},
@@ -201,7 +201,7 @@ func TestCaptchaTokenIsPassed(t *testing.T) {
 		},
 		{
 			name: "valid token at exact expiry",
-			token: CaptchaToken{
+			token: Token{
 				St:  Valid,
 				Exp: now, // exactly at expiry
 			},
@@ -217,18 +217,18 @@ func TestCaptchaTokenIsPassed(t *testing.T) {
 	}
 }
 
-// TestCaptchaTokenIsPending tests the IsPending method
-func TestCaptchaTokenIsPending(t *testing.T) {
+// TestTokenIsPending tests the IsPending method
+func TestTokenIsPending(t *testing.T) {
 	now := time.Now().Unix()
 
 	testCases := []struct {
 		name     string
-		token    CaptchaToken
+		token    Token
 		expected bool
 	}{
 		{
 			name: "valid pending token",
-			token: CaptchaToken{
+			token: Token{
 				St:  Pending,
 				Exp: now + 3600,
 			},
@@ -236,7 +236,7 @@ func TestCaptchaTokenIsPending(t *testing.T) {
 		},
 		{
 			name: "expired pending token",
-			token: CaptchaToken{
+			token: Token{
 				St:  Pending,
 				Exp: now - 3600,
 			},
@@ -244,7 +244,7 @@ func TestCaptchaTokenIsPending(t *testing.T) {
 		},
 		{
 			name: "passed token",
-			token: CaptchaToken{
+			token: Token{
 				St:  Valid,
 				Exp: now + 3600,
 			},
@@ -263,7 +263,7 @@ func TestCaptchaTokenIsPending(t *testing.T) {
 // TestSignedTokenRoundTrip tests that a signed token can be verified
 func TestSignedTokenRoundTrip(t *testing.T) {
 	now := time.Now().Unix()
-	tok := CaptchaToken{
+	tok := Token{
 		UUID: "test-uuid-456",
 		St:   Valid,
 		Iat:  now,
@@ -271,7 +271,7 @@ func TestSignedTokenRoundTrip(t *testing.T) {
 	}
 
 	// Sign token
-	signed, err := SignCaptchaToken(tok, []byte(testSecret))
+	signed, err := Sign(tok, []byte(testSecret))
 	require.NoError(t, err)
 
 	// Verify it's a valid JWT format
@@ -279,7 +279,7 @@ func TestSignedTokenRoundTrip(t *testing.T) {
 	assert.Len(t, parts, 3, "signed token should be a JWT")
 
 	// Parse and verify
-	validated, err := ParseAndVerifyCaptchaToken(signed, []byte(testSecret))
+	validated, err := ParseAndVerify(signed, []byte(testSecret))
 	require.NoError(t, err, "token validation should succeed")
 
 	assert.Equal(t, tok.UUID, validated.UUID)
@@ -295,7 +295,7 @@ func TestSigningMethodValidation(t *testing.T) {
 	// using the jwt library directly, but the validation is in the code
 
 	now := time.Now().Unix()
-	tok := CaptchaToken{
+	tok := Token{
 		UUID: "test-uuid",
 		St:   Pending,
 		Iat:  now,
@@ -303,10 +303,10 @@ func TestSigningMethodValidation(t *testing.T) {
 	}
 
 	// Normal HMAC token should work
-	signed, err := SignCaptchaToken(tok, []byte(testSecret))
+	signed, err := Sign(tok, []byte(testSecret))
 	require.NoError(t, err)
 
-	verified, err := ParseAndVerifyCaptchaToken(signed, []byte(testSecret))
+	verified, err := ParseAndVerify(signed, []byte(testSecret))
 	require.NoError(t, err)
 	assert.Equal(t, tok.UUID, verified.UUID)
 }
@@ -314,7 +314,7 @@ func TestSigningMethodValidation(t *testing.T) {
 // TestRoundTripMultipleTokens tests signing and verifying multiple tokens
 func TestRoundTripMultipleTokens(t *testing.T) {
 	now := time.Now().Unix()
-	tokens := []CaptchaToken{
+	tokens := []Token{
 		{UUID: "user-1", St: Pending, Iat: now, Exp: now + 1800},
 		{UUID: "user-2", St: Valid, Iat: now, Exp: now + 86400},
 		{UUID: "user-3", St: Pending, Iat: now, Exp: now + 900},
@@ -323,11 +323,11 @@ func TestRoundTripMultipleTokens(t *testing.T) {
 	for i, tok := range tokens {
 		t.Run(tok.UUID, func(t *testing.T) {
 			// Sign
-			signed, err := SignCaptchaToken(tok, []byte(testSecret))
+			signed, err := Sign(tok, []byte(testSecret))
 			require.NoError(t, err, "token %d signing should succeed", i)
 
 			// Verify
-			verified, err := ParseAndVerifyCaptchaToken(signed, []byte(testSecret))
+			verified, err := ParseAndVerify(signed, []byte(testSecret))
 			require.NoError(t, err, "token %d verification should succeed", i)
 
 			assert.Equal(t, tok.UUID, verified.UUID)
@@ -343,7 +343,7 @@ func TestTokenStatusTransition(t *testing.T) {
 	now := time.Now().Unix()
 
 	// Create pending token
-	pendingTok := CaptchaToken{
+	pendingTok := Token{
 		UUID: "test-uuid",
 		St:   Pending,
 		Iat:  now,
@@ -351,17 +351,17 @@ func TestTokenStatusTransition(t *testing.T) {
 	}
 
 	// Sign as pending
-	signed, err := SignCaptchaToken(pendingTok, []byte(testSecret))
+	signed, err := Sign(pendingTok, []byte(testSecret))
 	require.NoError(t, err)
 
 	// Verify it's pending
-	verified, err := ParseAndVerifyCaptchaToken(signed, []byte(testSecret))
+	verified, err := ParseAndVerify(signed, []byte(testSecret))
 	require.NoError(t, err)
 	assert.True(t, verified.IsPending())
 	assert.False(t, verified.IsPassed())
 
 	// Create passed token (simulating successful validation)
-	passedTok := CaptchaToken{
+	passedTok := Token{
 		UUID: "test-uuid",
 		St:   Valid,
 		Iat:  now,
@@ -369,11 +369,11 @@ func TestTokenStatusTransition(t *testing.T) {
 	}
 
 	// Sign as passed
-	signedPassed, err := SignCaptchaToken(passedTok, []byte(testSecret))
+	signedPassed, err := Sign(passedTok, []byte(testSecret))
 	require.NoError(t, err)
 
 	// Verify it's passed
-	verifiedPassed, err := ParseAndVerifyCaptchaToken(signedPassed, []byte(testSecret))
+	verifiedPassed, err := ParseAndVerify(signedPassed, []byte(testSecret))
 	require.NoError(t, err)
 	assert.False(t, verifiedPassed.IsPending())
 	assert.True(t, verifiedPassed.IsPassed())

@@ -10,7 +10,7 @@ import (
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/ban"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/captcha"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )

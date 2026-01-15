@@ -16,7 +16,7 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/captcha"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/metrics"
@@ -523,7 +523,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	case remediation.Allow:
 		// If user has a captcha cookie but decision is Allow, clear it
 		if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
-			unsetCookie := matchedHost.Captcha.CookieGenerator.GenerateUnsetCookie(msgData.SSL)
+			unsetCookie := matchedHost.Captcha.GenerateUnsetCookie(msgData.SSL)
 			s.logger.WithField("host", matchedHost.Host).Debug("Allow decision but captcha cookie present, will clear cookie")
 			_ = writer.SetString(encoding.VarScopeTransaction, "captcha_cookie", unsetCookie.String())
 		}
@@ -689,7 +689,7 @@ func (s *Spoa) handleCaptchaRemediation(ctx context.Context, writer *encoding.Ac
 }
 
 // getOrCreateCaptchaToken returns an existing valid token from cookie or creates a new one
-func (s *Spoa) getOrCreateCaptchaToken(writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) *captcha.CaptchaToken {
+func (s *Spoa) getOrCreateCaptchaToken(writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host) *captcha.Token {
 	// Try existing cookie first
 	if msgData.CaptchaCookie != nil && *msgData.CaptchaCookie != "" {
 		if tok, err := matchedHost.Captcha.ValidateCookie(*msgData.CaptchaCookie); err == nil {
@@ -731,7 +731,7 @@ func (d *HTTPMessageData) isCaptchaSubmission(matchedHost *host.Host) bool {
 }
 
 // validateAndUpdateCaptcha validates the captcha submission and updates the token/cookie if successful
-func (s *Spoa) validateAndUpdateCaptcha(ctx context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host, tok *captcha.CaptchaToken) bool {
+func (s *Spoa) validateAndUpdateCaptcha(ctx context.Context, writer *encoding.ActionWriter, msgData *HTTPMessageData, matchedHost *host.Host, tok *captcha.Token) bool {
 	timer := prometheus.NewTimer(metrics.CaptchaValidationDuration)
 	isValid, err := matchedHost.Captcha.Validate(ctx, tok.UUID, string(msgData.BodyCopied))
 	timer.ObserveDuration()

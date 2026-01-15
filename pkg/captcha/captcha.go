@@ -11,16 +11,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crowdsecurity/crowdsec-spoa/internal/captcha/cookie"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/captcha/jwt"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
-	"github.com/crowdsecurity/go-cs-lib/ptr"
 	"github.com/dropmorepackets/haproxy-go/pkg/encoding"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
 const (
-	Pending = "pending"
-	Valid   = "valid"
+	// Re-export constants from jwt package for backward compatibility
+	Pending = jwt.Pending
+	Valid   = jwt.Valid
 
 	// DefaultTimeout is the default HTTP timeout in seconds
 	DefaultTimeout = 5
@@ -28,72 +30,23 @@ const (
 	MaxTimeout = 300
 )
 
-// CookieGenerator handles cookie configuration and generation for captcha
-// Note: This struct handles HTTP cookie attributes only (Secure, HttpOnly, etc.)
-// JWT signing is handled at the Captcha level using signing_key
-type CookieGenerator struct {
-	Secure   string     `yaml:"secure"`    // Secure sets the secure flag on the cookie, valid arguments are "auto", "always", "never". "auto" relies on the `ssl_fc` flag from HAProxy
-	HTTPOnly *bool      `yaml:"http_only"` // HttpOnly sets the HttpOnly flag on the cookie
-	Name     string     `yaml:"-"`         // Name of the cookie, usually set by the remediation. EG "crowdsec_captcha"
-	logger   *log.Entry `yaml:"-"`         // logger passed from the remediation
-}
-
-func (c *CookieGenerator) Init(logger *log.Entry, name string) {
-	c.logger = logger.WithField("type", "cookie")
-	c.Name = name
-	c.SetDefaults()
-}
-
-func (c *CookieGenerator) SetDefaults() {
-	if c.Secure == "" {
-		c.Secure = "auto"
-	}
-	if c.HTTPOnly == nil {
-		c.HTTPOnly = ptr.Of(true)
-	}
-}
-
-// resolveSecure determines the secure flag value based on configuration and SSL state
-func (c *CookieGenerator) resolveSecure(ssl *bool) bool {
-	switch c.Secure {
-	case "always":
-		return true
-	case "auto":
-		if ssl != nil {
-			return *ssl
-		}
-		return false
-	default: // "never" or any other value
-		return false
-	}
-}
-
-func (c *CookieGenerator) GenerateUnsetCookie(ssl *bool) *http.Cookie {
-	return &http.Cookie{
-		Name:     c.Name,
-		Value:    "",
-		MaxAge:   -1,
-		HttpOnly: *c.HTTPOnly,
-		Secure:   c.resolveSecure(ssl),
-		SameSite: http.SameSiteStrictMode,
-		Path:     "/",
-	}
-}
+// Token is a type alias for jwt.Token to provide a clean public API
+type Token = jwt.Token
 
 type Captcha struct {
-	Provider            string          `yaml:"provider"`             // Captcha Provider
-	SecretKey           string          `yaml:"secret_key"`           // Captcha Provider Secret Key (for API validation)
-	SiteKey             string          `yaml:"site_key"`             // Captcha Provider Site Key
-	FallbackRemediation string          `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
-	Timeout             int             `yaml:"timeout"`              // HTTP client timeout in seconds (default: 5)
-	CookieGenerator     CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies (HTTP attributes only)
-	PendingTTL          string          `yaml:"pending_ttl"`          // TTL for pending captcha tokens (default: 30m)
-	PassedTTL           string          `yaml:"passed_ttl"`           // TTL for passed captcha tokens (default: 24h)
-	SigningKey          string          `yaml:"signing_key"`          // Key for signing JWT captcha tokens (required, minimum 32 bytes) - breaking change in 0.3.0
-	logger              *log.Entry      `yaml:"-"`
-	client              *http.Client    `yaml:"-"`
-	parsedPendingTTL    time.Duration   `yaml:"-"`
-	parsedPassedTTL     time.Duration   `yaml:"-"`
+	Provider            string           `yaml:"provider"`             // Captcha Provider
+	SecretKey           string           `yaml:"secret_key"`           // Captcha Provider Secret Key (for API validation)
+	SiteKey             string           `yaml:"site_key"`             // Captcha Provider Site Key
+	FallbackRemediation string           `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
+	Timeout             int              `yaml:"timeout"`              // HTTP client timeout in seconds (default: 5)
+	Cookie              cookie.Generator `yaml:"cookie"`               // Cookie configuration (HTTP attributes like Secure, HttpOnly). Do not access directly, use GenerateCookie/GenerateUnsetCookie methods
+	PendingTTL          string           `yaml:"pending_ttl"`          // TTL for pending captcha tokens (default: 30m)
+	PassedTTL           string           `yaml:"passed_ttl"`           // TTL for passed captcha tokens (default: 24h)
+	SigningKey          string           `yaml:"signing_key"`          // Key for signing JWT captcha tokens (required, minimum 32 bytes) - breaking change in 0.3.0
+	logger              *log.Entry       `yaml:"-"`
+	client              *http.Client     `yaml:"-"`
+	parsedPendingTTL    time.Duration    `yaml:"-"`
+	parsedPassedTTL     time.Duration    `yaml:"-"`
 }
 
 func (c *Captcha) Init(logger *log.Entry) error {
@@ -136,13 +89,13 @@ func (c *Captcha) Init(logger *log.Entry) error {
 	c.parsedPendingTTL, err = time.ParseDuration(c.PendingTTL)
 	if err != nil {
 		c.logger.WithError(err).WithField("pending_ttl", c.PendingTTL).Warn("failed to parse pending_ttl, using default")
-		c.parsedPendingTTL = DefaultPendingTTL
+		c.parsedPendingTTL = jwt.DefaultPendingTTL
 	}
 
 	c.parsedPassedTTL, err = time.ParseDuration(c.PassedTTL)
 	if err != nil {
 		c.logger.WithError(err).WithField("passed_ttl", c.PassedTTL).Warn("failed to parse passed_ttl, using default")
-		c.parsedPassedTTL = DefaultPassedTTL
+		c.parsedPassedTTL = jwt.DefaultPassedTTL
 	}
 
 	if err := c.IsValid(); err != nil {
@@ -150,7 +103,7 @@ func (c *Captcha) Init(logger *log.Entry) error {
 	}
 
 	// Initialize cookie generator (cookie_secret is validated in IsValid())
-	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie")
+	c.Cookie.Init(c.logger, "crowdsec_captcha_cookie")
 
 	return nil
 }
@@ -344,14 +297,14 @@ func (c *Captcha) IsValid() error {
 }
 
 // NewPendingToken creates a new pending captcha token using the host's configured TTL
-func (c *Captcha) NewPendingToken() (CaptchaToken, error) {
+func (c *Captcha) NewPendingToken() (jwt.Token, error) {
 	tokenUUID, err := uuid.NewRandom()
 	if err != nil {
-		return CaptchaToken{}, fmt.Errorf("failed to generate UUID: %w", err)
+		return jwt.Token{}, fmt.Errorf("failed to generate UUID: %w", err)
 	}
 
 	now := time.Now().Unix()
-	return CaptchaToken{
+	return jwt.Token{
 		UUID: tokenUUID.String(),
 		St:   Pending,
 		Iat:  now,
@@ -361,7 +314,7 @@ func (c *Captcha) NewPendingToken() (CaptchaToken, error) {
 
 // NewPassedToken creates a new passed captcha token using the host's configured TTL
 // Reuses the UUID from the existing token for traceability
-func (c *Captcha) NewPassedToken(existingToken *CaptchaToken) CaptchaToken {
+func (c *Captcha) NewPassedToken(existingToken *jwt.Token) jwt.Token {
 	now := time.Now().Unix()
 	tokenUUID := ""
 	if existingToken != nil && existingToken.UUID != "" {
@@ -376,7 +329,7 @@ func (c *Captcha) NewPassedToken(existingToken *CaptchaToken) CaptchaToken {
 		}
 	}
 
-	return CaptchaToken{
+	return jwt.Token{
 		UUID: tokenUUID,
 		St:   Valid,
 		Iat:  now,
@@ -385,32 +338,23 @@ func (c *Captcha) NewPassedToken(existingToken *CaptchaToken) CaptchaToken {
 }
 
 // GenerateCookie generates an HTTP cookie from a captcha token using the host's configuration
-func (c *Captcha) GenerateCookie(tok CaptchaToken, ssl *bool) (*http.Cookie, error) {
-	signedToken, err := SignCaptchaToken(tok, []byte(c.SigningKey))
+func (c *Captcha) GenerateCookie(tok jwt.Token, ssl *bool) (*http.Cookie, error) {
+	signedToken, err := jwt.Sign(tok, []byte(c.SigningKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign captcha token: %w", err)
 	}
 
-	cookie := &http.Cookie{
-		Name:     c.CookieGenerator.Name,
-		Value:    signedToken,
-		MaxAge:   0, // Session cookie
-		HttpOnly: *c.CookieGenerator.HTTPOnly,
-		Secure:   c.CookieGenerator.resolveSecure(ssl),
-		SameSite: http.SameSiteStrictMode,
-		Path:     "/",
-	}
+	return c.Cookie.Generate(signedToken, ssl)
+}
 
-	if len(cookie.String()) > 4096 {
-		return nil, fmt.Errorf("cookie value too long")
-	}
-
-	return cookie, nil
+// GenerateUnsetCookie generates a cookie deletion header for clearing the captcha cookie
+func (c *Captcha) GenerateUnsetCookie(ssl *bool) *http.Cookie {
+	return c.Cookie.GenerateUnset(ssl)
 }
 
 // ValidateCookie validates a JWT captcha cookie value using the host's signing key
-func (c *Captcha) ValidateCookie(cookieValue string) (*CaptchaToken, error) {
-	return ParseAndVerifyCaptchaToken(cookieValue, []byte(c.SigningKey))
+func (c *Captcha) ValidateCookie(cookieValue string) (*jwt.Token, error) {
+	return jwt.ParseAndVerify(cookieValue, []byte(c.SigningKey))
 }
 
 // IsCaptchaSubmission checks if the body appears to be a captcha form submission
