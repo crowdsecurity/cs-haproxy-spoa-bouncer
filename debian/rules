@@ -30,7 +30,8 @@ override_dh_auto_install:
 	install -m 644 -D "lua/template.lua" "debian/$$PKG/usr/lib/$$PKG/lua/template.lua"; \
 	mkdir -p "debian/$$PKG/var/lib/$$PKG/html"; \
 	install -m 644 -D "templates/ban.html" "debian/$$PKG/var/lib/$$PKG/html/ban.html"; \
-	install -m 644 -D "templates/captcha.html" "debian/$$PKG/var/lib/$$PKG/html/captcha.html"
+	install -m 644 -D "templates/captcha.html" "debian/$$PKG/var/lib/$$PKG/html/captcha.html"; \
+	mkdir -p "debian/$$PKG/etc/crowdsec/bouncers/spoa-host.d"
 
 execute_after_dh_fixperms:
 	@BOUNCER=crowdsec-spoa-bouncer; \
