@@ -2,6 +2,10 @@
 
 This pkg provides a way to configure multiple hosts that may be using this SPOA server.
 
+Related docs:
+- Captcha configuration (providers, keys, token cookie settings): [`pkg/captcha/README.md`](../captcha/README.md)
+- Ban page templating and variables: [`internal/remediation/ban/README.md`](../../internal/remediation/ban/README.md)
+
 ### Configuration
 
 ```yaml
@@ -10,9 +14,8 @@ hosts:
     ban:
       contact_us_url: "mailto:"
     captcha:
-      site_key: "123"
-      secret_key: "456"
       provider: "hcaptcha"
+      # See pkg/captcha/README.md for full captcha settings
     appsec:
       url: "http://127.0.0.1:7422/" # optional
 ```
@@ -20,8 +23,8 @@ hosts:
 #### Keys
 
 - `host` - The host to bind the configuration to, supports wildcards
-- `ban` - The ban remediation configuration [README](../../internal/remediation/ban/README.md)
-- `captcha` - The captcha remediation configuration [README](../captcha/README.md)
+- `ban` - Ban remediation configuration: [`internal/remediation/ban/README.md`](../../internal/remediation/ban/README.md)
+- `captcha` - Captcha remediation configuration: [`pkg/captcha/README.md`](../captcha/README.md)
 - `appsec` - Optional CrowdSec AppSec validation configuration (HTTP-only)
 
 ### Notes
@@ -73,4 +76,4 @@ If no host is found for the incoming request, then the remediation will be sent 
 
 If the remediation is `captcha` and no host is found, then the remediation will be automatically changed to a `ban` since we have no way to display the captcha.
 
-This is why we recommend having a catch-all configuration for the `ban` remediation it will allow you to change the `fallback_remediation` to `allow` or provide a `contact_us_url`. As this will impact user experience if they are not able to contact anyone for help.
+This is why we recommend having a catch-all configuration for the `ban` remediation: it lets you provide a `contact_us_url` and/or tune captcha `fallback_remediation` (see the docs above), which helps user experience when a domain doesn’t match any host rule.
