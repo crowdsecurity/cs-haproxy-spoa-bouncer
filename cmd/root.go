@@ -19,7 +19,7 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/session"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/cfg"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
@@ -120,19 +120,48 @@ func Execute() error {
 		return metricsProvider.Run(ctx)
 	})
 
-	prometheus.MustRegister(csbouncer.TotalLAPICalls, csbouncer.TotalLAPIError, metrics.TotalActiveDecisions, metrics.TotalBlockedRequests, metrics.TotalProcessedRequests)
+	prometheus.MustRegister(
+		csbouncer.TotalLAPICalls,
+		csbouncer.TotalLAPIError,
+		metrics.TotalActiveDecisions,
+		metrics.TotalBlockedRequests,
+		metrics.TotalProcessedRequests,
+		metrics.IPCheckDuration,
+		metrics.CaptchaValidationDuration,
+		metrics.GeoLookupDuration,
+	)
 
 	if config.PrometheusConfig.Enabled {
-		go func() {
-			http.Handle("/metrics", promhttp.Handler())
+		promMux := http.NewServeMux()
+		promMux.Handle("/metrics", promhttp.Handler())
 
-			listenOn := net.JoinHostPort(
-				config.PrometheusConfig.ListenAddress,
-				config.PrometheusConfig.ListenPort,
-			)
+		listenOn := net.JoinHostPort(
+			config.PrometheusConfig.ListenAddress,
+			config.PrometheusConfig.ListenPort,
+		)
+
+		promServer := &http.Server{
+			Addr:    listenOn,
+			Handler: promMux,
+		}
+
+		g.Go(func() error {
 			log.Infof("Serving metrics at %s", listenOn+"/metrics")
-			log.Error(http.ListenAndServe(listenOn, nil))
-		}()
+			if err := promServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("prometheus server error: %w", err)
+			}
+			return nil
+		})
+
+		g.Go(func() error {
+			<-ctx.Done()
+			log.Info("Shutting down prometheus server...")
+			// Use background context since parent ctx is already canceled
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			//nolint:contextcheck // parent ctx is canceled, need fresh context for shutdown
+			return promServer.Shutdown(shutdownCtx)
+		})
 	}
 
 	// pprof debug endpoint for runtime profiling (memory, CPU, goroutines)
@@ -202,14 +231,19 @@ func Execute() error {
 	hostManagerLogger := log.WithField("component", "host_manager")
 	HostManager := host.NewManager(hostManagerLogger)
 
-	// Create and initialize global session manager (single GC goroutine for all hosts)
-	globalSessions := &session.Sessions{
-		SessionIdleTimeout:    "1h", // Default values
-		SessionMaxTime:        "12h",
-		SessionGarbageSeconds: 60,
+	// Create and initialize global AppSec (for use when no host is matched or as fallback)
+	var globalAppSec *appsec.AppSec
+	if config.AppSecURL != "" {
+		globalAppSec = &appsec.AppSec{
+			URL:     config.AppSecURL,
+			APIKey:  config.APIKey,
+			Timeout: config.AppSecTimeout,
+		}
+		appSecLogger := log.WithField("component", "global_appsec")
+		if err := globalAppSec.Init(appSecLogger); err != nil {
+			return fmt.Errorf("failed to initialize global AppSec: %w", err)
+		}
 	}
-	sessionLogger := log.WithField("component", "global_sessions")
-	globalSessions.Init(sessionLogger, ctx)
 
 	// Add hosts from config
 	for _, h := range config.Hosts {
@@ -227,13 +261,13 @@ func Execute() error {
 
 	// Create single SPOA directly with minimal configuration
 	spoaConfig := &spoa.SpoaConfig{
-		TcpAddr:        config.ListenTCP,
-		UnixAddr:       config.ListenUnix,
-		Dataset:        dataSet,
-		HostManager:    HostManager,
-		GeoDatabase:    &config.Geo,
-		GlobalSessions: globalSessions,
-		Logger:         spoaLogger,
+		TcpAddr:      config.ListenTCP,
+		UnixAddr:     config.ListenUnix,
+		Dataset:      dataSet,
+		HostManager:  HostManager,
+		GeoDatabase:  &config.Geo,
+		GlobalAppSec: globalAppSec,
+		Logger:       spoaLogger,
 	}
 
 	singleSpoa, err := spoa.New(spoaConfig)

@@ -10,7 +10,7 @@ import (
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/ban"
-	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation/captcha"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/captcha"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
@@ -186,6 +186,8 @@ func (h *Manager) AddHost(host *Host) {
 	if err := host.Ban.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}
+	// Initialize AppSec with only host-specific config (no global fallback)
+	// Global AppSec is handled at SPOA level
 	if err := host.AppSec.Init(host.logger); err != nil {
 		host.logger.Error(err)
 	}

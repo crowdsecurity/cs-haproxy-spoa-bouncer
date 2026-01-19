@@ -11,15 +11,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crowdsecurity/crowdsec-spoa/internal/cookie"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/captcha/cookie"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/captcha/jwt"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
-	"github.com/negasus/haproxy-spoe-go/action"
+	"github.com/dropmorepackets/haproxy-go/pkg/encoding"
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
 const (
-	Pending = "pending"
-	Valid   = "valid"
+	// Re-export constants from jwt package for backward compatibility
+	Pending = jwt.Pending
+	Valid   = jwt.Valid
 
 	// DefaultTimeout is the default HTTP timeout in seconds
 	DefaultTimeout = 5
@@ -27,15 +30,23 @@ const (
 	MaxTimeout = 300
 )
 
+// Token is a type alias for jwt.Token to provide a clean public API
+type Token = jwt.Token
+
 type Captcha struct {
-	Provider            string                 `yaml:"provider"`             // Captcha Provider
-	SecretKey           string                 `yaml:"secret_key"`           // Captcha Provider Secret Key
-	SiteKey             string                 `yaml:"site_key"`             // Captcha Provider Site Key
-	FallbackRemediation string                 `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
-	Timeout             int                    `yaml:"timeout"`              // HTTP client timeout in seconds (default: 5)
-	CookieGenerator     cookie.CookieGenerator `yaml:"cookie"`               // CookieGenerator to generate cookies from sessions
-	logger              *log.Entry             `yaml:"-"`
-	client              *http.Client           `yaml:"-"`
+	Provider            string           `yaml:"provider"`             // Captcha Provider
+	SecretKey           string           `yaml:"secret_key"`           // Captcha Provider Secret Key (for API validation)
+	SiteKey             string           `yaml:"site_key"`             // Captcha Provider Site Key
+	FallbackRemediation string           `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
+	Timeout             int              `yaml:"timeout"`              // HTTP client timeout in seconds (default: 5)
+	Cookie              cookie.Generator `yaml:"cookie"`               // Cookie configuration (HTTP attributes like Secure, HttpOnly). Do not access directly, use GenerateCookie/GenerateUnsetCookie methods
+	PendingTTL          string           `yaml:"pending_ttl"`          // TTL for pending captcha tokens (default: 30m)
+	PassedTTL           string           `yaml:"passed_ttl"`           // TTL for passed captcha tokens (default: 24h)
+	SigningKey          string           `yaml:"signing_key"`          // Key for signing JWT captcha tokens (required, minimum 32 bytes) - breaking change in 0.3.0
+	logger              *log.Entry       `yaml:"-"`
+	client              *http.Client     `yaml:"-"`
+	parsedPendingTTL    time.Duration    `yaml:"-"`
+	parsedPassedTTL     time.Duration    `yaml:"-"`
 }
 
 func (c *Captcha) Init(logger *log.Entry) error {
@@ -66,12 +77,33 @@ func (c *Captcha) Init(logger *log.Entry) error {
 		c.FallbackRemediation = "ban"
 	}
 
+	// Parse TTLs
+	if c.PendingTTL == "" {
+		c.PendingTTL = "30m"
+	}
+	if c.PassedTTL == "" {
+		c.PassedTTL = "24h"
+	}
+
+	var err error
+	c.parsedPendingTTL, err = time.ParseDuration(c.PendingTTL)
+	if err != nil {
+		c.logger.WithError(err).WithField("pending_ttl", c.PendingTTL).Warn("failed to parse pending_ttl, using default")
+		c.parsedPendingTTL = jwt.DefaultPendingTTL
+	}
+
+	c.parsedPassedTTL, err = time.ParseDuration(c.PassedTTL)
+	if err != nil {
+		c.logger.WithError(err).WithField("passed_ttl", c.PassedTTL).Warn("failed to parse passed_ttl, using default")
+		c.parsedPassedTTL = jwt.DefaultPassedTTL
+	}
+
 	if err := c.IsValid(); err != nil {
 		return err
 	}
 
-	// Initialize cookie generator (sessions are managed by SPOA, not captcha)
-	c.CookieGenerator.Init(c.logger, "crowdsec_captcha_cookie", c.SecretKey)
+	// Initialize cookie generator (cookie_secret is validated in IsValid())
+	c.Cookie.Init(c.logger, "crowdsec_captcha_cookie")
 
 	return nil
 }
@@ -94,16 +126,16 @@ func (c *Captcha) getTimeout() int {
 }
 
 // Inject key values injects the captcha provider key values into the HAProxy transaction
-func (c *Captcha) InjectKeyValues(actions *action.Actions) error {
-
-	// We check if the captcha configuration is valid for the front-end
-	if err := c.IsFrontEndValid(); err != nil {
+// Validates configuration before injecting values
+func (c *Captcha) InjectKeyValues(writer *encoding.ActionWriter) error {
+	// Validate configuration before injecting values
+	if err := c.IsValid(); err != nil {
 		return err
 	}
 
-	actions.SetVar(action.ScopeTransaction, "captcha_site_key", c.SiteKey)
-	actions.SetVar(action.ScopeTransaction, "captcha_frontend_key", providers[c.Provider].key)
-	actions.SetVar(action.ScopeTransaction, "captcha_frontend_js", providers[c.Provider].js)
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_site_key", c.SiteKey)
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_frontend_key", providers[c.Provider].key)
+	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_frontend_js", providers[c.Provider].js)
 
 	return nil
 }
@@ -113,9 +145,9 @@ type CaptchaResponse struct {
 	ErrorCodes []string `json:"error-codes"`
 }
 
-// Validate tries to validate the captcha response and sets the session status to valid if the captcha is valid
-func (c *Captcha) Validate(ctx context.Context, uuid, toParse string) (bool, error) {
-	clog := c.logger.WithField("session", uuid)
+// Validate tries to validate the captcha response and returns true if the captcha is valid
+func (c *Captcha) Validate(ctx context.Context, tokenUUID, toParse string) (bool, error) {
+	clog := c.logger.WithField("uuid", tokenUUID)
 
 	if len(toParse) == 0 {
 		clog.Warn("captcha validation called with empty request body - form may be submitting without captcha response")
@@ -134,12 +166,6 @@ func (c *Captcha) Validate(ctx context.Context, uuid, toParse string) (bool, err
 		clog.Debug("user submitted empty captcha response")
 		return false, fmt.Errorf("empty captcha response field")
 	}
-
-	// if tries := s.Get(session.CAPTCHA_TRIES); tries != nil {
-	// 	s.Set(session.CAPTCHA_TRIES, tries.(int)+1)
-	// } else {
-	// 	s.Set(session.CAPTCHA_TRIES, 1)
-	// }
 
 	body := url.Values{}
 	body.Add("secret", c.SecretKey)
@@ -231,8 +257,9 @@ func (c *Captcha) Validate(ctx context.Context, uuid, toParse string) (bool, err
 	return false, fmt.Errorf("%s", errorMsg)
 }
 
-// IsFrontEndValid checks if the captcha configuration is valid for the front-end
-func (c *Captcha) IsFrontEndValid() error {
+// IsValid checks if the captcha configuration is valid (frontend and backend)
+func (c *Captcha) IsValid() error {
+	// Frontend validation
 	if c.Provider == "" {
 		return fmt.Errorf("empty captcha provider")
 	}
@@ -250,18 +277,97 @@ func (c *Captcha) IsFrontEndValid() error {
 		return fmt.Errorf("invalid fallback remediation %s", c.FallbackRemediation)
 	}
 
-	return nil
-}
-
-// IsValid checks if the captcha configuration is valid for the back-end most notably the secret key
-func (c *Captcha) IsValid() error {
-	if err := c.IsFrontEndValid(); err != nil {
-		return err
-	}
-
+	// Backend validation
 	if c.SecretKey == "" {
 		return fmt.Errorf("empty captcha secret key")
 	}
 
+	// Require explicit signing_key configuration (breaking change in 0.3.0)
+	// This ensures proper secret management and compliance requirements
+	if c.SigningKey == "" {
+		return fmt.Errorf("signing_key is required for JWT token signing (minimum 32 bytes). This is a breaking change in 0.3.0")
+	}
+
+	// Validate signing_key meets minimum security requirements
+	if len(c.SigningKey) < 32 {
+		return fmt.Errorf("signing_key must be at least 32 bytes for security. Current length: %d bytes. Please use a cryptographically secure random key of at least 32 bytes", len(c.SigningKey))
+	}
+
 	return nil
+}
+
+// NewPendingToken creates a new pending captcha token using the host's configured TTL
+func (c *Captcha) NewPendingToken() (jwt.Token, error) {
+	tokenUUID, err := uuid.NewRandom()
+	if err != nil {
+		return jwt.Token{}, fmt.Errorf("failed to generate UUID: %w", err)
+	}
+
+	now := time.Now().Unix()
+	return jwt.Token{
+		UUID: tokenUUID.String(),
+		St:   Pending,
+		Iat:  now,
+		Exp:  now + int64(c.parsedPendingTTL.Seconds()),
+	}, nil
+}
+
+// NewPassedToken creates a new passed captcha token using the host's configured TTL
+// Reuses the UUID from the existing token for traceability
+func (c *Captcha) NewPassedToken(existingToken *jwt.Token) jwt.Token {
+	now := time.Now().Unix()
+	tokenUUID := ""
+	if existingToken != nil && existingToken.UUID != "" {
+		tokenUUID = existingToken.UUID
+	} else {
+		// Generate new UUID if none exists (shouldn't happen in normal flow)
+		newUUID, err := uuid.NewRandom()
+		if err != nil {
+			c.logger.WithError(err).Error("Failed to generate UUID for passed token")
+		} else {
+			tokenUUID = newUUID.String()
+		}
+	}
+
+	return jwt.Token{
+		UUID: tokenUUID,
+		St:   Valid,
+		Iat:  now,
+		Exp:  now + int64(c.parsedPassedTTL.Seconds()),
+	}
+}
+
+// GenerateCookie generates an HTTP cookie from a captcha token using the host's configuration
+func (c *Captcha) GenerateCookie(tok jwt.Token, ssl *bool) (*http.Cookie, error) {
+	signedToken, err := jwt.Sign(tok, []byte(c.SigningKey))
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign captcha token: %w", err)
+	}
+
+	return c.Cookie.Generate(signedToken, ssl)
+}
+
+// GenerateUnsetCookie generates a cookie deletion header for clearing the captcha cookie
+func (c *Captcha) GenerateUnsetCookie(ssl *bool) *http.Cookie {
+	return c.Cookie.GenerateUnset(ssl)
+}
+
+// ValidateCookie validates a JWT captcha cookie value using the host's signing key
+func (c *Captcha) ValidateCookie(cookieValue string) (*jwt.Token, error) {
+	return jwt.ParseAndVerify(cookieValue, []byte(c.SigningKey))
+}
+
+// IsCaptchaSubmission checks if the body appears to be a captcha form submission
+// by looking for the provider-specific response field (e.g., "g-recaptcha-response", "h-captcha-response")
+// This prevents treating unrelated form submissions as captcha validation attempts
+func (c *Captcha) IsCaptchaSubmission(body string) bool {
+	if body == "" {
+		return false
+	}
+	values, err := url.ParseQuery(body)
+	if err != nil {
+		return false
+	}
+	responseField := fmt.Sprintf("%s-response", providers[c.Provider].key)
+	return values.Has(responseField)
 }
