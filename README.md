@@ -34,6 +34,7 @@ These diagrams focus on what you configure and observe in HAProxy: when SPOE mes
 
 **Legend**
 - **SPOE message**: a request from HAProxy to the SPOA bouncer (for example `crowdsec-tcp` or `crowdsec-http-body`).
+- **SPOE group**: what HAProxy actually sends from the frontend via `http-request send-spoe-group ...`; a group can contain one or more SPOE messages.
 - **Remediation**: the decision HAProxy enforces (`allow`, `captcha`, `ban`).
 - **Transaction variables**: values the bouncer sets on the HAProxy transaction (for example `txn.crowdsec.remediation`) for ACLs, headers, Lua templates, redirects, and cookie management.
 
@@ -49,8 +50,8 @@ flowchart LR
   subgraph DataPath["Request path (per connection / request)"]
     Client["Client"] --> HAProxy["HAProxy"]
     HAProxy -->|"SPOE: crowdsec-tcp (session)"| SPOA["SPOA bouncer"]
-    HAProxy -->|"SPOE: crowdsec-http-body (HTTP)"| SPOA
-    HAProxy -->|"SPOE: crowdsec-http-no-body (HTTP)"| SPOA
+    HAProxy -->|"SPOE group: crowdsec-http-body"| SPOA
+    HAProxy -->|"SPOE group: crowdsec-http-no-body"| SPOA
     SPOA --> Dataset
     SPOA -->|"txn vars (remediation + metadata)"| HAProxy
     HAProxy -->|"allow"| Backend["Backend"]
@@ -103,9 +104,9 @@ sequenceDiagram
 
     Client->>HAProxy: HTTP request
     alt Body within limit
-        HAProxy->>SPOA: crowdsec-http-body (host + method + headers + body)
+        HAProxy->>SPOA: SPOE group crowdsec-http-body<br/>(host + method + headers + body)
     else Body too large / not needed
-        HAProxy->>SPOA: crowdsec-http-no-body (host + method + headers)
+        HAProxy->>SPOA: SPOE group crowdsec-http-no-body<br/>(host + method + headers)
     end
     SPOA->>Policy: Match host rules (Host header / SNI)
     Policy-->>SPOA: ban/captcha settings + AppSec toggles
@@ -141,13 +142,13 @@ sequenceDiagram
 
     Note over Client,HAProxy: Request triggers captcha remediation
     Client->>HAProxy: HTTP request
-    HAProxy->>SPOA: crowdsec-http-no-body (GET)
+    HAProxy->>SPOA: SPOE group crowdsec-http-no-body (GET)
     SPOA-->>HAProxy: txn vars (remediation=captcha, captcha params, captcha cookie pending)
     HAProxy-->>Client: 200 captcha page (Lua)
 
     Note over Client,HAProxy: User solves captcha and submits the form
     Client->>HAProxy: POST captcha submission (form-encoded)
-    HAProxy->>SPOA: crowdsec-http-body (POST + body)
+    HAProxy->>SPOA: SPOE group crowdsec-http-body (POST + body)
     SPOA->>Provider: Verify captcha response
     Provider-->>SPOA: valid/invalid
 
@@ -155,7 +156,7 @@ sequenceDiagram
         SPOA-->>HAProxy: remediation=allow + redirect=1 + updated captcha cookie
         HAProxy-->>Client: 302 redirect + Set-Cookie
         Client->>HAProxy: Follow redirect (includes captcha cookie)
-        HAProxy->>SPOA: crowdsec-http-no-body (GET)
+        HAProxy->>SPOA: SPOE group crowdsec-http-no-body (GET)
         SPOA-->>HAProxy: remediation=allow (cookie validated)
         HAProxy->>Backend: Forward request
         Backend-->>Client: Response
@@ -220,9 +221,9 @@ sequenceDiagram
     alt HTTP Request
         Note over HAProxy,SPOA: HTTP Request Processing
         alt Body within limit
-            HAProxy->>SPOA: crowdsec-http-body message<br/>(includes body)
+            HAProxy->>SPOA: SPOE group crowdsec-http-body<br/>(message crowdsec-http-body, includes body)
         else Body too large / not needed
-            HAProxy->>SPOA: crowdsec-http-no-body message
+            HAProxy->>SPOA: SPOE group crowdsec-http-no-body<br/>(message crowdsec-http-no-body)
         end
         SPOA->>Dataset: Check IP + Host
         Dataset-->>SPOA: IP remediation + metadata
@@ -248,7 +249,7 @@ sequenceDiagram
 
             Note over Client,HAProxy: Client submits captcha solution (POST)
             Client->>HAProxy: Captcha form submission
-            HAProxy->>SPOA: crowdsec-http-body message<br/>(includes body)
+            HAProxy->>SPOA: SPOE group crowdsec-http-body<br/>(message crowdsec-http-body, includes body)
             SPOA-->>HAProxy: remediation allow/captcha + redirect/cookie vars
 
             alt Captcha Valid
@@ -319,7 +320,7 @@ frontend www
 
 Use a dedicated SPOE section (`crowdsec.cfg`) to declare the messages HAProxy sends and which request variables are exported. The provided sample uses:
 - `crowdsec-tcp` (event `on-client-session`) for early, connection-level IP decisions
-- `crowdsec-http-body` / `crowdsec-http-no-body` (sent via groups) for per-request HTTP inspection, with optional body forwarding
+- `crowdsec-http-body` / `crowdsec-http-no-body` (sent via SPOE groups with the same names) for per-request HTTP inspection, with optional body forwarding
 
 For complete, working examples (including optional request-body forwarding, captcha redirects, and cookie management), see [`config/haproxy.cfg`](config/haproxy.cfg) and [`config/crowdsec.cfg`](config/crowdsec.cfg).
 
