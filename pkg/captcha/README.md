@@ -46,3 +46,7 @@ hosts:
 ### Notes
 
 Captcha configuration is only classed as invalid if the values are missing or the provider is not supported.
+
+Captcha validation requires the form body to be forwarded to the bouncer; see the HAProxy examples:
+- [`config/haproxy.cfg`](../../config/haproxy.cfg)
+- [`config/crowdsec.cfg`](../../config/crowdsec.cfg)
