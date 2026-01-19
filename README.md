@@ -42,22 +42,16 @@ These diagrams focus on what you configure and observe in HAProxy: when SPOE mes
 
 ```mermaid
 flowchart LR
-  subgraph Background["Background (continuous)"]
-    CrowdSec["CrowdSec LAPI"] -->|"decision stream"| Bouncer["go-cs-bouncer"]
-    Bouncer -->|"updates"| Dataset[("Decision dataset")]
-  end
+  Client["Client"] --> HAProxy["HAProxy"]
 
-  subgraph DataPath["Request path (per connection / request)"]
-    Client["Client"] --> HAProxy["HAProxy"]
-    HAProxy -->|"SPOE: crowdsec-tcp (session)"| SPOA["SPOA bouncer"]
-    HAProxy -->|"SPOE group: crowdsec-http-body"| SPOA
-    HAProxy -->|"SPOE group: crowdsec-http-no-body"| SPOA
-    SPOA --> Dataset
-    SPOA -->|"txn vars (remediation + metadata)"| HAProxy
-    HAProxy -->|"allow"| Backend["Backend"]
-    HAProxy -->|"captcha / ban"| Lua["Lua templates"]
-    Lua --> Client
-  end
+  HAProxy -->|"crowdsec-tcp"| SPOA["SPOA bouncer"]
+  HAProxy -->|"crowdsec-http-no-body"| SPOA
+  HAProxy -->|"crowdsec-http-body"| SPOA
+  SPOA -->|"txn.crowdsec.*"| HAProxy
+
+  HAProxy -->|"allow"| Backend["Backend"]
+  HAProxy -->|"captcha / ban"| Lua["Lua templates"]
+  Lua --> Client
 ```
 
 #### 1) Background: decisions sync (continuous)
