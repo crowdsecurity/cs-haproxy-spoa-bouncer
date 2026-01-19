@@ -14,7 +14,7 @@ A lightweight Stream Processing Offload Agent (SPOA) that contacts the CrowdSec 
 - **Real-time enforcement** – Streams decisions from CrowdSec via the Go bouncer SDK so ban/captcha/allow changes are visible within seconds.
 - **HTTP and TCP coverage** – Handles the `crowdsec-ip`, `crowdsec-http`, and `crowdsec-tcp` SPOE messages to protect both web frontends and raw TCP services.
 - **Host-aware responses** – Each host entry can customize ban pages, captcha providers, and logging while sharing the same SPOA worker.
-- **Captcha challenges built in** – hCaptcha, reCAPTCHA, and Cloudflare Turnstile are supported with signed cookies so solved challenges can be verified without round-tripping to the provider.
+- **Captcha challenges built in** – hCaptcha, reCAPTCHA, and Cloudflare Turnstile are supported with signed, stateless cookies so solved challenges can be verified without round-tripping to the provider.
 - **Memory-efficient dataset** – IPs live in a lock-free map and CIDRs are stored in a [BART](https://github.com/gaissmai/bart) radix tree, which keeps lookups in the tens of nanoseconds.
 - **Optional GeoIP tagging** – Plug in MaxMind ASN/City databases to enrich decisions with ISO country codes for templating or ACLs.
 - **Operational visibility** – Structured logging, Prometheus counters, and an optional pprof endpoint make it easy to monitor and debug the bouncer.
@@ -188,7 +188,7 @@ sequenceDiagram
 **Notes**
 - `crowdsec-ip` runs first so every transaction carries an initial decision, even if HTTP parsing fails later.
 - Host rules can override remediations (for example, force captcha on specific domains) and decide whether captcha cookies should be issued/cleared.
-- Captcha state is carried in a signed cookie; HAProxy can set/clear it using transaction variables, while Lua focuses on rendering pages.
+- Captcha state is stateless and carried in a signed token cookie; HAProxy can set/clear it using transaction variables, while Lua focuses on rendering pages.
 - AppSec validation is optional; when enabled, HTTP requests can be forwarded to CrowdSec AppSec and the result can override the remediation.
 
 <details>
