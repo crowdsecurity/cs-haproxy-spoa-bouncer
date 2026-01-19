@@ -41,12 +41,14 @@ These diagrams focus on what you configure and observe in HAProxy: when SPOE mes
 #### Overview (one page)
 
 ```mermaid
-flowchart LR
+flowchart TD
   Client["Client"] --> HAProxy["HAProxy"]
 
-  HAProxy -->|"crowdsec-tcp"| SPOA["SPOA bouncer"]
-  HAProxy -->|"crowdsec-http-no-body"| SPOA
-  HAProxy -->|"crowdsec-http-body"| SPOA
+  HAProxy -->|"SPOE: crowdsec-tcp"| SPOA["SPOA bouncer"]
+  SPOA -->|"txn.crowdsec.*"| HAProxy
+
+  HAProxy -->|"SPOE group: crowdsec-http-no-body"| SPOA
+  HAProxy -->|"SPOE group: crowdsec-http-body"| SPOA
   SPOA -->|"txn.crowdsec.*"| HAProxy
 
   HAProxy -->|"allow"| Backend["Backend"]
