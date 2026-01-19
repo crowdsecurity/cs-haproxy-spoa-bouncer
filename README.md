@@ -45,7 +45,6 @@ sequenceDiagram
     participant Client
     participant HAProxy
     participant SPOA as SPOA bouncer
-    participant Lua as Lua templates
     participant Backend
 
     Note over Client,HAProxy: Client connects
@@ -68,8 +67,8 @@ sequenceDiagram
         HAProxy->>Backend: Forward request
         Backend-->>Client: Response
     else remediation = captcha or ban
-        HAProxy->>Lua: Render response page
-        Lua-->>Client: Response
+        HAProxy->>HAProxy: Render response page (Lua)
+        HAProxy-->>Client: Response
     end
 ```
 
