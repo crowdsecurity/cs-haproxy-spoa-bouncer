@@ -96,17 +96,28 @@ Add the SPOE filter and Lua helpers to your frontend. The config files in `confi
 ```haproxy
 frontend www
     bind :80
+    unique-id-format %[uuid()]
+    unique-id-header X-Unique-ID
     filter spoe engine crowdsec config /etc/haproxy/crowdsec.cfg
+
+    acl body_within_limit req.body_size -m int le 51200
+    http-request send-spoe-group crowdsec crowdsec-http-body if body_within_limit || !{ req.body_size -m found }
+    http-request send-spoe-group crowdsec crowdsec-http-no-body if !body_within_limit { req.body_size -m found }
+
+    http-request redirect code 302 location %[url] if { var(txn.crowdsec.remediation) -m str "allow" } { var(txn.crowdsec.redirect) -m found }
 
     http-request lua.crowdsec_handle if { var(txn.crowdsec.remediation) -m str "captcha" }
     http-request lua.crowdsec_handle if { var(txn.crowdsec.remediation) -m str "ban" }
+
+    http-after-response set-header Set-Cookie %[var(txn.crowdsec.captcha_cookie)] if { var(txn.crowdsec.captcha_status) -m found } { var(txn.crowdsec.captcha_cookie) -m found }
+    http-after-response set-header Set-Cookie %[var(txn.crowdsec.captcha_cookie)] if { var(txn.crowdsec.captcha_cookie) -m found } !{ var(txn.crowdsec.captcha_status) -m found }
 
     default_backend app
 ```
 
 Use a dedicated SPOE section (`crowdsec.cfg`) to declare the messages HAProxy sends and which request variables are exported. The provided sample uses:
 - `crowdsec-tcp` (event `on-client-session`) for early, connection-level IP decisions
-- `crowdsec-http-body` / `crowdsec-http-no-body` (sent via SPOE groups with the same names) for per-request HTTP inspection, with optional body forwarding
+- `crowdsec-http-body` / `crowdsec-http-no-body` (sent via SPOE groups with the same names) for per-request HTTP inspection, with conditional body forwarding
 
 Important: captcha validation needs the request body (form-encoded POST). Ensure your frontend sends captcha submissions via the `crowdsec-http-body` group (see `http-request send-spoe-group ... crowdsec-http-body` in the examples).
 
