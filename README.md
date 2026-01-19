@@ -41,19 +41,36 @@ These diagrams focus on what you configure and observe in HAProxy: when SPOE mes
 #### Overview (one page)
 
 ```mermaid
-flowchart TD
-  Client["Client"] --> HAProxy["HAProxy"]
+sequenceDiagram
+    participant Client
+    participant HAProxy
+    participant SPOA as SPOA bouncer
+    participant Lua as Lua templates
+    participant Backend
 
-  HAProxy -->|"SPOE: crowdsec-tcp"| SPOA["SPOA bouncer"]
-  SPOA -->|"txn.crowdsec.*"| HAProxy
+    Note over Client,HAProxy: Client connects
+    Client->>HAProxy: Connect (TCP)
 
-  HAProxy -->|"SPOE group: crowdsec-http-no-body"| SPOA
-  HAProxy -->|"SPOE group: crowdsec-http-body"| SPOA
-  SPOA -->|"txn.crowdsec.*"| HAProxy
+    Note over HAProxy,SPOA: Early decision (session-level)
+    HAProxy->>SPOA: SPOE: crowdsec-tcp
+    SPOA-->>HAProxy: Set txn.crowdsec.* (remediation baseline)
 
-  HAProxy -->|"allow"| Backend["Backend"]
-  HAProxy -->|"captcha / ban"| Lua["Lua templates"]
-  Lua --> Client
+    Note over Client,HAProxy: HTTP request (per request)
+    Client->>HAProxy: HTTP request
+    alt body not sent
+        HAProxy->>SPOA: SPOE group: crowdsec-http-no-body
+    else body sent (required for captcha POST)
+        HAProxy->>SPOA: SPOE group: crowdsec-http-body
+    end
+    SPOA-->>HAProxy: Set txn.crowdsec.* (final remediation + metadata)
+
+    alt remediation = allow
+        HAProxy->>Backend: Forward request
+        Backend-->>Client: Response
+    else remediation = captcha or ban
+        HAProxy->>Lua: Render response page
+        Lua-->>Client: Response
+    end
 ```
 
 #### 1) Background: decisions sync (continuous)
