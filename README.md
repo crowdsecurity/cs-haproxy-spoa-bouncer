@@ -12,7 +12,7 @@ A lightweight Stream Processing Offload Agent (SPOA) that contacts the CrowdSec 
 ## At a Glance
 
 - **Real-time enforcement** – Streams decisions from CrowdSec via the Go bouncer SDK so ban/captcha/allow changes are visible within seconds.
-- **HTTP and TCP coverage** – Handles the `crowdsec-ip`, `crowdsec-http`, and `crowdsec-tcp` SPOE messages to protect both web frontends and raw TCP services.
+- **HTTP and TCP coverage** – Supports early IP checks via `crowdsec-tcp` and HTTP inspection via `crowdsec-http-body` / `crowdsec-http-no-body` to protect both web frontends and raw TCP services.
 - **Host-aware responses** – Each host entry can customize ban pages, captcha providers, and logging while sharing the same SPOA worker.
 - **Captcha challenges built in** – hCaptcha, reCAPTCHA, and Cloudflare Turnstile are supported with signed, stateless cookies so solved challenges can be verified without round-tripping to the provider.
 - **Memory-efficient dataset** – IPs live in a lock-free map and CIDRs are stored in a [BART](https://github.com/gaissmai/bart) radix tree, which keeps lookups in the tens of nanoseconds.
@@ -33,7 +33,7 @@ The bouncer is a single binary with three key loops:
 These diagrams focus on what you configure and observe in HAProxy: when SPOE messages are sent, what the bouncer returns, and where HAProxy takes action (render a page, set cookies, forward upstream).
 
 **Legend**
-- **SPOE message**: a request from HAProxy to the SPOA bouncer (for example `crowdsec-ip` or `crowdsec-http`).
+- **SPOE message**: a request from HAProxy to the SPOA bouncer (for example `crowdsec-tcp` or `crowdsec-http-body`).
 - **Remediation**: the decision HAProxy enforces (`allow`, `captcha`, `ban`).
 - **Transaction variables**: values the bouncer sets on the HAProxy transaction (for example `txn.crowdsec.remediation`) for ACLs, headers, Lua templates, redirects, and cookie management.
 
@@ -48,9 +48,9 @@ flowchart LR
 
   subgraph DataPath["Request path (per connection / request)"]
     Client["Client"] --> HAProxy["HAProxy"]
-    HAProxy -->|"SPOE: crowdsec-ip"| SPOA["SPOA bouncer"]
-    HAProxy -->|"SPOE: crowdsec-http (HTTP)"| SPOA
-    HAProxy -->|"SPOE: crowdsec-tcp (TCP)"| SPOA
+    HAProxy -->|"SPOE: crowdsec-tcp (session)"| SPOA["SPOA bouncer"]
+    HAProxy -->|"SPOE: crowdsec-http-body (HTTP)"| SPOA
+    HAProxy -->|"SPOE: crowdsec-http-no-body (HTTP)"| SPOA
     SPOA --> Dataset
     SPOA -->|"txn vars (remediation + metadata)"| HAProxy
     HAProxy -->|"allow"| Backend["Backend"]
@@ -74,7 +74,7 @@ sequenceDiagram
     end
 ```
 
-#### 2) Connection start: `crowdsec-ip` (always)
+#### 2) Connection start: `crowdsec-tcp` (always)
 
 ```mermaid
 sequenceDiagram
@@ -83,13 +83,13 @@ sequenceDiagram
     participant Dataset as Decision dataset
 
     Note over HAProxy,SPOA: Runs once per client session/connection
-    HAProxy->>SPOA: crowdsec-ip (source IP)
+    HAProxy->>SPOA: crowdsec-tcp (source IP)
     SPOA->>Dataset: Lookup source IP
     Dataset-->>SPOA: remediation (ban/allow/captcha)
     SPOA-->>HAProxy: Set txn vars (remediation baseline)
 ```
 
-#### 3) HTTP request: `crowdsec-http` (per request)
+#### 3) HTTP request: `crowdsec-http-body` / `crowdsec-http-no-body` (per request)
 
 ```mermaid
 sequenceDiagram
@@ -102,7 +102,11 @@ sequenceDiagram
     participant Backend
 
     Client->>HAProxy: HTTP request
-    HAProxy->>SPOA: crowdsec-http (host + method + headers + optional body)
+    alt Body within limit
+        HAProxy->>SPOA: crowdsec-http-body (host + method + headers + body)
+    else Body too large / not needed
+        HAProxy->>SPOA: crowdsec-http-no-body (host + method + headers)
+    end
     SPOA->>Policy: Match host rules (Host header / SNI)
     Policy-->>SPOA: ban/captcha settings + AppSec toggles
     SPOA->>Dataset: Lookup source IP / CIDR / country
@@ -137,13 +141,13 @@ sequenceDiagram
 
     Note over Client,HAProxy: Request triggers captcha remediation
     Client->>HAProxy: HTTP request
-    HAProxy->>SPOA: crowdsec-http (GET)
+    HAProxy->>SPOA: crowdsec-http-no-body (GET)
     SPOA-->>HAProxy: txn vars (remediation=captcha, captcha params, captcha cookie pending)
     HAProxy-->>Client: 200 captcha page (Lua)
 
     Note over Client,HAProxy: User solves captcha and submits the form
     Client->>HAProxy: POST captcha submission (form-encoded)
-    HAProxy->>SPOA: crowdsec-http (POST + body)
+    HAProxy->>SPOA: crowdsec-http-body (POST + body)
     SPOA->>Provider: Verify captcha response
     Provider-->>SPOA: valid/invalid
 
@@ -151,7 +155,7 @@ sequenceDiagram
         SPOA-->>HAProxy: remediation=allow + redirect=1 + updated captcha cookie
         HAProxy-->>Client: 302 redirect + Set-Cookie
         Client->>HAProxy: Follow redirect (includes captcha cookie)
-        HAProxy->>SPOA: crowdsec-http (GET)
+        HAProxy->>SPOA: crowdsec-http-no-body (GET)
         SPOA-->>HAProxy: remediation=allow (cookie validated)
         HAProxy->>Backend: Forward request
         Backend-->>Client: Response
@@ -161,7 +165,7 @@ sequenceDiagram
     end
 ```
 
-#### 5) TCP request: `crowdsec-tcp` (per request)
+#### 5) TCP enforcement: `crowdsec-tcp` (session-level)
 
 ```mermaid
 sequenceDiagram
@@ -171,8 +175,8 @@ sequenceDiagram
     participant Dataset as Decision dataset
     participant Backend
 
-    Client->>HAProxy: TCP connection/request
-    HAProxy->>SPOA: crowdsec-tcp (on-frontend-tcp-request)
+    Client->>HAProxy: TCP connection
+    HAProxy->>SPOA: crowdsec-tcp (on-client-session)
     SPOA->>Dataset: Lookup source IP
     Dataset-->>SPOA: remediation (ban/allow)
     SPOA-->>HAProxy: remediation
@@ -186,7 +190,7 @@ sequenceDiagram
 ```
 
 **Notes**
-- `crowdsec-ip` runs first so every transaction carries an initial decision, even if HTTP parsing fails later.
+- `crowdsec-tcp` runs first so every connection carries an initial decision, even if HTTP parsing fails later.
 - Host rules can override remediations (for example, force captcha on specific domains) and decide whether captcha cookies should be issued/cleared.
 - Captcha state is stateless and carried in a signed token cookie; HAProxy can set/clear it using transaction variables, while Lua focuses on rendering pages.
 - AppSec validation is optional; when enabled, HTTP requests can be forwarded to CrowdSec AppSec and the result can override the remediation.
@@ -208,14 +212,18 @@ sequenceDiagram
     Client->>HAProxy: HTTP or TCP Request
     
     Note over HAProxy,SPOA: Client Connection Established
-    HAProxy->>SPOA: crowdsec-ip message<br/>(on-client-session)
+    HAProxy->>SPOA: crowdsec-tcp message<br/>(on-client-session)
     SPOA->>Dataset: Check IP remediation
     Dataset-->>SPOA: remediation (ban/allow/captcha)
     SPOA-->>HAProxy: Set txn.crowdsec.remediation
     
     alt HTTP Request
         Note over HAProxy,SPOA: HTTP Request Processing
-        HAProxy->>SPOA: crowdsec-http message<br/>(on-frontend-http-request)
+        alt Body within limit
+            HAProxy->>SPOA: crowdsec-http-body message<br/>(includes body)
+        else Body too large / not needed
+            HAProxy->>SPOA: crowdsec-http-no-body message
+        end
         SPOA->>Dataset: Check IP + Host
         Dataset-->>SPOA: IP remediation + metadata
         
@@ -240,7 +248,7 @@ sequenceDiagram
 
             Note over Client,HAProxy: Client submits captcha solution (POST)
             Client->>HAProxy: Captcha form submission
-            HAProxy->>SPOA: crowdsec-http message<br/>(includes body)
+            HAProxy->>SPOA: crowdsec-http-body message<br/>(includes body)
             SPOA-->>HAProxy: remediation allow/captcha + redirect/cookie vars
 
             alt Captcha Valid
@@ -253,12 +261,7 @@ sequenceDiagram
             Backend-->>Client: 200 OK
         end
     else TCP Request
-        Note over HAProxy,SPOA: TCP Request Processing
-        HAProxy->>SPOA: crowdsec-tcp message<br/>(on-frontend-tcp-request)
-        SPOA->>Dataset: Check IP remediation
-        Dataset-->>SPOA: IP remediation
-        SPOA-->>HAProxy: Set remediation
-        
+        Note over HAProxy: TCP uses the session decision from crowdsec-tcp
         alt Remediation = ban
             HAProxy-->>Client: Close connection
         else Remediation = allow
@@ -314,7 +317,9 @@ frontend www
     default_backend app
 ```
 
-Use a dedicated SPOE section (`crowdsec.cfg`) to declare the messages you want HAProxy to send (`crowdsec-ip`, `crowdsec-http`, `crowdsec-tcp`) and which request variables should be exported; the provided sample covers the mandatory ones.
+Use a dedicated SPOE section (`crowdsec.cfg`) to declare the messages HAProxy sends and which request variables are exported. The provided sample uses:
+- `crowdsec-tcp` (event `on-client-session`) for early, connection-level IP decisions
+- `crowdsec-http-body` / `crowdsec-http-no-body` (sent via groups) for per-request HTTP inspection, with optional body forwarding
 
 For complete, working examples (including optional request-body forwarding, captcha redirects, and cookie management), see [`config/haproxy.cfg`](config/haproxy.cfg) and [`config/crowdsec.cfg`](config/crowdsec.cfg).
 
