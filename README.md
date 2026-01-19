@@ -108,6 +108,7 @@ sequenceDiagram
     else Body too large / not needed
         HAProxy->>SPOA: SPOE group crowdsec-http-no-body<br/>(host + method + headers)
     end
+    Note over HAProxy,SPOA: Captcha form submissions must use crowdsec-http-body<br/>(validation needs the request body)
     SPOA->>Policy: Match host rules (Host header / SNI)
     Policy-->>SPOA: ban/captcha settings + AppSec toggles
     SPOA->>Dataset: Lookup source IP / CIDR / country
@@ -149,6 +150,7 @@ sequenceDiagram
     Note over Client,HAProxy: User solves captcha and submits the form
     Client->>HAProxy: POST captcha submission (form-encoded)
     HAProxy->>SPOA: SPOE group crowdsec-http-body (POST + body)
+    Note over HAProxy,SPOA: Body forwarding is required for captcha validation
     SPOA->>Provider: Verify captcha response
     Provider-->>SPOA: valid/invalid
 
@@ -194,6 +196,7 @@ sequenceDiagram
 - `crowdsec-tcp` runs first so every connection carries an initial decision, even if HTTP parsing fails later.
 - Host rules can override remediations (for example, force captcha on specific domains) and decide whether captcha cookies should be issued/cleared.
 - Captcha state is stateless and carried in a signed token cookie; HAProxy can set/clear it using transaction variables, while Lua focuses on rendering pages.
+- Captcha validation requires the form body; ensure captcha POSTs are sent via the `crowdsec-http-body` SPOE group.
 - AppSec validation is optional; when enabled, HTTP requests can be forwarded to CrowdSec AppSec and the result can override the remediation.
 
 <details>
@@ -321,6 +324,8 @@ frontend www
 Use a dedicated SPOE section (`crowdsec.cfg`) to declare the messages HAProxy sends and which request variables are exported. The provided sample uses:
 - `crowdsec-tcp` (event `on-client-session`) for early, connection-level IP decisions
 - `crowdsec-http-body` / `crowdsec-http-no-body` (sent via SPOE groups with the same names) for per-request HTTP inspection, with optional body forwarding
+
+Important: captcha validation needs the request body (form-encoded POST). Ensure your frontend sends captcha submissions via the `crowdsec-http-body` group (see `http-request send-spoe-group ... crowdsec-http-body` in the examples).
 
 For complete, working examples (including optional request-body forwarding, captcha redirects, and cookie management), see [`config/haproxy.cfg`](config/haproxy.cfg) and [`config/crowdsec.cfg`](config/crowdsec.cfg).
 
