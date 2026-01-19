@@ -196,4 +196,3 @@ docker build -t crowdsecurity/spoa-bouncer .
 | Argument | Default | Description |
 |----------|---------|-------------|
 | GOVERSION | 1.25 | Go version for build stage |
-
