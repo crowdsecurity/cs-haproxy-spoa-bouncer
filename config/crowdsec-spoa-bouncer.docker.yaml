@@ -25,6 +25,10 @@ listen_tcp: ${LISTEN_TCP}
 #appsec_url: ${APPSEC_URL}
 #appsec_timeout: ${APPSEC_TIMEOUT}
 
+## Host configuration directory
+## Mount your per-host config files here (*.yaml)
+hosts_dir: ${HOSTS_DIR}
+
 ## Prometheus metrics endpoint
 prometheus:
   enabled: ${PROMETHEUS_ENABLED}
