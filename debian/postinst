@@ -19,7 +19,7 @@ systemctl --quiet is-enabled "$SERVICE" || systemctl unmask "$SERVICE" && system
 set_local_lapi_url 'CROWDSEC_LAPI_URL'
 
 if ! getent passwd crowdsec-spoa >/dev/null; then
-    adduser crowdsec-spoa --system --group --comment "crowdsec haproxy spoa bouncer"
+    adduser --system --group --no-create-home --shell /sbin/nologin crowdsec-spoa
 fi
 
 # Set config file group ownership and permissions
