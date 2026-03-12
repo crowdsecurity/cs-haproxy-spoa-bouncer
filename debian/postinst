@@ -30,6 +30,13 @@ if [ -f "$CONFIG" ]; then
     chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
 fi
 
+# Set hosts directory permissions (read-only for crowdsec-spoa user)
+HOSTS_DIR="/etc/crowdsec/bouncers/spoa-host.d"
+if [ -d "$HOSTS_DIR" ]; then
+    chown root:crowdsec-spoa "$HOSTS_DIR" 2>/dev/null || true
+    chmod 750 "$HOSTS_DIR" 2>/dev/null || true
+fi
+
 if [ -d "/etc/haproxy" ]; then
     cp /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
 fi
