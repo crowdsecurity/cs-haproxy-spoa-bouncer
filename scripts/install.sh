@@ -29,6 +29,12 @@ gen_config_file() {
     (umask 177 && API_KEY="$API_KEY" envsubst '$API_KEY' <"./config/$CONFIG_FILE" > "$CONFIG")
 }
 
+create_user() {
+    if ! getent passwd crowdsec-spoa >/dev/null; then
+        adduser --system --group --no-create-home --shell /sbin/nologin crowdsec-spoa
+    fi
+}
+
 install_bouncer() {
     if [ ! -f "$BIN_PATH" ]; then
         msg err "$BIN_PATH not found, exiting."
@@ -44,6 +50,7 @@ install_bouncer() {
     # shellcheck disable=SC2016
     CFG=${CONFIG_DIR} BIN=${BIN_PATH_INSTALLED} envsubst '$CFG $BIN' <"./config/$SERVICE" >"$SYSTEMD_PATH_FILE"
     systemctl daemon-reload
+    create_user
     gen_apikey
     gen_config_file
 }
