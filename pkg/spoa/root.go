@@ -514,7 +514,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	if matchedHost == nil {
 		appSec, timeout, alwaysSend := s.getAppSecConfig(nil)
 		if appSec != nil && shouldRunAppSec(r, alwaysSend) {
-			r = s.validateWithAppSec(ctx, msgData, nil, appSec, r, timeout)
+			r, _ = s.validateWithAppSec(ctx, msgData, nil, appSec, r, timeout)
 		}
 		return
 	}
@@ -537,10 +537,15 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	// Validate with AppSec if configured
 	appSec, timeout, alwaysSend := s.getAppSecConfig(matchedHost)
 	if appSec != nil && shouldRunAppSec(r, alwaysSend) {
-		r = s.validateWithAppSec(ctx, msgData, matchedHost, appSec, r, timeout)
-		// If AppSec returns ban, inject ban values
-		if r == remediation.Ban {
+		var challengeData *appsec.AppSecChallengeData
+		r, challengeData = s.validateWithAppSec(ctx, msgData, matchedHost, appSec, r, timeout)
+		switch r {
+		case remediation.Ban:
 			matchedHost.Ban.InjectKeyValues(writer)
+		case remediation.Challenge:
+			if challengeData != nil {
+				injectChallengeVars(writer, challengeData)
+			}
 		}
 	}
 }
@@ -566,8 +571,8 @@ func shouldRunAppSec(r remediation.Remediation, alwaysSend bool) bool {
 	return r < remediation.Captcha || alwaysSend
 }
 
-// validateWithAppSec performs AppSec validation and returns the remediation
-// Returns the more restrictive remediation between the current remediation and AppSec result
+// validateWithAppSec performs AppSec validation and returns the remediation.
+// When AppSec issues a challenge the second return value carries the page content.
 func (s *Spoa) validateWithAppSec(
 	ctx context.Context,
 	msgData *HTTPMessageData,
@@ -575,10 +580,9 @@ func (s *Spoa) validateWithAppSec(
 	appSecToUse *appsec.AppSec,
 	currentRemediation remediation.Remediation,
 	requestTimeout time.Duration,
-) remediation.Remediation {
+) (remediation.Remediation, *appsec.AppSecChallengeData) {
 	appSecReq := msgData.buildAppSecRequest()
 
-	// Create logger with host context
 	logger := s.logger
 	if appSecReq.Host != "" {
 		logger = logger.WithField("host", appSecReq.Host)
@@ -587,19 +591,17 @@ func (s *Spoa) validateWithAppSec(
 		logger = logger.WithField("matched_host", matchedHost.Host)
 	}
 
-	// Validate with AppSec - derive context from handler so requests cancel on shutdown
 	appSecCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
-	appSecRemediation, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
+	appSecRemediation, challengeData, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
 	if err != nil {
 		logger.WithError(err).Warn("AppSec validation failed, using original remediation")
-		return currentRemediation
+		return currentRemediation, nil
 	}
 
 	logger.WithField("remediation", appSecRemediation.String()).Debug("AppSec validation result")
 
-	// Track AppSec block metrics
 	if appSecRemediation > remediation.Allow && appSecReq.RemoteIP != "" {
 		if ipAddr, parseErr := netip.ParseAddr(appSecReq.RemoteIP); parseErr == nil {
 			ipType := "ipv4"
@@ -610,14 +612,25 @@ func (s *Spoa) validateWithAppSec(
 		}
 	}
 
-	// Return the more restrictive remediation (never downgrade security)
 	if appSecRemediation > currentRemediation {
 		if appSecRemediation == remediation.Ban && matchedHost == nil {
 			logger.Warn("AppSec returned ban but no host matched - remediation set but ban values not injected")
 		}
-		return appSecRemediation
+		return appSecRemediation, challengeData
 	}
-	return currentRemediation
+	return currentRemediation, nil
+}
+
+// injectChallengeVars sets the SPOE transaction variables HAProxy Lua needs to
+// serve a challenge response. The challenge_body may be up to ~200 KB (obfuscated
+// JS embedded in HTML); ensure max-frame-size in crowdsec.cfg is at least 262144.
+func injectChallengeVars(writer *encoding.ActionWriter, cd *appsec.AppSecChallengeData) {
+	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_body", cd.Body)
+	_ = writer.SetInt32(encoding.VarScopeTransaction, "challenge_status", int32(cd.StatusCode))
+	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_content_type", cd.ContentType)
+	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_csp", cd.CSP)
+	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_cache_control", cd.CacheControl)
+	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_cookies", strings.Join(cd.Cookies, "\n"))
 }
 
 // buildAppSecRequest constructs an AppSecRequest from HTTPMessageData
