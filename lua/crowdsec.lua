@@ -113,46 +113,11 @@ function runtime.Handle(txn)
     reply:add_header("cache-control", "no-cache")
     reply:add_header("cache-control", "no-store")
 
-    -- NOTE: "allow" remediation with redirects is now handled natively by HAProxy
-    -- This Lua handler is only called for "captcha", "ban", and "challenge" remediations
+    -- NOTE: "allow" remediation with redirects is now handled natively by HAProxy.
+    -- "challenge" is handled by routing to the bouncer challenge HTTP server (no Lua needed).
+    -- This Lua handler is only called for "captcha" and "ban" remediations.
     if remediation == "allow" then
         runtime.logger.warning("Lua handler called for 'allow' remediation - this should not happen with native redirects")
-        return
-    end
-
-    if remediation == "challenge" then
-        local body         = get_txn_var(txn, "crowdsec.challenge_body")
-        local status       = get_txn_var(txn, "crowdsec.challenge_status")
-        local content_type = get_txn_var(txn, "crowdsec.challenge_content_type")
-        local csp          = get_txn_var(txn, "crowdsec.challenge_csp")
-        local cache_ctrl   = get_txn_var(txn, "crowdsec.challenge_cache_control")
-        local cookies_raw  = get_txn_var(txn, "crowdsec.challenge_cookies")
-
-        -- challenge_status is an int32 SPOE var; handle both number and string
-        local s = type(status) == "number" and status or tonumber(status) or 200
-        reply:set_status(s)
-        reply:set_body(body ~= "" and body or "")
-
-        if content_type ~= "" then
-            reply:add_header("Content-Type", content_type)
-        else
-            reply:add_header("Content-Type", "text/html")
-        end
-        if csp ~= "" then
-            reply:add_header("Content-Security-Policy", csp)
-        end
-        if cache_ctrl ~= "" then
-            reply:add_header("Cache-Control", cache_ctrl)
-        end
-        -- cookies_raw is a newline-joined list of Set-Cookie strings
-        if cookies_raw ~= "" then
-            for cookie in cookies_raw:gmatch("[^\n]+") do
-                reply:add_header("Set-Cookie", cookie)
-            end
-        end
-
-        reply:add_header("Content-Length", #reply.body)
-        txn:done(reply)
         return
     end
 

@@ -75,23 +75,25 @@ var (
 
 type Spoa struct {
 	ListenAddr   net.Listener
-	ListenSocket net.Listener
-	logger       *log.Entry
+	ListenSocket    net.Listener
+	logger          *log.Entry
 	// Direct access to shared data (no IPC needed)
-	dataset      *dataset.DataSet
-	hostManager  *host.Manager
-	geoDatabase  *geo.GeoDatabase
-	globalAppSec *appsec.AppSec // Global AppSec config (used when no host matched)
+	dataset         *dataset.DataSet
+	hostManager     *host.Manager
+	geoDatabase     *geo.GeoDatabase
+	globalAppSec    *appsec.AppSec // Global AppSec config (used when no host matched)
+	challengeServer *ChallengeServer
 }
 
 type SpoaConfig struct {
-	TcpAddr      string
-	UnixAddr     string
-	Dataset      *dataset.DataSet
-	HostManager  *host.Manager
-	GeoDatabase  *geo.GeoDatabase
-	GlobalAppSec *appsec.AppSec // Global AppSec config (used when no host matched)
-	Logger       *log.Entry     // Parent logger to inherit from
+	TcpAddr          string
+	UnixAddr         string
+	Dataset          *dataset.DataSet
+	HostManager      *host.Manager
+	GeoDatabase      *geo.GeoDatabase
+	GlobalAppSec     *appsec.AppSec // Global AppSec config (used when no host matched)
+	ChallengeAddr    string         // TCP address for the challenge HTTP server (e.g. "0.0.0.0:9001")
+	Logger           *log.Entry     // Parent logger to inherit from
 }
 
 func New(config *SpoaConfig) (*Spoa, error) {
@@ -119,6 +121,10 @@ func New(config *SpoaConfig) (*Spoa, error) {
 		hostManager:  config.HostManager,
 		geoDatabase:  config.GeoDatabase,
 		globalAppSec: config.GlobalAppSec,
+	}
+
+	if config.ChallengeAddr != "" && config.GlobalAppSec != nil && config.GlobalAppSec.IsValid() {
+		s.challengeServer = newChallengeServer(config.GlobalAppSec, config.ChallengeAddr, workerLogger)
 	}
 
 	if config.TcpAddr != "" {
@@ -211,6 +217,15 @@ func (s *Spoa) Serve(ctx context.Context) error {
 	// If no listeners are configured, return immediately
 	if s.ListenAddr == nil && s.ListenSocket == nil {
 		return nil
+	}
+
+	// Launch the challenge HTTP server if configured
+	if s.challengeServer != nil {
+		go func() {
+			if err := s.challengeServer.Serve(ctx); err != nil {
+				serverError <- err
+			}
+		}()
 	}
 
 	select {
@@ -515,6 +530,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		appSec, timeout, alwaysSend := s.getAppSecConfig(nil)
 		if appSec != nil && shouldRunAppSec(r, alwaysSend) {
 			r, _ = s.validateWithAppSec(ctx, msgData, nil, appSec, r, timeout)
+			// Challenge content is served by the challenge HTTP server, not via SPOE vars.
 		}
 		return
 	}
@@ -537,15 +553,9 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	// Validate with AppSec if configured
 	appSec, timeout, alwaysSend := s.getAppSecConfig(matchedHost)
 	if appSec != nil && shouldRunAppSec(r, alwaysSend) {
-		var challengeData *appsec.AppSecChallengeData
-		r, challengeData = s.validateWithAppSec(ctx, msgData, matchedHost, appSec, r, timeout)
-		switch r {
-		case remediation.Ban:
+		r, _ = s.validateWithAppSec(ctx, msgData, matchedHost, appSec, r, timeout)
+		if r == remediation.Ban {
 			matchedHost.Ban.InjectKeyValues(writer)
-		case remediation.Challenge:
-			if challengeData != nil {
-				injectChallengeVars(writer, challengeData)
-			}
 		}
 	}
 }
@@ -621,17 +631,6 @@ func (s *Spoa) validateWithAppSec(
 	return currentRemediation, nil
 }
 
-// injectChallengeVars sets the SPOE transaction variables HAProxy Lua needs to
-// serve a challenge response. The challenge_body may be up to ~200 KB (obfuscated
-// JS embedded in HTML); ensure max-frame-size in crowdsec.cfg is at least 262144.
-func injectChallengeVars(writer *encoding.ActionWriter, cd *appsec.AppSecChallengeData) {
-	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_body", cd.Body)
-	_ = writer.SetInt32(encoding.VarScopeTransaction, "challenge_status", int32(cd.StatusCode))
-	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_content_type", cd.ContentType)
-	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_csp", cd.CSP)
-	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_cache_control", cd.CacheControl)
-	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_cookies", strings.Join(cd.Cookies, "\n"))
-}
 
 // buildAppSecRequest constructs an AppSecRequest from HTTPMessageData
 func (d *HTTPMessageData) buildAppSecRequest() *appsec.AppSecRequest {
