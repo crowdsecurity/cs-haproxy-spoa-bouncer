@@ -38,8 +38,9 @@ type BouncerConfig struct {
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
 	PprofConfig      PprofConfig             `yaml:"pprof"`
 	APIKey           string                  `yaml:"api_key"`              // LAPI API key (also used for AppSec)
-	AppSecURL        string                  `yaml:"appsec_url,omitempty"` // Global AppSec URL
+	AppSecURL        string                  `yaml:"appsec_url,omitempty"`       // Global AppSec URL
 	AppSecTimeout    time.Duration           `yaml:"appsec_timeout,omitempty"`
+	ChallengeAddr    string                  `yaml:"challenge_listen,omitempty"` // Challenge HTTP server listen address (e.g. "0.0.0.0:9001")
 }
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).
