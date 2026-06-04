@@ -1,3 +1,6 @@
+## Default configuration without the challenge HTTP listener.
+## Use this variant when AppSec challenge routing is not deployed yet.
+
 ## Log configuration
 log_mode: file
 log_dir: /var/log/crowdsec-spoa/
@@ -21,14 +24,12 @@ listen_unix: /run/crowdsec-spoa/spoa.sock
 #city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
 
 ## Global AppSec configuration
-## Used for virtual patching and JavaScript challenge decisions.
+## AppSec can still be enabled for allow/ban decisions without exposing a challenge listener.
 appsec_url: http://127.0.0.1:7422/
 appsec_timeout: 200ms
 
-## Challenge HTTP listener
-## HAProxy routes remediation=challenge requests to this listener.
-## Keep this bound to loopback unless HAProxy reaches the bouncer through a trusted private network.
-challenge_listen: 127.0.0.1:9001
+## Challenge HTTP listener intentionally disabled in this variant.
+#challenge_listen: 127.0.0.1:9001
 
 prometheus:
   enabled: false
