@@ -21,9 +21,13 @@ listen_tcp: ${LISTEN_TCP}
 #asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
 #city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
 
-## Global AppSec configuration (optional)
-#appsec_url: ${APPSEC_URL}
-#appsec_timeout: ${APPSEC_TIMEOUT}
+## Global AppSec configuration
+appsec_url: ${APPSEC_URL}
+appsec_timeout: ${APPSEC_TIMEOUT}
+
+## Challenge HTTP listener
+## HAProxy routes remediation=challenge requests to this listener.
+challenge_listen: ${CHALLENGE_LISTEN}
 
 ## Prometheus metrics endpoint
 prometheus:

@@ -261,13 +261,14 @@ func Execute() error {
 
 	// Create single SPOA directly with minimal configuration
 	spoaConfig := &spoa.SpoaConfig{
-		TcpAddr:      config.ListenTCP,
-		UnixAddr:     config.ListenUnix,
-		Dataset:      dataSet,
-		HostManager:  HostManager,
-		GeoDatabase:  &config.Geo,
-		GlobalAppSec: globalAppSec,
-		Logger:       spoaLogger,
+		TcpAddr:       config.ListenTCP,
+		UnixAddr:      config.ListenUnix,
+		Dataset:       dataSet,
+		HostManager:   HostManager,
+		GeoDatabase:   &config.Geo,
+		GlobalAppSec:  globalAppSec,
+		ChallengeAddr: config.ChallengeAddr,
+		Logger:        spoaLogger,
 	}
 
 	singleSpoa, err := spoa.New(spoaConfig)

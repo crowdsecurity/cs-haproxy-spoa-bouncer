@@ -113,12 +113,17 @@ function runtime.Handle(txn)
     reply:add_header("cache-control", "no-cache")
     reply:add_header("cache-control", "no-store")
 
-    -- NOTE: "allow" remediation with redirects is now handled natively by HAProxy
-    -- This Lua handler is only called for "captcha" and "ban" remediations
+    -- NOTE: "allow" remediation with redirects is now handled natively by HAProxy.
+    -- "challenge" is handled by routing to the bouncer challenge HTTP server (no Lua needed).
+    -- This Lua handler is only called for "captcha" and "ban" remediations.
     if remediation == "allow" then
         runtime.logger.warning("Lua handler called for 'allow' remediation - this should not happen with native redirects")
         return
     end
+
+    -- Always disable cache for ban/captcha pages
+    reply:add_header("cache-control", "no-cache")
+    reply:add_header("cache-control", "no-store")
 
     if remediation == "captcha" then
         reply:set_status(200)
@@ -136,7 +141,6 @@ function runtime.Handle(txn)
             ["contact_us_url"]=get_txn_var(txn, "crowdsec.contact_us_url"),
         }))
     end
-
 
     local hdr = txn.http:req_get_headers()
     if hdr ~= nil and utils.accept_html(hdr) == false then
