@@ -138,10 +138,10 @@ http-request set-header X-Crowdsec-Real-Ip %[src] if { var(txn.crowdsec.remediat
 http-request lua.crowdsec_handle if { var(txn.crowdsec.remediation) -m str "captcha" }
 http-request lua.crowdsec_handle if { var(txn.crowdsec.remediation) -m str "ban" }
 
-use_backend crowdsec_challenge if { var(txn.crowdsec.remediation) -m str "challenge" }
+use_backend crowdsec-challenge if { var(txn.crowdsec.remediation) -m str "challenge" }
 use_backend app
 
-backend crowdsec_challenge
+backend crowdsec-challenge
     mode http
     server challenge 127.0.0.1:9001
 ```
@@ -215,7 +215,7 @@ challenge_listen: 127.0.0.1:9001
 
 When HAProxy and the bouncer run in different containers or hosts, bind the
 challenge listener to a trusted private interface and point the HAProxy
-`crowdsec_challenge` backend to that address.
+`crowdsec-challenge` backend to that address.
 
 ## Challenge Assets, Proof Submission, And Cookies
 
