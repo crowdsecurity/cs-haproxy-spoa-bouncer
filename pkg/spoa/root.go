@@ -239,19 +239,21 @@ func (s *Spoa) Serve(ctx context.Context) error {
 func (s *Spoa) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down")
 
+	var closeErrors []error
+
 	// Close TCP listener - the library now handles waiting for handlers internally
 	if s.ListenAddr != nil {
-		s.ListenAddr.Close()
+		closeErrors = append(closeErrors, s.ListenAddr.Close())
 	}
 
 	// Close Unix socket - the library now handles waiting for handlers internally
 	if s.ListenSocket != nil {
-		s.ListenSocket.Close()
+		closeErrors = append(closeErrors, s.ListenSocket.Close())
 	}
 
 	// The library's workgroup now handles waiting for all frame handlers to complete
 	// when the listeners are closed, so we don't need to wait here
-	return nil
+	return errors.Join(closeErrors...)
 }
 
 // HTTPMessageData holds all KV entries from crowdsec-http message
