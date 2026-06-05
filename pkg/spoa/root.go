@@ -75,8 +75,8 @@ var (
 
 type Spoa struct {
 	ListenAddr   net.Listener
-	ListenSocket    net.Listener
-	logger          *log.Entry
+	ListenSocket net.Listener
+	logger       *log.Entry
 	// Direct access to shared data (no IPC needed)
 	dataset         *dataset.DataSet
 	hostManager     *host.Manager
@@ -86,14 +86,14 @@ type Spoa struct {
 }
 
 type SpoaConfig struct {
-	TcpAddr          string
-	UnixAddr         string
-	Dataset          *dataset.DataSet
-	HostManager      *host.Manager
-	GeoDatabase      *geo.GeoDatabase
-	GlobalAppSec     *appsec.AppSec // Global AppSec config (used when no host matched)
-	ChallengeAddr    string         // TCP address for the challenge HTTP server (e.g. "0.0.0.0:9001")
-	Logger           *log.Entry     // Parent logger to inherit from
+	TcpAddr       string
+	UnixAddr      string
+	Dataset       *dataset.DataSet
+	HostManager   *host.Manager
+	GeoDatabase   *geo.GeoDatabase
+	GlobalAppSec  *appsec.AppSec // Global AppSec config (used when no host matched)
+	ChallengeAddr string         // TCP address for the challenge HTTP server (e.g. "0.0.0.0:9001")
+	Logger        *log.Entry     // Parent logger to inherit from
 }
 
 func New(config *SpoaConfig) (*Spoa, error) {
@@ -531,7 +531,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	if matchedHost == nil {
 		appSec, timeout, alwaysSend := s.getAppSecConfig(nil)
 		if appSec != nil && shouldRunAppSec(r, alwaysSend) {
-			r, _ = s.validateWithAppSec(ctx, msgData, nil, appSec, r, timeout)
+			r = s.validateWithAppSec(ctx, msgData, nil, appSec, r, timeout)
 			// Challenge content is served by the challenge HTTP server, not via SPOE vars.
 		}
 		return
@@ -555,7 +555,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	// Validate with AppSec if configured
 	appSec, timeout, alwaysSend := s.getAppSecConfig(matchedHost)
 	if appSec != nil && shouldRunAppSec(r, alwaysSend) {
-		r, _ = s.validateWithAppSec(ctx, msgData, matchedHost, appSec, r, timeout)
+		r = s.validateWithAppSec(ctx, msgData, matchedHost, appSec, r, timeout)
 		if r == remediation.Ban {
 			matchedHost.Ban.InjectKeyValues(writer)
 		}
@@ -584,7 +584,6 @@ func shouldRunAppSec(r remediation.Remediation, alwaysSend bool) bool {
 }
 
 // validateWithAppSec performs AppSec validation and returns the remediation.
-// When AppSec issues a challenge the second return value carries the page content.
 func (s *Spoa) validateWithAppSec(
 	ctx context.Context,
 	msgData *HTTPMessageData,
@@ -592,7 +591,7 @@ func (s *Spoa) validateWithAppSec(
 	appSecToUse *appsec.AppSec,
 	currentRemediation remediation.Remediation,
 	requestTimeout time.Duration,
-) (remediation.Remediation, *appsec.AppSecChallengeData) {
+) remediation.Remediation {
 	appSecReq := msgData.buildAppSecRequest()
 
 	logger := s.logger
@@ -606,10 +605,10 @@ func (s *Spoa) validateWithAppSec(
 	appSecCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
-	appSecRemediation, challengeData, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
+	appSecRemediation, _, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
 	if err != nil {
 		logger.WithError(err).Warn("AppSec validation failed, using original remediation")
-		return currentRemediation, nil
+		return currentRemediation
 	}
 
 	logger.WithField("remediation", appSecRemediation.String()).Debug("AppSec validation result")
@@ -628,11 +627,10 @@ func (s *Spoa) validateWithAppSec(
 		if appSecRemediation == remediation.Ban && matchedHost == nil {
 			logger.Warn("AppSec returned ban but no host matched - remediation set but ban values not injected")
 		}
-		return appSecRemediation, challengeData
+		return appSecRemediation
 	}
-	return currentRemediation, nil
+	return currentRemediation
 }
-
 
 // buildAppSecRequest constructs an AppSecRequest from HTTPMessageData
 func (d *HTTPMessageData) buildAppSecRequest() *appsec.AppSecRequest {

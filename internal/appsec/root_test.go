@@ -27,6 +27,15 @@ func newTestAppSec(url, apiKey string) *AppSec {
 	return a
 }
 
+func mustMarshal(t *testing.T, value any) []byte {
+	t.Helper()
+
+	body, err := json.Marshal(value)
+	require.NoError(t, err)
+
+	return body
+}
+
 // ---------- parseResponse unit tests ----------
 
 func TestProcessAppSecResponse_Allow(t *testing.T) {
@@ -44,7 +53,7 @@ func TestProcessAppSecResponse_BanPlain403(t *testing.T) {
 	a := &AppSec{}
 	a.InitLogger(log.NewEntry(log.New()))
 
-	body, _ := json.Marshal(map[string]interface{}{"action": "ban", "http_status": 403})
+	body := mustMarshal(t, map[string]any{"action": "ban", "http_status": 403})
 	rem, cd, err := a.processAppSecResponse(http.StatusForbidden, body)
 
 	require.NoError(t, err)
@@ -78,12 +87,12 @@ func TestProcessAppSecResponse_ChallengeMinimal(t *testing.T) {
 	a := &AppSec{}
 	a.InitLogger(log.NewEntry(log.New()))
 
-	body, _ := json.Marshal(map[string]interface{}{
-		"action":             "challenge",
-		"http_status":        200,
-		"user_body_content":  "<html>challenge</html>",
-		"user_headers":       map[string][]string{"Content-Type": {"text/html"}},
-		"user_cookies":       []string{},
+	body := mustMarshal(t, map[string]any{
+		"action":            "challenge",
+		"http_status":       200,
+		"user_body_content": "<html>challenge</html>",
+		"user_headers":      map[string][]string{"Content-Type": {"text/html"}},
+		"user_cookies":      []string{},
 	})
 
 	rem, cd, err := a.processAppSecResponse(http.StatusForbidden, body)
@@ -101,14 +110,14 @@ func TestProcessAppSecResponse_ChallengeWithAllHeaders(t *testing.T) {
 	a := &AppSec{}
 	a.InitLogger(log.NewEntry(log.New()))
 
-	body, _ := json.Marshal(map[string]interface{}{
+	body := mustMarshal(t, map[string]any{
 		"action":            "challenge",
 		"http_status":       200,
 		"user_body_content": "<html>challenge</html>",
 		"user_headers": map[string][]string{
-			"Content-Type":              {"text/html; charset=utf-8"},
-			"Content-Security-Policy":   {"default-src 'self'"},
-			"Cache-Control":             {"no-store, no-cache"},
+			"Content-Type":            {"text/html; charset=utf-8"},
+			"Content-Security-Policy": {"default-src 'self'"},
+			"Cache-Control":           {"no-store, no-cache"},
 		},
 		"user_cookies": []string{"__crowdsec_challenge=abc123; HttpOnly; SameSite=Lax"},
 	})
@@ -179,7 +188,7 @@ func TestValidateRequest_Ban(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"action": "ban", "http_status": 403})
+		assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{"action": "ban", "http_status": 403}))
 	}))
 	defer srv.Close()
 
@@ -199,7 +208,7 @@ func TestValidateRequest_Challenge(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 			"action":            "challenge",
 			"http_status":       200,
 			"user_body_content": challengeHTML,
@@ -209,7 +218,7 @@ func TestValidateRequest_Challenge(t *testing.T) {
 				"Cache-Control":           {"no-store"},
 			},
 			"user_cookies": []string{"__crowdsec_challenge=xyz; HttpOnly"},
-		})
+		}))
 	}))
 	defer srv.Close()
 
@@ -253,7 +262,7 @@ func TestValidateRequest_SendsRequiredHeaders(t *testing.T) {
 	defer srv.Close()
 
 	a := newTestAppSec(srv.URL, "secret-api-key")
-	_, _, _ = a.ValidateRequest(context.Background(), &AppSecRequest{
+	_, _, err := a.ValidateRequest(context.Background(), &AppSecRequest{
 		Host:      "myhost.com",
 		Method:    "POST",
 		URL:       "/login",
@@ -261,6 +270,7 @@ func TestValidateRequest_SendsRequiredHeaders(t *testing.T) {
 		UserAgent: "Mozilla/5.0",
 		Version:   "1.1",
 	})
+	require.NoError(t, err)
 
 	require.NotNil(t, capturedReq)
 	assert.Equal(t, "10.0.0.1", capturedReq.Header.Get("X-Crowdsec-Appsec-Ip"))
@@ -276,20 +286,21 @@ func TestValidateRequest_PostWithBody(t *testing.T) {
 	var receivedBody []byte
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, http.MethodPost, r.Method)
 		var err error
 		receivedBody, err = io.ReadAll(r.Body)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
 	a := newTestAppSec(srv.URL, "key")
 	payload := []byte("t=token&n=nonce&f=fingerprint")
-	_, _, _ = a.ValidateRequest(context.Background(), &AppSecRequest{
+	_, _, err := a.ValidateRequest(context.Background(), &AppSecRequest{
 		Host: "example.com", Method: "POST", URL: "/submit", RemoteIP: "1.2.3.4",
 		Body: payload,
 	})
+	require.NoError(t, err)
 
 	assert.Equal(t, payload, receivedBody)
 }

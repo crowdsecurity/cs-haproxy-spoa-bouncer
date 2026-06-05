@@ -16,15 +16,17 @@ import (
 
 // mockAppSecHandler returns an http.Handler that responds with the given JSON body
 // and status code to simulate the AppSec engine's wire format.
-func mockAppSecHandler(statusCode int, payload interface{}) http.Handler {
+func mockAppSecHandler(statusCode int, payload any) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(statusCode)
-		_ = json.NewEncoder(w).Encode(payload)
+		if err := json.NewEncoder(w).Encode(payload); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	})
 }
 
-func newChallengeServerForTest(t *testing.T, appSecHandler http.Handler) (*ChallengeServer, *httptest.Server) {
+func newChallengeServerForTest(t *testing.T, appSecHandler http.Handler) *ChallengeServer {
 	t.Helper()
 	appSecSrv := httptest.NewServer(appSecHandler)
 	t.Cleanup(appSecSrv.Close)
@@ -38,8 +40,7 @@ func newChallengeServerForTest(t *testing.T, appSecHandler http.Handler) (*Chall
 		// logger exposed through the embedded unexported field; set via Init below
 	}
 
-	cs := newChallengeServer(a, "unused-addr", log.WithField("test", t.Name()))
-	return cs, appSecSrv
+	return newChallengeServer(a, "unused-addr", log.WithField("test", t.Name()))
 }
 
 // roundtrip sends req to the ChallengeServer and returns the recorded response.
@@ -54,7 +55,7 @@ func roundtrip(cs *ChallengeServer, req *http.Request) *httptest.ResponseRecorde
 func TestChallengeServer_ServesChallengePage(t *testing.T) {
 	const challengeHTML = "<html><title>CrowdSec Challenge</title></html>"
 
-	cs, _ := newChallengeServerForTest(t, mockAppSecHandler(http.StatusForbidden, map[string]interface{}{
+	cs := newChallengeServerForTest(t, mockAppSecHandler(http.StatusForbidden, map[string]any{
 		"action":            "challenge",
 		"http_status":       200,
 		"user_body_content": challengeHTML,
@@ -66,7 +67,7 @@ func TestChallengeServer_ServesChallengePage(t *testing.T) {
 		"user_cookies": []string{},
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/challenge", nil)
+	req := httptest.NewRequest(http.MethodGet, "/challenge", http.NoBody)
 	req.Header.Set(ChallengeRealIPHeader, "1.2.3.4")
 	rr := roundtrip(cs, req)
 
@@ -78,7 +79,7 @@ func TestChallengeServer_ServesChallengePage(t *testing.T) {
 }
 
 func TestChallengeServer_ForwardsCookies(t *testing.T) {
-	cs, _ := newChallengeServerForTest(t, mockAppSecHandler(http.StatusForbidden, map[string]interface{}{
+	cs := newChallengeServerForTest(t, mockAppSecHandler(http.StatusForbidden, map[string]any{
 		"action":            "challenge",
 		"http_status":       200,
 		"user_body_content": `{"status":"ok"}`,
@@ -98,7 +99,7 @@ func TestChallengeServer_ForwardsCookies(t *testing.T) {
 }
 
 func TestChallengeServer_MultipleSetCookieHeaders(t *testing.T) {
-	cs, _ := newChallengeServerForTest(t, mockAppSecHandler(http.StatusForbidden, map[string]interface{}{
+	cs := newChallengeServerForTest(t, mockAppSecHandler(http.StatusForbidden, map[string]any{
 		"action":            "challenge",
 		"http_status":       200,
 		"user_body_content": "ok",
@@ -109,7 +110,7 @@ func TestChallengeServer_MultipleSetCookieHeaders(t *testing.T) {
 		},
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/challenge", nil)
+	req := httptest.NewRequest(http.MethodGet, "/challenge", http.NoBody)
 	req.Header.Set(ChallengeRealIPHeader, "1.2.3.4")
 	rr := roundtrip(cs, req)
 
@@ -120,9 +121,9 @@ func TestChallengeServer_MultipleSetCookieHeaders(t *testing.T) {
 
 func TestChallengeServer_ReturnsOKWhenAppSecAllows(t *testing.T) {
 	// AppSec returns 200 (allow) — the challenge server should pass through with 200 and empty body.
-	cs, _ := newChallengeServerForTest(t, mockAppSecHandler(http.StatusOK, nil))
+	cs := newChallengeServerForTest(t, mockAppSecHandler(http.StatusOK, nil))
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.Header.Set(ChallengeRealIPHeader, "1.2.3.4")
 	rr := roundtrip(cs, req)
 
@@ -136,9 +137,9 @@ func TestChallengeServer_UsesRealIPHeader(t *testing.T) {
 		capturedIP = r.Header.Get("X-Crowdsec-Appsec-Ip")
 		w.WriteHeader(http.StatusOK)
 	})
-	cs, _ := newChallengeServerForTest(t, handler)
+	cs := newChallengeServerForTest(t, handler)
 
-	req := httptest.NewRequest(http.MethodGet, "/challenge", nil)
+	req := httptest.NewRequest(http.MethodGet, "/challenge", http.NoBody)
 	req.Header.Set(ChallengeRealIPHeader, "203.0.113.42")
 	roundtrip(cs, req)
 
@@ -151,9 +152,9 @@ func TestChallengeServer_FallsBackToRemoteAddrWhenNoRealIPHeader(t *testing.T) {
 		capturedIP = r.Header.Get("X-Crowdsec-Appsec-Ip")
 		w.WriteHeader(http.StatusOK)
 	})
-	cs, _ := newChallengeServerForTest(t, handler)
+	cs := newChallengeServerForTest(t, handler)
 
-	req := httptest.NewRequest(http.MethodGet, "/challenge", nil)
+	req := httptest.NewRequest(http.MethodGet, "/challenge", http.NoBody)
 	req.RemoteAddr = "203.0.113.5:12345"
 	// No ChallengeRealIPHeader set
 	roundtrip(cs, req)
@@ -166,17 +167,17 @@ func TestChallengeServer_ForwardsRequestBodyToAppSec(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var err error
 		receivedBody, err = io.ReadAll(r.Body)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		// Return a challenge response so ServeHTTP doesn't return early
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 			"action": "challenge", "http_status": 200,
 			"user_body_content": "ok", "user_headers": map[string][]string{},
 			"user_cookies": []string{},
-		})
+		}))
 	})
-	cs, _ := newChallengeServerForTest(t, handler)
+	cs := newChallengeServerForTest(t, handler)
 
 	payload := "t=ticket&n=nonce&p=salt&m=mac&f=fp&h=hmac&ts=123"
 	req := httptest.NewRequest(http.MethodPost, "/crowdsec-internal/challenge/submit",
@@ -194,9 +195,9 @@ func TestChallengeServer_StripsRealIPHeaderBeforeForwarding(t *testing.T) {
 		capturedHeaders = r.Header.Clone()
 		w.WriteHeader(http.StatusOK)
 	})
-	cs, _ := newChallengeServerForTest(t, handler)
+	cs := newChallengeServerForTest(t, handler)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.Header.Set(ChallengeRealIPHeader, "1.2.3.4")
 	req.Header.Set("X-Forwarded-For", "10.0.0.1")
 	roundtrip(cs, req)
@@ -210,7 +211,7 @@ func TestChallengeServer_StripsRealIPHeaderBeforeForwarding(t *testing.T) {
 func TestChallengeServer_PowWorkerJSResponse(t *testing.T) {
 	const workerJS = "// pow worker"
 
-	cs, _ := newChallengeServerForTest(t, mockAppSecHandler(http.StatusForbidden, map[string]interface{}{
+	cs := newChallengeServerForTest(t, mockAppSecHandler(http.StatusForbidden, map[string]any{
 		"action":            "challenge",
 		"http_status":       200,
 		"user_body_content": workerJS,
@@ -221,7 +222,7 @@ func TestChallengeServer_PowWorkerJSResponse(t *testing.T) {
 		"user_cookies": []string{},
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/crowdsec-internal/challenge/pow-worker.js", nil)
+	req := httptest.NewRequest(http.MethodGet, "/crowdsec-internal/challenge/pow-worker.js", http.NoBody)
 	req.Header.Set(ChallengeRealIPHeader, "1.2.3.4")
 	rr := roundtrip(cs, req)
 
@@ -232,7 +233,7 @@ func TestChallengeServer_PowWorkerJSResponse(t *testing.T) {
 }
 
 func TestChallengeServer_InvalidSubmitResponse(t *testing.T) {
-	cs, _ := newChallengeServerForTest(t, mockAppSecHandler(http.StatusForbidden, map[string]interface{}{
+	cs := newChallengeServerForTest(t, mockAppSecHandler(http.StatusForbidden, map[string]any{
 		"action":            "challenge",
 		"http_status":       200,
 		"user_body_content": `{"status":"failed"}`,

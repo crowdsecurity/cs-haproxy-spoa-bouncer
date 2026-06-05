@@ -52,7 +52,10 @@ func (cs *ChallengeServer) Serve(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		_ = srv.Shutdown(context.Background())
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+
+		_ = srv.Shutdown(shutdownCtx)
 	}()
 
 	cs.logger.Infof("Challenge HTTP server listening on %s", cs.listen)
