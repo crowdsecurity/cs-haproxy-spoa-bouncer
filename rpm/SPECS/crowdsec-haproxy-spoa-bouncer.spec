@@ -35,6 +35,7 @@ rm -rf %{buildroot}
 mkdir -p %{buildroot}%{_bindir}
 mkdir -p %{buildroot}%{_libdir}/%{name}/lua
 mkdir -p %{buildroot}%{_localstatedir}/lib/%{name}/html
+mkdir -p %{buildroot}/etc/crowdsec/bouncers/spoa-host.d
 mkdir -p %{buildroot}%{_docdir}/%{name}/examples
 install -m 755 -D %{binary_name} %{buildroot}%{_bindir}/%{binary_name}
 install -m 640 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/%{binary_name}.yaml
@@ -65,6 +66,7 @@ rm -rf %{buildroot}
 /usr/lib/%{name}/lua/template.lua
 %{_localstatedir}/lib/%{name}/html/ban.html
 %{_localstatedir}/lib/%{name}/html/captcha.html
+%dir /etc/crowdsec/bouncers/spoa-host.d
 
 %post
 # Reload systemd units
@@ -103,6 +105,13 @@ fi
 # Set config file group ownership (matches Debian postinst)
 if [ -f "$CONFIG" ]; then
     chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
+fi
+
+# Set hosts directory permissions (read-only for crowdsec-spoa user)
+HOSTS_DIR="/etc/crowdsec/bouncers/spoa-host.d"
+if [ -d "$HOSTS_DIR" ]; then
+    chown root:crowdsec-spoa "$HOSTS_DIR" 2>/dev/null || true
+    chmod 750 "$HOSTS_DIR" 2>/dev/null || true
 fi
 
 if [ -d "/etc/haproxy" ]; then

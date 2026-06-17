@@ -25,6 +25,11 @@ prometheus:
   listen_addr: 127.0.0.1
   listen_port: 60601
 
+## Host configuration directory
+## Place per-host YAML config files here (*.yaml)
+## See documentation for host configuration format
+hosts_dir: /etc/crowdsec/bouncers/spoa-host.d
+
 ## pprof debug endpoint for runtime profiling
 ## WARNING: Only enable for debugging, exposes internal runtime data
 ## Endpoints: /debug/pprof/heap, /debug/pprof/profile, /debug/pprof/goroutine, etc.

@@ -24,6 +24,8 @@ RuntimeDirectoryMode=2750
 RuntimeDirectoryPreserve=yes
 LogsDirectory=crowdsec-spoa
 LogsDirectoryMode=0750
+# Allow read access to hosts configuration directory
+ReadOnlyPaths=/etc/crowdsec/bouncers/spoa-host.d
 
 [Install]
 WantedBy=multi-user.target

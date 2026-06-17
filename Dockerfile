@@ -10,8 +10,8 @@ COPY . .
 RUN make build DOCKER_BUILD=1
 
 # Create directory structure for scratch image (with .keep files so COPY works)
-RUN mkdir -p /run/crowdsec-spoa /var/log/crowdsec-spoa && \
-    touch /run/crowdsec-spoa/.keep /var/log/crowdsec-spoa/.keep
+RUN mkdir -p /run/crowdsec-spoa /var/log/crowdsec-spoa /etc/crowdsec/bouncers/spoa-host.d && \
+    touch /run/crowdsec-spoa/.keep /var/log/crowdsec-spoa/.keep /etc/crowdsec/bouncers/spoa-host.d/.keep
 
 # Final minimal image
 FROM scratch
@@ -23,6 +23,7 @@ ENV LOG_MODE=stdout \
     UPDATE_FREQUENCY=10s \
     INSECURE_SKIP_VERIFY=false \
     LISTEN_TCP=0.0.0.0:9000 \
+    HOSTS_DIR=/etc/crowdsec/bouncers/spoa-host.d \
     PROMETHEUS_ENABLED=true \
     PROMETHEUS_ADDR=0.0.0.0 \
     PROMETHEUS_PORT=6060
@@ -46,9 +47,13 @@ COPY --from=build /go/src/cs-spoa-bouncer/templates/ /var/lib/crowdsec-haproxy-s
 COPY --from=build /run/crowdsec-spoa/ /run/crowdsec-spoa/
 COPY --from=build /var/log/crowdsec-spoa/ /var/log/crowdsec-spoa/
 
+# Copy hosts configuration directory
+COPY --from=build /etc/crowdsec/bouncers/spoa-host.d/ /etc/crowdsec/bouncers/spoa-host.d/
+
 # Declare volumes for customizable content
 VOLUME /usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
 VOLUME /var/lib/crowdsec-haproxy-spoa-bouncer/html/
+VOLUME /etc/crowdsec/bouncers/spoa-host.d/
 
 EXPOSE 9000 6060
 
