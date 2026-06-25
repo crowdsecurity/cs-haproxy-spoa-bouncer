@@ -36,10 +36,10 @@ COPY --from=build /go/src/cs-spoa-bouncer/crowdsec-spoa-bouncer /crowdsec-spoa-b
 # Copy Docker-optimized config file
 COPY --from=build /go/src/cs-spoa-bouncer/config/crowdsec-spoa-bouncer.docker.yaml /etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml
 
-# Copy Lua files for HAProxy integration
+# Copy optional Lua files for HAProxy installations that enable Lua rendering
 COPY --from=build /go/src/cs-spoa-bouncer/lua/ /usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
 
-# Copy HTML templates for ban/captcha pages
+# Copy HAProxy log-format templates for ban/captcha pages
 COPY --from=build /go/src/cs-spoa-bouncer/templates/ /var/lib/crowdsec-haproxy-spoa-bouncer/html/
 
 # Copy runtime directories (required for Unix socket and logs)

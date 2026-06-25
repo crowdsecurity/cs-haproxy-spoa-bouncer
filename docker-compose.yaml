@@ -10,7 +10,6 @@ services:
     volumes:
       - sockets:/run/
       - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
-      - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
       - geodb:/var/lib/crowdsec/data/
       - ./config/crowdsec-spoa-bouncer.yaml.local:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml.local
     networks:
@@ -38,7 +37,6 @@ services:
       - ./config/crowdsec.cfg:/etc/haproxy/crowdsec.cfg
       - sockets:/run/
       - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
-      - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
     ports:
       - "9090:9090"
     depends_on:
@@ -63,8 +61,6 @@ services:
       - crowdsec
 
 volumes:
-  lua:
-    driver: local
   sockets:
     driver: local
   templates:
