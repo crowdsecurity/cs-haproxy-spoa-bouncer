@@ -113,17 +113,45 @@ function runtime.Handle(txn)
     reply:add_header("cache-control", "no-cache")
     reply:add_header("cache-control", "no-store")
 
-    -- NOTE: "allow" remediation with redirects is now handled natively by HAProxy.
-    -- "challenge" is handled by routing to the bouncer challenge HTTP server (no Lua needed).
-    -- This Lua handler is only called for "captcha" and "ban" remediations.
     if remediation == "allow" then
         runtime.logger.warning("Lua handler called for 'allow' remediation - this should not happen with native redirects")
         return
     end
 
-    -- Always disable cache for ban/captcha pages
-    reply:add_header("cache-control", "no-cache")
-    reply:add_header("cache-control", "no-store")
+    if remediation == "challenge" then
+        local status = get_txn_var(txn, "crowdsec.challenge_status")
+        if status ~= "" then
+            reply:set_status(tonumber(status))
+        else
+            reply:set_status(200)
+        end
+
+        reply:set_body(get_txn_var(txn, "crowdsec.challenge_body"))
+
+        local content_type = get_txn_var(txn, "crowdsec.challenge_content_type")
+        if content_type ~= "" then
+            reply:add_header("Content-Type", content_type)
+        end
+
+        local csp = get_txn_var(txn, "crowdsec.challenge_csp")
+        if csp ~= "" then
+            reply:add_header("Content-Security-Policy", csp)
+        end
+
+        local cache_control = get_txn_var(txn, "crowdsec.challenge_cache_control")
+        if cache_control ~= "" then
+            reply:add_header("Cache-Control", cache_control)
+        end
+
+        local cookie = get_txn_var(txn, "crowdsec.challenge_cookie")
+        if cookie ~= "" then
+            reply:add_header("Set-Cookie", cookie)
+        end
+
+        reply:add_header("Content-Length", #reply.body)
+        txn:done(reply)
+        return
+    end
 
     if remediation == "captcha" then
         reply:set_status(200)
