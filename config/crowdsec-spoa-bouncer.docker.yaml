@@ -25,10 +25,6 @@ listen_tcp: ${LISTEN_TCP}
 appsec_url: ${APPSEC_URL}
 appsec_timeout: ${APPSEC_TIMEOUT}
 
-## Challenge HTTP listener
-## HAProxy routes remediation=challenge requests to this listener.
-challenge_listen: ${CHALLENGE_LISTEN}
-
 ## Prometheus metrics endpoint
 prometheus:
   enabled: ${PROMETHEUS_ENABLED}

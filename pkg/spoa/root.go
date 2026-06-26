@@ -78,22 +78,20 @@ type Spoa struct {
 	ListenSocket net.Listener
 	logger       *log.Entry
 	// Direct access to shared data (no IPC needed)
-	dataset         *dataset.DataSet
-	hostManager     *host.Manager
-	geoDatabase     *geo.GeoDatabase
-	globalAppSec    *appsec.AppSec // Global AppSec config (used when no host matched)
-	challengeServer *ChallengeServer
+	dataset      *dataset.DataSet
+	hostManager  *host.Manager
+	geoDatabase  *geo.GeoDatabase
+	globalAppSec *appsec.AppSec // Global AppSec config (used when no host matched)
 }
 
 type SpoaConfig struct {
-	TcpAddr       string
-	UnixAddr      string
-	Dataset       *dataset.DataSet
-	HostManager   *host.Manager
-	GeoDatabase   *geo.GeoDatabase
-	GlobalAppSec  *appsec.AppSec // Global AppSec config (used when no host matched)
-	ChallengeAddr string         // TCP address for the challenge HTTP server (e.g. "0.0.0.0:9001")
-	Logger        *log.Entry     // Parent logger to inherit from
+	TcpAddr      string
+	UnixAddr     string
+	Dataset      *dataset.DataSet
+	HostManager  *host.Manager
+	GeoDatabase  *geo.GeoDatabase
+	GlobalAppSec *appsec.AppSec // Global AppSec config (used when no host matched)
+	Logger       *log.Entry     // Parent logger to inherit from
 }
 
 func New(config *SpoaConfig) (*Spoa, error) {
@@ -121,10 +119,6 @@ func New(config *SpoaConfig) (*Spoa, error) {
 		hostManager:  config.HostManager,
 		geoDatabase:  config.GeoDatabase,
 		globalAppSec: config.GlobalAppSec,
-	}
-
-	if config.ChallengeAddr != "" && config.GlobalAppSec != nil && config.GlobalAppSec.IsValid() {
-		s.challengeServer = newChallengeServer(config.GlobalAppSec, config.ChallengeAddr, workerLogger)
 	}
 
 	if config.TcpAddr != "" {
@@ -217,15 +211,6 @@ func (s *Spoa) Serve(ctx context.Context) error {
 	// If no listeners are configured, return immediately
 	if s.ListenAddr == nil && s.ListenSocket == nil {
 		return nil
-	}
-
-	// Launch the challenge HTTP server if configured
-	if s.challengeServer != nil {
-		go func() {
-			if err := s.challengeServer.Serve(ctx); err != nil {
-				serverError <- err
-			}
-		}()
 	}
 
 	select {
@@ -531,8 +516,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	if matchedHost == nil {
 		appSec, timeout, alwaysSend := s.getAppSecConfig(nil)
 		if appSec != nil && shouldRunAppSec(r, alwaysSend) {
-			r = s.validateWithAppSec(ctx, msgData, nil, appSec, r, timeout)
-			// Challenge content is served by the challenge HTTP server, not via SPOE vars.
+			r = s.validateWithAppSec(ctx, writer, msgData, nil, appSec, r, timeout)
 		}
 		return
 	}
@@ -555,7 +539,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	// Validate with AppSec if configured
 	appSec, timeout, alwaysSend := s.getAppSecConfig(matchedHost)
 	if appSec != nil && shouldRunAppSec(r, alwaysSend) {
-		r = s.validateWithAppSec(ctx, msgData, matchedHost, appSec, r, timeout)
+		r = s.validateWithAppSec(ctx, writer, msgData, matchedHost, appSec, r, timeout)
 		if r == remediation.Ban {
 			matchedHost.Ban.InjectKeyValues(writer)
 		}
@@ -586,6 +570,7 @@ func shouldRunAppSec(r remediation.Remediation, alwaysSend bool) bool {
 // validateWithAppSec performs AppSec validation and returns the remediation.
 func (s *Spoa) validateWithAppSec(
 	ctx context.Context,
+	writer *encoding.ActionWriter,
 	msgData *HTTPMessageData,
 	matchedHost *host.Host,
 	appSecToUse *appsec.AppSec,
@@ -605,7 +590,7 @@ func (s *Spoa) validateWithAppSec(
 	appSecCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
-	appSecRemediation, _, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
+	appSecRemediation, challengeData, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
 	if err != nil {
 		logger.WithError(err).Warn("AppSec validation failed, using original remediation")
 		return currentRemediation
@@ -627,9 +612,35 @@ func (s *Spoa) validateWithAppSec(
 		if appSecRemediation == remediation.Ban && matchedHost == nil {
 			logger.Warn("AppSec returned ban but no host matched - remediation set but ban values not injected")
 		}
+		if appSecRemediation == remediation.Challenge && challengeData != nil {
+			injectChallengeKeyValues(writer, challengeData)
+		}
 		return appSecRemediation
 	}
 	return currentRemediation
+}
+
+func injectChallengeKeyValues(writer *encoding.ActionWriter, challengeData *appsec.AppSecChallengeData) {
+	status := challengeData.StatusCode
+	if status <= 0 {
+		status = http.StatusOK
+	}
+
+	_ = writer.SetInt64(encoding.VarScopeTransaction, "challenge_status", int64(status))
+	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_body", challengeData.Body)
+
+	if challengeData.ContentType != "" {
+		_ = writer.SetString(encoding.VarScopeTransaction, "challenge_content_type", challengeData.ContentType)
+	}
+	if challengeData.CSP != "" {
+		_ = writer.SetString(encoding.VarScopeTransaction, "challenge_csp", challengeData.CSP)
+	}
+	if challengeData.CacheControl != "" {
+		_ = writer.SetString(encoding.VarScopeTransaction, "challenge_cache_control", challengeData.CacheControl)
+	}
+	if len(challengeData.Cookies) > 0 {
+		_ = writer.SetString(encoding.VarScopeTransaction, "challenge_cookie", challengeData.Cookies[0])
+	}
 }
 
 // buildAppSecRequest constructs an AppSecRequest from HTTPMessageData

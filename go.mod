@@ -21,6 +21,8 @@ require (
 	gopkg.in/yaml.v2 v2.4.0
 )
 
+replace github.com/dropmorepackets/haproxy-go => github.com/sabban/haproxy-go v0.0.0-20260626150208-b7fef065491d
+
 require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
