@@ -51,7 +51,7 @@ function findIfStatements(inputString, args)
                     end
                 end
                 if comparee ~= "" and comparer ~= "" then
-                    agaisnt = el
+                    agaisnt = el:match('^"(.*)"$') or el
                 end
                 ::con::
             end
