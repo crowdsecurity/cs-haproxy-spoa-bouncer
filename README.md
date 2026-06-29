@@ -106,19 +106,21 @@ frontend www
 
     http-request redirect code 302 location %[url] if { var(txn.crowdsec.remediation) -m str "allow" } { var(txn.crowdsec.redirect) -m found }
     acl render_html req.hdr_cnt(Accept) eq 0
-    acl render_html req.hdr(Accept) -m sub html
-    acl render_html req.hdr(Accept) -m sub text
+    acl render_html req.hdr(Accept) -m sub text/html
     acl render_html req.hdr(Accept) -m sub */*
+    acl html_rejected req.hdr(Accept) -m reg "text/html;q=0"
 
     acl has_contact_url var(txn.crowdsec.contact_us_url) -m found
     acl empty_contact_url var(txn.crowdsec.contact_us_url) -m str ""
 
-    http-request return status 200 content-type text/html hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/captcha.html if { var(txn.crowdsec.remediation) -m str "captcha" } render_html
-    http-request return status 403 content-type text/html hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/ban-with-contact.html if { var(txn.crowdsec.remediation) -m str "ban" } render_html has_contact_url !empty_contact_url
-    http-request return status 403 content-type text/html hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/ban.html if { var(txn.crowdsec.remediation) -m str "ban" } render_html !has_contact_url
-    http-request return status 403 content-type text/html hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/ban.html if { var(txn.crowdsec.remediation) -m str "ban" } render_html empty_contact_url
-    http-request return status 403 content-type text/plain hdr Cache-Control "no-cache, no-store" string "Forbidden\n" if { var(txn.crowdsec.remediation) -m str "captcha" } !render_html
+    http-request return status 200 content-type "text/html; charset=utf-8" hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/captcha.html if { var(txn.crowdsec.remediation) -m str "captcha" } render_html !html_rejected
+    http-request return status 403 content-type "text/html; charset=utf-8" hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/ban-with-contact.html if { var(txn.crowdsec.remediation) -m str "ban" } render_html !html_rejected has_contact_url !empty_contact_url
+    http-request return status 403 content-type "text/html; charset=utf-8" hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/ban.html if { var(txn.crowdsec.remediation) -m str "ban" } render_html !html_rejected !has_contact_url
+    http-request return status 403 content-type "text/html; charset=utf-8" hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/ban.html if { var(txn.crowdsec.remediation) -m str "ban" } render_html !html_rejected empty_contact_url
+    http-request return status 200 content-type text/plain hdr Cache-Control "no-cache, no-store" string "Captcha required\n" if { var(txn.crowdsec.remediation) -m str "captcha" } !render_html
+    http-request return status 200 content-type text/plain hdr Cache-Control "no-cache, no-store" string "Captcha required\n" if { var(txn.crowdsec.remediation) -m str "captcha" } html_rejected
     http-request return status 403 content-type text/plain hdr Cache-Control "no-cache, no-store" string "Forbidden\n" if { var(txn.crowdsec.remediation) -m str "ban" } !render_html
+    http-request return status 403 content-type text/plain hdr Cache-Control "no-cache, no-store" string "Forbidden\n" if { var(txn.crowdsec.remediation) -m str "ban" } html_rejected
 
     http-after-response set-header Set-Cookie %[var(txn.crowdsec.captcha_cookie)] if { var(txn.crowdsec.captcha_status) -m found } { var(txn.crowdsec.captcha_cookie) -m found }
     http-after-response set-header Set-Cookie %[var(txn.crowdsec.captcha_cookie)] if { var(txn.crowdsec.captcha_cookie) -m found } !{ var(txn.crowdsec.captcha_status) -m found }
@@ -142,6 +144,10 @@ The package still ships the legacy Lua handler for users who prefer rendering re
 - [`config/haproxy-upstreamproxy-lua.cfg`](config/haproxy-upstreamproxy-lua.cfg)
 
 The Lua examples load helpers from `/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/` and use Lua-compatible templates from `/var/lib/crowdsec-haproxy-spoa-bouncer/html/lua/`. The default `config/haproxy.cfg` remains the simpler plain-HAProxy path.
+
+**Docker + Lua mode**: the default `docker-compose.yaml` omits the `lua:` shared volume because the standard path does not need it. When switching to `haproxy-lua.cfg`, uncomment the `lua:` volume entries in `docker-compose.yaml` (see inline comments) so the HAProxy container can access the Lua scripts from the bouncer image.
+
+**Template paths** (non-Lua path): the `lf-file` directives in `haproxy.cfg` hard-code `/var/lib/crowdsec-haproxy-spoa-bouncer/html/`. If you need custom template locations, edit those `lf-file` paths directly. Note that HAProxy does not validate `lf-file` paths at startup; a missing file produces a runtime error on the first blocked request rather than a startup failure.
 
 ## Monitoring & Troubleshooting
 
