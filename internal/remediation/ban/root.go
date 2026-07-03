@@ -1,6 +1,7 @@
 package ban
 
 import (
+	"html"
 	"net/url"
 
 	"github.com/dropmorepackets/haproxy-go/pkg/encoding"
@@ -29,5 +30,5 @@ func (b *Ban) InjectKeyValues(writer *encoding.ActionWriter) {
 			contactURL = ""
 		}
 	}
-	_ = writer.SetString(encoding.VarScopeTransaction, "contact_us_url", contactURL)
+	_ = writer.SetString(encoding.VarScopeTransaction, "contact_us_url", html.EscapeString(contactURL))
 }

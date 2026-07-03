@@ -53,10 +53,6 @@ end
 
 local runtime = {}
 
-local function html_escape(s)
-    return s:gsub('&', '&amp;'):gsub('<', '&lt;'):gsub('>', '&gt;'):gsub('"', '&quot;')
-end
-
 -- Loads the configuration
 local function init()
     BAN_TEMPLATE_PATH = os.getenv("CROWDSEC_BAN_TEMPLATE_PATH")
@@ -137,7 +133,7 @@ function runtime.Handle(txn)
 
     if remediation == "ban" then
         reply:set_body(runtime.ban.render({
-            ["contact_us_url"]=html_escape(get_txn_var(txn, "crowdsec.contact_us_url")),
+            ["contact_us_url"]=get_txn_var(txn, "crowdsec.contact_us_url"),
         }))
     end
 
