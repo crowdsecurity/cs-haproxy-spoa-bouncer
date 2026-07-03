@@ -1,6 +1,8 @@
 package ban
 
 import (
+	"net/url"
+
 	"github.com/dropmorepackets/haproxy-go/pkg/encoding"
 	log "github.com/sirupsen/logrus"
 )
@@ -20,5 +22,12 @@ func (b *Ban) InitLogger(logger *log.Entry) {
 }
 
 func (b *Ban) InjectKeyValues(writer *encoding.ActionWriter) {
-	_ = writer.SetString(encoding.VarScopeTransaction, "contact_us_url", b.ContactUsURL)
+	contactURL := b.ContactUsURL
+	if contactURL != "" {
+		u, err := url.Parse(contactURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "mailto") {
+			contactURL = ""
+		}
+	}
+	_ = writer.SetString(encoding.VarScopeTransaction, "contact_us_url", contactURL)
 }
