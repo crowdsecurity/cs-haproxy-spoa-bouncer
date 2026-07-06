@@ -41,13 +41,19 @@ install -m 640 -D config/%{binary_name}.yaml %{buildroot}/etc/crowdsec/bouncers/
 install -m 600 -D scripts/_bouncer.sh %{buildroot}/usr/lib/%{name}/_bouncer.sh
 install -m 644 -D config/crowdsec.cfg %{buildroot}/%{_docdir}/%{name}/examples/crowdsec.cfg
 install -m 644 -D config/haproxy.cfg %{buildroot}/%{_docdir}/%{name}/examples/haproxy.cfg
+install -m 644 -D config/haproxy-lua.cfg %{buildroot}/%{_docdir}/%{name}/examples/haproxy-lua.cfg
+install -m 644 -D config/haproxy-upstreamproxy.cfg %{buildroot}/%{_docdir}/%{name}/examples/haproxy-upstreamproxy.cfg
+install -m 644 -D config/haproxy-upstreamproxy-lua.cfg %{buildroot}/%{_docdir}/%{name}/examples/haproxy-upstreamproxy-lua.cfg
 mkdir -p %{buildroot}%{_unitdir}
 BIN=%{_bindir}/%{binary_name} CFG=/etc/crowdsec/bouncers envsubst '$BIN $CFG' < config/%{binary_name}.service > %{buildroot}%{_unitdir}/%{binary_name}.service
 install -m 644 -D lua/crowdsec.lua %{buildroot}/usr/lib/%{name}/lua/crowdsec.lua
 install -m 644 -D lua/utils.lua %{buildroot}/usr/lib/%{name}/lua/utils.lua
 install -m 644 -D lua/template.lua %{buildroot}/usr/lib/%{name}/lua/template.lua
 install -m 644 -D templates/ban.html %{buildroot}%{_localstatedir}/lib/%{name}/html/ban.html
+install -m 644 -D templates/ban-with-contact.html %{buildroot}%{_localstatedir}/lib/%{name}/html/ban-with-contact.html
 install -m 644 -D templates/captcha.html %{buildroot}%{_localstatedir}/lib/%{name}/html/captcha.html
+install -m 644 -D templates/lua/ban.html %{buildroot}%{_localstatedir}/lib/%{name}/html/lua/ban.html
+install -m 644 -D templates/lua/captcha.html %{buildroot}%{_localstatedir}/lib/%{name}/html/lua/captcha.html
 
 %clean
 rm -rf %{buildroot}
@@ -56,15 +62,21 @@ rm -rf %{buildroot}
 %defattr(-,root,root,-)
 %{_bindir}/%{binary_name}
 /usr/lib/%{name}/_bouncer.sh
+/usr/lib/%{name}/lua/crowdsec.lua
+/usr/lib/%{name}/lua/utils.lua
+/usr/lib/%{name}/lua/template.lua
 %{_unitdir}/%{binary_name}.service
 %config(noreplace) /etc/crowdsec/bouncers/%{binary_name}.yaml
 %doc %{_docdir}/%{name}/examples/crowdsec.cfg
 %doc %{_docdir}/%{name}/examples/haproxy.cfg
-/usr/lib/%{name}/lua/crowdsec.lua
-/usr/lib/%{name}/lua/utils.lua
-/usr/lib/%{name}/lua/template.lua
+%doc %{_docdir}/%{name}/examples/haproxy-lua.cfg
+%doc %{_docdir}/%{name}/examples/haproxy-upstreamproxy.cfg
+%doc %{_docdir}/%{name}/examples/haproxy-upstreamproxy-lua.cfg
 %{_localstatedir}/lib/%{name}/html/ban.html
+%{_localstatedir}/lib/%{name}/html/ban-with-contact.html
 %{_localstatedir}/lib/%{name}/html/captcha.html
+%{_localstatedir}/lib/%{name}/html/lua/ban.html
+%{_localstatedir}/lib/%{name}/html/lua/captcha.html
 
 %post
 # Reload systemd units

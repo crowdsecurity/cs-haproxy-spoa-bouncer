@@ -59,7 +59,7 @@ sequenceDiagram
         HAProxy->>Backend: Forward request
         Backend-->>Client: Response
     else remediation = captcha or ban
-        HAProxy->>HAProxy: Render response page (Lua)
+        HAProxy->>HAProxy: Render response page with HAProxy lf-file
         HAProxy-->>Client: Response
     end
 ```
@@ -70,7 +70,7 @@ The [official documentation](https://doc.crowdsec.net/u/bouncers/haproxy_spoa) c
 
 1. Install the package (Debian/RPM), use the provided Docker image, or build locally with `make build`.
 2. Copy [`config/crowdsec-spoa-bouncer.yaml`](config/crowdsec-spoa-bouncer.yaml) to `/etc/crowdsec/bouncers/` and set your CrowdSec LAPI URL and API key.
-3. Wire the SPOE filter into HAProxy (see below) and copy the Lua helpers from [`lua/`](lua/) if you do not already ship them.
+3. Wire the SPOE filter into HAProxy (see below) and copy the HTML templates from [`templates/`](templates/) to the path used by HAProxy.
 4. Start the service with `systemctl start crowdsec-haproxy-spoa-bouncer` or run `./crowdsec-spoa-bouncer -c /path/to/config.yaml` for local tests.
 
 ## Configure
@@ -91,7 +91,7 @@ Detailed configuration guides:
 
 ### HAProxy wiring
 
-Add the SPOE filter and Lua helpers to your frontend. The config files in `config/` and the Lua scripts in `lua/` show complete examples; the snippet below highlights the essentials:
+Add the SPOE filter and native HAProxy remediation returns to your frontend. This is the default path and does not require HAProxy Lua support. The config files in `config/` show complete examples; the snippet below highlights the essentials:
 
 ```haproxy
 frontend www
@@ -105,9 +105,22 @@ frontend www
     http-request send-spoe-group crowdsec crowdsec-http-no-body if !body_within_limit { req.body_size -m found }
 
     http-request redirect code 302 location %[url] if { var(txn.crowdsec.remediation) -m str "allow" } { var(txn.crowdsec.redirect) -m found }
+    acl render_html req.hdr_cnt(Accept) eq 0
+    acl render_html req.hdr(Accept) -m sub text/html
+    acl render_html req.hdr(Accept) -m sub */*
+    acl html_rejected req.hdr(Accept) -m reg -i "text/html[[:space:]]*;[[:space:]]*q=0(\.0+)?([,[:space:]]|$)"
 
-    http-request lua.crowdsec_handle if { var(txn.crowdsec.remediation) -m str "captcha" }
-    http-request lua.crowdsec_handle if { var(txn.crowdsec.remediation) -m str "ban" }
+    acl has_contact_url var(txn.crowdsec.contact_us_url) -m found
+    acl empty_contact_url var(txn.crowdsec.contact_us_url) -m str ""
+
+    http-request return status 200 content-type "text/html; charset=utf-8" hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/captcha.html if { var(txn.crowdsec.remediation) -m str "captcha" } render_html !html_rejected
+    http-request return status 403 content-type "text/html; charset=utf-8" hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/ban-with-contact.html if { var(txn.crowdsec.remediation) -m str "ban" } render_html !html_rejected has_contact_url !empty_contact_url
+    http-request return status 403 content-type "text/html; charset=utf-8" hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/ban.html if { var(txn.crowdsec.remediation) -m str "ban" } render_html !html_rejected !has_contact_url
+    http-request return status 403 content-type "text/html; charset=utf-8" hdr Cache-Control "no-cache, no-store" lf-file /var/lib/crowdsec-haproxy-spoa-bouncer/html/ban.html if { var(txn.crowdsec.remediation) -m str "ban" } render_html !html_rejected empty_contact_url
+    http-request return status 200 content-type text/plain hdr Cache-Control "no-cache, no-store" string "Captcha required\n" if { var(txn.crowdsec.remediation) -m str "captcha" } !render_html
+    http-request return status 200 content-type text/plain hdr Cache-Control "no-cache, no-store" string "Captcha required\n" if { var(txn.crowdsec.remediation) -m str "captcha" } html_rejected
+    http-request return status 403 content-type text/plain hdr Cache-Control "no-cache, no-store" string "Forbidden\n" if { var(txn.crowdsec.remediation) -m str "ban" } !render_html
+    http-request return status 403 content-type text/plain hdr Cache-Control "no-cache, no-store" string "Forbidden\n" if { var(txn.crowdsec.remediation) -m str "ban" } html_rejected
 
     http-after-response set-header Set-Cookie %[var(txn.crowdsec.captcha_cookie)] if { var(txn.crowdsec.captcha_status) -m found } { var(txn.crowdsec.captcha_cookie) -m found }
     http-after-response set-header Set-Cookie %[var(txn.crowdsec.captcha_cookie)] if { var(txn.crowdsec.captcha_cookie) -m found } !{ var(txn.crowdsec.captcha_status) -m found }
@@ -122,6 +135,19 @@ Use a dedicated SPOE section (`crowdsec.cfg`) to declare the messages HAProxy se
 Important: captcha validation needs the request body (form-encoded POST). Ensure your frontend sends captcha submissions via the `crowdsec-http-body` group (see `http-request send-spoe-group ... crowdsec-http-body` in the examples).
 
 For complete, working examples (including optional request-body forwarding, captcha redirects, and cookie management), see [`config/haproxy.cfg`](config/haproxy.cfg) and [`config/crowdsec.cfg`](config/crowdsec.cfg).
+
+#### Optional Lua rendering
+
+The package still ships the legacy Lua handler for users who prefer rendering remediation pages through HAProxy Lua. To enable it, use a HAProxy build with Lua support and start from these examples instead of the default no-Lua config:
+
+- [`config/haproxy-lua.cfg`](config/haproxy-lua.cfg)
+- [`config/haproxy-upstreamproxy-lua.cfg`](config/haproxy-upstreamproxy-lua.cfg)
+
+The Lua examples load helpers from `/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/` and use Lua-compatible templates from `/var/lib/crowdsec-haproxy-spoa-bouncer/html/lua/`. The default `config/haproxy.cfg` remains the simpler plain-HAProxy path.
+
+**Docker + Lua mode**: the default `docker-compose.yaml` omits the `lua:` shared volume because the standard path does not need it. When switching to `haproxy-lua.cfg`, uncomment the `lua:` volume entries in `docker-compose.yaml` (see inline comments) so the HAProxy container can access the Lua scripts from the bouncer image.
+
+**Template paths** (non-Lua path): the `lf-file` directives in `haproxy.cfg` hard-code `/var/lib/crowdsec-haproxy-spoa-bouncer/html/`. If you need custom template locations, edit those `lf-file` paths directly. Note that HAProxy does not validate `lf-file` paths at startup; a missing file produces a runtime error on the first blocked request rather than a startup failure.
 
 ## Monitoring & Troubleshooting
 
@@ -161,5 +187,5 @@ MIT – see `LICENSE` for the full text.
 
 ## Acknowledgments
 
-- [HAProxy](https://www.haproxy.org/) for the SPOE protocol and Lua flexibility.
+- [HAProxy](https://www.haproxy.org/) for the SPOE protocol and native response templating.
 - [BART](https://github.com/gaissmai/bart) for the radix tree implementation that backs range lookups.
