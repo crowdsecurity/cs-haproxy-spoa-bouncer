@@ -37,6 +37,11 @@ type appsecJSONResponse struct {
 
 const DefaultRequestTimeout = 200 * time.Millisecond
 
+// maxAppSecResponseBodySize caps how much of an AppSec response body we'll
+// buffer. AppSec is a trusted local service, but this is cheap insurance
+// against a misbehaving or compromised instance sending an oversized body.
+const maxAppSecResponseBodySize = 1 << 20 // 1 MiB
+
 // AppSecRequest represents the HTTP request data to be validated by AppSec
 type AppSecRequest struct {
 	Host      string
@@ -143,10 +148,14 @@ func (a *AppSec) ValidateRequest(ctx context.Context, req *AppSecRequest) (remed
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAppSecResponseBodySize+1))
 	if err != nil {
 		a.logger.Errorf("Failed to read AppSec response body: %v", err)
 		return remediation.Allow, nil, err
+	}
+	if len(body) > maxAppSecResponseBodySize {
+		a.logger.Errorf("AppSec response body exceeds %d bytes, rejecting", maxAppSecResponseBodySize)
+		return remediation.Allow, nil, fmt.Errorf("AppSec response body too large")
 	}
 
 	return a.processAppSecResponse(resp.StatusCode, body)
@@ -227,15 +236,9 @@ func (a *AppSec) processAppSecResponse(statusCode int, body []byte) (remediation
 			Body:       parsed.UserBodyContent,
 			Cookies:    parsed.UserCookies,
 		}
-		if vals := parsed.UserHeaders["Content-Type"]; len(vals) > 0 {
-			cd.ContentType = vals[0]
-		}
-		if vals := parsed.UserHeaders["Content-Security-Policy"]; len(vals) > 0 {
-			cd.CSP = vals[0]
-		}
-		if vals := parsed.UserHeaders["Cache-Control"]; len(vals) > 0 {
-			cd.CacheControl = vals[0]
-		}
+		cd.ContentType = firstHeaderValue(parsed.UserHeaders, "Content-Type")
+		cd.CSP = firstHeaderValue(parsed.UserHeaders, "Content-Security-Policy")
+		cd.CacheControl = firstHeaderValue(parsed.UserHeaders, "Cache-Control")
 
 		return remediation.Challenge, cd, nil
 
@@ -251,6 +254,17 @@ func (a *AppSec) processAppSecResponse(statusCode int, body []byte) (remediation
 		a.logger.Warnf("Unexpected AppSec response code: %d", statusCode)
 		return remediation.Allow, nil, fmt.Errorf("unexpected AppSec response code: %d", statusCode)
 	}
+}
+
+// firstHeaderValue returns the first value for key in headers, matching the
+// key case-insensitively since AppSec's header casing is not guaranteed.
+func firstHeaderValue(headers map[string][]string, key string) string {
+	for k, vals := range headers {
+		if strings.EqualFold(k, key) && len(vals) > 0 {
+			return vals[0]
+		}
+	}
+	return ""
 }
 
 func normalizeHTTPVersion(raw string) string {

@@ -20,10 +20,10 @@ listen_unix: /run/crowdsec-spoa/spoa.sock
 #asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
 #city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
 
-## Global AppSec configuration
+## Global AppSec configuration (optional)
 ## Used for virtual patching and JavaScript challenge decisions.
-appsec_url: http://127.0.0.1:7422/
-appsec_timeout: 200ms
+#appsec_url: http://127.0.0.1:7422/
+#appsec_timeout: 200ms
 
 prometheus:
   enabled: false
