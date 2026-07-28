@@ -17,6 +17,7 @@ insecure_skip_verify: false
 # Configure TCP and/or Unix socket listeners
 listen_tcp: 0.0.0.0:9000
 listen_unix: /run/crowdsec-spoa/spoa.sock
+challenge_http_listen: 127.0.0.1:9100
 #asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
 #city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
 

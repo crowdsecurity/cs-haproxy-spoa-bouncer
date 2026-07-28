@@ -18,12 +18,10 @@ import (
 // AppSecChallengeData holds the challenge page content returned by AppSec when
 // it issues a JS PoW + fingerprint challenge instead of an outright block.
 type AppSecChallengeData struct {
-	StatusCode   int
-	Body         string
-	ContentType  string
-	CSP          string
-	CacheControl string
-	Cookies      []string
+	StatusCode int
+	Body       string
+	Headers    map[string][]string
+	Cookies    []string
 }
 
 // appsecJSONResponse mirrors the JSON body AppSec sends for HTTP 403 responses.
@@ -234,11 +232,9 @@ func (a *AppSec) processAppSecResponse(statusCode int, body []byte) (remediation
 		cd := &AppSecChallengeData{
 			StatusCode: parsed.HTTPStatus,
 			Body:       parsed.UserBodyContent,
+			Headers:    parsed.UserHeaders,
 			Cookies:    parsed.UserCookies,
 		}
-		cd.ContentType = firstHeaderValue(parsed.UserHeaders, "Content-Type")
-		cd.CSP = firstHeaderValue(parsed.UserHeaders, "Content-Security-Policy")
-		cd.CacheControl = firstHeaderValue(parsed.UserHeaders, "Cache-Control")
 
 		return remediation.Challenge, cd, nil
 
@@ -254,17 +250,6 @@ func (a *AppSec) processAppSecResponse(statusCode int, body []byte) (remediation
 		a.logger.Warnf("Unexpected AppSec response code: %d", statusCode)
 		return remediation.Allow, nil, fmt.Errorf("unexpected AppSec response code: %d", statusCode)
 	}
-}
-
-// firstHeaderValue returns the first value for key in headers, matching the
-// key case-insensitively since AppSec's header casing is not guaranteed.
-func firstHeaderValue(headers map[string][]string, key string) string {
-	for k, vals := range headers {
-		if strings.EqualFold(k, key) && len(vals) > 0 {
-			return vals[0]
-		}
-	}
-	return ""
 }
 
 func normalizeHTTPVersion(raw string) string {

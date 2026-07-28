@@ -97,6 +97,24 @@ local function get_txn_var(txn, key)
     return var
 end
 
+-- AppSec challenge bodies can exceed the 64KB SPOE frame limit, so the bouncer
+-- hands them back one chunk at a time (see crowdsec-challenge-chunk in
+-- crowdsec.cfg and the unrolled fetch loop in the haproxy-*.cfg examples).
+-- This action runs once per fetched chunk and accumulates it on the
+-- transaction's private storage, which persists across the whole request
+-- unlike SPOE variables and isn't subject to their size limit.
+-- @param txn the transaction
+-- @return nil
+function runtime.CollectChunk(txn)
+    local chunk = get_txn_var(txn, "crowdsec.challenge_chunk")
+    local buf = txn:get_priv()
+    if buf == nil then
+        buf = {}
+    end
+    table.insert(buf, chunk)
+    txn:set_priv(buf)
+end
+
 -- Render the remediation page
 -- @param txn the transaction https://www.arpalert.org/src/haproxy-lua-api/2.9/index.html#txn-class
 -- @return nil
@@ -126,26 +144,33 @@ function runtime.Handle(txn)
             reply:set_status(200)
         end
 
-        reply:set_body(get_txn_var(txn, "crowdsec.challenge_body"))
-
-        local content_type = get_txn_var(txn, "crowdsec.challenge_content_type")
-        if content_type ~= "" then
-            reply:add_header("Content-Type", content_type)
+        -- Body was fetched in chunks by runtime.CollectChunk (see the fetch loop
+        -- in the haproxy-*.cfg examples) and accumulated on transaction-private
+        -- storage since it can be far larger than a single SPOE variable allows.
+        local chunks = txn:get_priv()
+        if chunks ~= nil then
+            reply:set_body(table.concat(chunks))
+        else
+            reply:set_body("")
         end
 
-        local csp = get_txn_var(txn, "crowdsec.challenge_csp")
-        if csp ~= "" then
-            reply:add_header("Content-Security-Policy", csp)
+        -- Every header AppSec returned is forwarded as-is (one "Name: value"
+        -- per line), rather than singling out a fixed set of header names.
+        local headers = get_txn_var(txn, "crowdsec.challenge_headers")
+        if headers ~= "" then
+            for _, line in ipairs(utils.split(headers, "\n")) do
+                local name, value = line:match("^([^:]+):%s*(.*)$")
+                if name ~= nil then
+                    reply:add_header(name, value)
+                end
+            end
         end
 
-        local cache_control = get_txn_var(txn, "crowdsec.challenge_cache_control")
-        if cache_control ~= "" then
-            reply:add_header("Cache-Control", cache_control)
-        end
-
-        local cookie = get_txn_var(txn, "crowdsec.challenge_cookie")
-        if cookie ~= "" then
-            reply:add_header("Set-Cookie", cookie)
+        local cookies = get_txn_var(txn, "crowdsec.challenge_cookies")
+        if cookies ~= "" then
+            for _, cookie in ipairs(utils.split(cookies, "\n")) do
+                reply:add_header("Set-Cookie", cookie)
+            end
         end
 
         reply:add_header("Content-Length", #reply.body)
@@ -184,3 +209,4 @@ end
 -- Registers
 core.register_init(init)
 core.register_action("crowdsec_handle", {"http-req"}, runtime.Handle)
+core.register_action("crowdsec_collect_chunk", {"http-req"}, runtime.CollectChunk)

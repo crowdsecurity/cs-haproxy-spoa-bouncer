@@ -35,6 +35,7 @@ type BouncerConfig struct {
 	Geo              geo.GeoDatabase         `yaml:",inline"`
 	ListenTCP        string                  `yaml:"listen_tcp"`
 	ListenUnix       string                  `yaml:"listen_unix"`
+	ChallengeHTTP    string                  `yaml:"challenge_http_listen,omitempty"`
 	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
 	PprofConfig      PprofConfig             `yaml:"pprof"`
 	APIKey           string                  `yaml:"api_key"`              // LAPI API key (also used for AppSec)

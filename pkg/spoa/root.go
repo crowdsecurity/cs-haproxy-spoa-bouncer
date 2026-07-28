@@ -3,8 +3,13 @@ package spoa
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -25,6 +30,16 @@ import (
 	"github.com/dropmorepackets/haproxy-go/spop"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
+)
+
+const (
+	challengePathPrefix         = "/crowdsec-challenge/"
+	challengeInternalPathPrefix = "/crowdsec-internal/challenge/"
+
+	// challengeResponseTTL bounds how long a challenge page is held in memory
+	// waiting for HAProxy to route the challenged request to the HTTP challenge
+	// backend. The browser-visible challenge cookie remains governed by CrowdSec.
+	challengeResponseTTL = 30 * time.Second
 )
 
 var (
@@ -74,24 +89,42 @@ var (
 )
 
 type Spoa struct {
-	ListenAddr   net.Listener
-	ListenSocket net.Listener
-	logger       *log.Entry
+	ListenAddr              net.Listener
+	ListenSocket            net.Listener
+	ChallengeHTTPListenAddr net.Listener
+	challengeHTTPServer     *http.Server
+	logger                  *log.Entry
 	// Direct access to shared data (no IPC needed)
 	dataset      *dataset.DataSet
 	hostManager  *host.Manager
 	geoDatabase  *geo.GeoDatabase
 	globalAppSec *appsec.AppSec // Global AppSec config (used when no host matched)
+
+	// challengeResponses holds full AppSec challenge responses keyed by an
+	// HMAC-derived token from HAProxy's unique-id. HAProxy receives only the
+	// tokenized URL over SPOE, then streams the body from this bouncer over
+	// normal HTTP.
+	challengeResponses sync.Map
+	challengeTokenKey  [32]byte
+}
+
+type challengeResponseEntry struct {
+	status    int
+	body      string
+	headers   http.Header
+	cookies   []string
+	expiresAt time.Time
 }
 
 type SpoaConfig struct {
-	TcpAddr      string
-	UnixAddr     string
-	Dataset      *dataset.DataSet
-	HostManager  *host.Manager
-	GeoDatabase  *geo.GeoDatabase
-	GlobalAppSec *appsec.AppSec // Global AppSec config (used when no host matched)
-	Logger       *log.Entry     // Parent logger to inherit from
+	TcpAddr           string
+	UnixAddr          string
+	ChallengeHTTPAddr string
+	Dataset           *dataset.DataSet
+	HostManager       *host.Manager
+	GeoDatabase       *geo.GeoDatabase
+	GlobalAppSec      *appsec.AppSec // Global AppSec config (used when no host matched)
+	Logger            *log.Entry     // Parent logger to inherit from
 }
 
 func New(config *SpoaConfig) (*Spoa, error) {
@@ -119,6 +152,9 @@ func New(config *SpoaConfig) (*Spoa, error) {
 		hostManager:  config.HostManager,
 		geoDatabase:  config.GeoDatabase,
 		globalAppSec: config.GlobalAppSec,
+	}
+	if _, err := rand.Read(s.challengeTokenKey[:]); err != nil {
+		return nil, fmt.Errorf("failed to initialize challenge token key: %w", err)
 	}
 
 	if config.TcpAddr != "" {
@@ -150,6 +186,14 @@ func New(config *SpoaConfig) (*Spoa, error) {
 		syscall.Umask(origUmask)
 
 		s.ListenSocket = addr
+	}
+
+	if config.ChallengeHTTPAddr != "" {
+		addr, err := net.Listen("tcp", config.ChallengeHTTPAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to listen on %s: %w", config.ChallengeHTTPAddr, err)
+		}
+		s.ChallengeHTTPListenAddr = addr
 	}
 
 	return s, nil
@@ -208,16 +252,54 @@ func (s *Spoa) Serve(ctx context.Context) error {
 		}()
 	}
 
-	// If no listeners are configured, return immediately
-	if s.ListenAddr == nil && s.ListenSocket == nil {
+	if s.ChallengeHTTPListenAddr != nil {
+		mux := http.NewServeMux()
+		mux.HandleFunc(challengePathPrefix, s.handleStoredChallengeHTTP)
+		mux.HandleFunc(challengeInternalPathPrefix, s.handleInternalChallengeHTTP)
+		s.challengeHTTPServer = &http.Server{
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		s.logger.Infof("Serving challenge HTTP backend on %s", s.ChallengeHTTPListenAddr.Addr().String())
+		go func() {
+			if err := s.challengeHTTPServer.Serve(s.ChallengeHTTPListenAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				serverError <- err
+			}
+		}()
+	}
+
+	if s.ListenAddr == nil && s.ListenSocket == nil && s.ChallengeHTTPListenAddr == nil {
 		return nil
 	}
+
+	go s.cleanupChallengeResponses(ctx)
 
 	select {
 	case err := <-serverError:
 		return err
 	case <-ctx.Done():
 		return nil
+	}
+}
+
+// cleanupChallengeResponses periodically reclaims challenge responses that were
+// never fetched by HAProxy after the SPOE decision completed.
+func (s *Spoa) cleanupChallengeResponses(ctx context.Context) {
+	ticker := time.NewTicker(challengeResponseTTL)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			s.challengeResponses.Range(func(key, value any) bool {
+				if entry, ok := value.(*challengeResponseEntry); ok && now.After(entry.expiresAt) {
+					s.challengeResponses.Delete(key)
+				}
+				return true
+			})
+		}
 	}
 }
 
@@ -234,6 +316,12 @@ func (s *Spoa) Shutdown(ctx context.Context) error {
 	// Close Unix socket - the library now handles waiting for handlers internally
 	if s.ListenSocket != nil {
 		closeErrors = append(closeErrors, s.ListenSocket.Close())
+	}
+	if s.ChallengeHTTPListenAddr != nil {
+		closeErrors = append(closeErrors, s.ChallengeHTTPListenAddr.Close())
+	}
+	if s.challengeHTTPServer != nil {
+		closeErrors = append(closeErrors, s.challengeHTTPServer.Shutdown(ctx))
 	}
 
 	// The library's workgroup now handles waiting for all frame handlers to complete
@@ -613,34 +701,226 @@ func (s *Spoa) validateWithAppSec(
 			logger.Warn("AppSec returned ban but no host matched - remediation set but ban values not injected")
 		}
 		if appSecRemediation == remediation.Challenge && challengeData != nil {
-			injectChallengeKeyValues(writer, challengeData)
+			if s.ChallengeHTTPListenAddr == nil {
+				logger.Error("cannot serve AppSec challenge: challenge_http_listen is not configured, falling back to ban")
+				return remediation.Ban
+			}
+			if msgData.ID == nil || *msgData.ID == "" {
+				logger.Error("cannot serve AppSec challenge: HAProxy sent no unique request id (configure unique-id-format), falling back to ban")
+				return remediation.Ban
+			}
+			if !s.injectChallengeKeyValues(writer, challengeData, *msgData.ID) {
+				return remediation.Ban
+			}
 		}
 		return appSecRemediation
 	}
 	return currentRemediation
 }
 
-func injectChallengeKeyValues(writer *encoding.ActionWriter, challengeData *appsec.AppSecChallengeData) {
+func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challengeData *appsec.AppSecChallengeData, requestID string) bool {
 	status := challengeData.StatusCode
 	if status <= 0 {
 		status = http.StatusOK
 	}
 
-	_ = writer.SetInt64(encoding.VarScopeTransaction, "challenge_status", int64(status))
-	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_body", challengeData.Body)
+	body := challengeData.Body
+	headers := challengeData.Headers
+	if body == "" {
+		body = fallbackChallengeBody
+		headers = cloneChallengeHeaders(headers)
+		if !hasChallengeHeader(headers, "Content-Type") {
+			headers["Content-Type"] = []string{"text/html; charset=utf-8"}
+		}
+		if !hasChallengeHeader(headers, "Cache-Control") {
+			headers["Cache-Control"] = []string{"no-cache, no-store"}
+		}
+	}
 
-	if challengeData.ContentType != "" {
-		_ = writer.SetString(encoding.VarScopeTransaction, "challenge_content_type", challengeData.ContentType)
+	token := s.challengeTokenFromRequestID(requestID)
+
+	s.challengeResponses.Store(token, &challengeResponseEntry{
+		status:    status,
+		body:      body,
+		headers:   cloneHTTPHeader(headers),
+		cookies:   append([]string(nil), challengeData.Cookies...),
+		expiresAt: time.Now().Add(challengeResponseTTL),
+	})
+
+	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_url", challengePathPrefix+token)
+	return true
+}
+
+const fallbackChallengeBody = `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CrowdSec Challenge</title>
+    <style>
+      body { margin: 0; font-family: system-ui, sans-serif; color: #111827; background: #f9fafb; }
+      main { max-width: 42rem; margin: 15vh auto; padding: 2rem; }
+      h1 { font-size: 1.5rem; margin: 0 0 0.75rem; }
+      p { line-height: 1.5; margin: 0; color: #374151; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Request challenged by CrowdSec</h1>
+      <p>The request matched an AppSec rule and was returned as a challenge, but CrowdSec did not provide a challenge page body.</p>
+    </main>
+  </body>
+</html>
+`
+
+func cloneChallengeHeaders(headers map[string][]string) map[string][]string {
+	clone := make(map[string][]string, len(headers)+2)
+	for k, values := range headers {
+		clone[k] = append([]string(nil), values...)
 	}
-	if challengeData.CSP != "" {
-		_ = writer.SetString(encoding.VarScopeTransaction, "challenge_csp", challengeData.CSP)
+	return clone
+}
+
+func hasChallengeHeader(headers map[string][]string, name string) bool {
+	for k := range headers {
+		if strings.EqualFold(k, name) {
+			return true
+		}
 	}
-	if challengeData.CacheControl != "" {
-		_ = writer.SetString(encoding.VarScopeTransaction, "challenge_cache_control", challengeData.CacheControl)
+	return false
+}
+
+func (s *Spoa) challengeTokenFromRequestID(requestID string) string {
+	mac := hmac.New(sha256.New, s.challengeTokenKey[:])
+	_, _ = mac.Write([]byte(requestID))
+	return hex.EncodeToString(mac.Sum(nil)[:16])
+}
+
+func cloneHTTPHeader(headers map[string][]string) http.Header {
+	clone := make(http.Header, len(headers))
+	for k, values := range headers {
+		clone[k] = append([]string(nil), values...)
 	}
-	if len(challengeData.Cookies) > 0 {
-		_ = writer.SetString(encoding.VarScopeTransaction, "challenge_cookie", challengeData.Cookies[0])
+	return clone
+}
+
+func (s *Spoa) handleStoredChallengeHTTP(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.URL.Path, challengePathPrefix)
+	if token == "" || strings.Contains(token, "/") {
+		http.NotFound(w, r)
+		return
 	}
+
+	entryAny, ok := s.challengeResponses.LoadAndDelete(token)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	entry, ok := entryAny.(*challengeResponseEntry)
+	if !ok || time.Now().After(entry.expiresAt) {
+		http.NotFound(w, r)
+		return
+	}
+
+	for name, values := range entry.headers {
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+	for _, cookie := range entry.cookies {
+		w.Header().Add("Set-Cookie", cookie)
+	}
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	}
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "no-cache, no-store")
+	}
+
+	status := entry.status
+	if status <= 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(entry.body))
+}
+
+func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Request) {
+	appSecToUse := s.globalAppSec
+	if appSecToUse == nil || !appSecToUse.IsValid() {
+		http.NotFound(w, r)
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(maxBodyBufferSize)))
+	_ = r.Body.Close()
+	if err != nil {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	req := &appsec.AppSecRequest{
+		Host:      r.Host,
+		Method:    r.Method,
+		URL:       r.URL.RequestURI(),
+		RemoteIP:  clientIPFromRequest(r),
+		UserAgent: r.UserAgent(),
+		Version:   r.Proto,
+		Headers:   r.Header.Clone(),
+		Body:      body,
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), appSecToUse.TimeoutOrDefault())
+	defer cancel()
+
+	remediationResult, challengeData, err := appSecToUse.ValidateRequest(ctx, req)
+	if err != nil {
+		s.logger.WithError(err).Warn("AppSec internal challenge request failed")
+		http.Error(w, "challenge backend error", http.StatusBadGateway)
+		return
+	}
+
+	if remediationResult != remediation.Challenge || challengeData == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	writeChallengeData(w, challengeData)
+}
+
+func writeChallengeData(w http.ResponseWriter, challengeData *appsec.AppSecChallengeData) {
+	for name, values := range challengeData.Headers {
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+	for _, cookie := range challengeData.Cookies {
+		w.Header().Add("Set-Cookie", cookie)
+	}
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "no-cache, no-store")
+	}
+	status := challengeData.StatusCode
+	if status <= 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(challengeData.Body))
+}
+
+func clientIPFromRequest(r *http.Request) string {
+	for _, headerName := range []string{"X-Forwarded-For", "X-Real-IP"} {
+		if header := r.Header.Get(headerName); header != "" {
+			ip, _, _ := strings.Cut(header, ",")
+			return strings.TrimSpace(ip)
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // buildAppSecRequest constructs an AppSecRequest from HTTPMessageData

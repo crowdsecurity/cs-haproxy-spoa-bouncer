@@ -102,7 +102,7 @@ func TestProcessAppSecResponse_ChallengeMinimal(t *testing.T) {
 	require.NotNil(t, cd)
 	assert.Equal(t, 200, cd.StatusCode)
 	assert.Equal(t, "<html>challenge</html>", cd.Body)
-	assert.Equal(t, "text/html", cd.ContentType)
+	assert.Equal(t, []string{"text/html"}, cd.Headers["Content-Type"])
 	assert.Empty(t, cd.Cookies)
 }
 
@@ -118,6 +118,7 @@ func TestProcessAppSecResponse_ChallengeWithAllHeaders(t *testing.T) {
 			"Content-Type":            {"text/html; charset=utf-8"},
 			"Content-Security-Policy": {"default-src 'self'"},
 			"Cache-Control":           {"no-store, no-cache"},
+			"X-Custom-Appsec-Header":  {"some-value"},
 		},
 		"user_cookies": []string{"__crowdsec_challenge=abc123; HttpOnly; SameSite=Lax"},
 	})
@@ -127,9 +128,10 @@ func TestProcessAppSecResponse_ChallengeWithAllHeaders(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, remediation.Challenge, rem)
 	require.NotNil(t, cd)
-	assert.Equal(t, "text/html; charset=utf-8", cd.ContentType)
-	assert.Equal(t, "default-src 'self'", cd.CSP)
-	assert.Equal(t, "no-store, no-cache", cd.CacheControl)
+	assert.Equal(t, []string{"text/html; charset=utf-8"}, cd.Headers["Content-Type"])
+	assert.Equal(t, []string{"default-src 'self'"}, cd.Headers["Content-Security-Policy"])
+	assert.Equal(t, []string{"no-store, no-cache"}, cd.Headers["Cache-Control"])
+	assert.Equal(t, []string{"some-value"}, cd.Headers["X-Custom-Appsec-Header"])
 	assert.Equal(t, []string{"__crowdsec_challenge=abc123; HttpOnly; SameSite=Lax"}, cd.Cookies)
 }
 
@@ -232,9 +234,9 @@ func TestValidateRequest_Challenge(t *testing.T) {
 	require.NotNil(t, cd)
 	assert.Equal(t, 200, cd.StatusCode)
 	assert.Equal(t, challengeHTML, cd.Body)
-	assert.Equal(t, "text/html", cd.ContentType)
-	assert.Equal(t, "default-src 'self'", cd.CSP)
-	assert.Equal(t, "no-store", cd.CacheControl)
+	assert.Equal(t, []string{"text/html"}, cd.Headers["Content-Type"])
+	assert.Equal(t, []string{"default-src 'self'"}, cd.Headers["Content-Security-Policy"])
+	assert.Equal(t, []string{"no-store"}, cd.Headers["Cache-Control"])
 	assert.Equal(t, []string{"__crowdsec_challenge=xyz; HttpOnly"}, cd.Cookies)
 }
 
