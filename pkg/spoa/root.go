@@ -858,14 +858,22 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	// requests here directly, bypassing send-spoe-group - see haproxy*.cfg), so it
 	// never gets the IP/dataset ban check that every other request goes through.
 	// Re-run that cheap, local check here before relaying anything to AppSec, so an
-	// already-banned/challenged/captcha'd IP can't use this path as a side channel
-	// into the AppSec engine. This intentionally does NOT run the full
-	// validateWithAppSec pipeline (that would mint a *new* challenge_url token here,
-	// which is wrong: this endpoint relays an already-issued challenge's follow-up
-	// asset/verification traffic, not a fresh top-level decision).
+	// already-banned/captcha'd IP can't use this path as a side channel into the
+	// AppSec engine. This intentionally does NOT run the full validateWithAppSec
+	// pipeline (that would mint a *new* challenge_url token here, which is wrong:
+	// this endpoint relays an already-issued challenge's follow-up asset/
+	// verification traffic, not a fresh top-level decision).
+	//
+	// Deliberately not blocking on remediation.Challenge here, even though it sits
+	// above Captcha in the ordering: if the dataset itself already resolved this
+	// IP to "challenge" (e.g. a decision with Type "challenge" from the LAPI/cscli -
+	// see remediation.FromString, used as-is in pkg/dataset/root.go), that is
+	// exactly what this relay exists to serve. Rejecting it here would block the
+	// one case this endpoint is for; AppSec remains the authority on what to do
+	// with the request.
 	remoteIP := trustedChallengeClientIP(r)
 	if ip, parseErr := netip.ParseAddr(remoteIP); parseErr == nil {
-		if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem >= remediation.Captcha {
+		if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem == remediation.Ban || rem == remediation.Captcha {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

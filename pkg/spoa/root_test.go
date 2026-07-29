@@ -251,8 +251,10 @@ func TestHandleStoredChallengeHTTP_ServesAndDeletesCachedResponse(t *testing.T) 
 // production always provides, per cmd/root.go) wired up for
 // handleInternalChallengeHTTP tests, plus an AppSec double that counts calls
 // so tests can assert whether AppSec was reached at all.
-func newInternalChallengeSpoa(t *testing.T, appSecBody string) (*Spoa, *int32) {
+func newInternalChallengeSpoa(t *testing.T) (*Spoa, *int32) {
 	t.Helper()
+
+	const appSecBody = "<html>challenge</html>"
 
 	var calls int32
 	respBody, err := json.Marshal(map[string]any{
@@ -283,7 +285,7 @@ func newInternalChallengeSpoa(t *testing.T, appSecBody string) (*Spoa, *int32) {
 }
 
 func TestHandleInternalChallengeHTTP_BannedIPRejectedWithoutCallingAppSec(t *testing.T) {
-	s, calls := newInternalChallengeSpoa(t, "<html>challenge</html>")
+	s, calls := newInternalChallengeSpoa(t)
 	s.dataset.Add(models.GetDecisionsResponse{
 		{
 			Scope:  ptr.Of("IP"),
@@ -306,8 +308,57 @@ func TestHandleInternalChallengeHTTP_BannedIPRejectedWithoutCallingAppSec(t *tes
 	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "a banned IP must not reach the AppSec engine through this endpoint")
 }
 
+func TestHandleInternalChallengeHTTP_CaptchaPendingIPRejectedWithoutCallingAppSec(t *testing.T) {
+	s, calls := newInternalChallengeSpoa(t)
+	s.dataset.Add(models.GetDecisionsResponse{
+		{
+			Scope:  ptr.Of("IP"),
+			Value:  ptr.Of("203.0.113.6"),
+			Type:   ptr.Of("captcha"),
+			Origin: ptr.Of("test"),
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req.Header.Set("X-Crowdsec-Real-Src", "203.0.113.6")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "a captcha-pending IP must not reach the AppSec engine through this endpoint")
+}
+
+// TestHandleInternalChallengeHTTP_DatasetChallengeRemediationStillRelayed guards
+// against re-introducing rem >= remediation.Captcha (Challenge sorts above
+// Captcha in the ordering, so that comparison would also block it). If the
+// dataset itself already resolved this IP to "challenge" (e.g. a decision with
+// Type "challenge" added via cscli/LAPI), that's exactly the case this relay
+// exists to serve - AppSec is the authority on what to do with it next, not a
+// reason to 403 before ever asking AppSec.
+func TestHandleInternalChallengeHTTP_DatasetChallengeRemediationStillRelayed(t *testing.T) {
+	s, calls := newInternalChallengeSpoa(t)
+	s.dataset.Add(models.GetDecisionsResponse{
+		{
+			Scope:  ptr.Of("IP"),
+			Value:  ptr.Of("203.0.113.7"),
+			Type:   ptr.Of("challenge"),
+			Origin: ptr.Of("test"),
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req.Header.Set("X-Crowdsec-Real-Src", "203.0.113.7")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, int32(1), atomic.LoadInt32(calls), "a dataset-level challenge remediation must still be relayed to AppSec")
+}
+
 func TestHandleInternalChallengeHTTP_AllowedIPRelaysToAppSec(t *testing.T) {
-	s, calls := newInternalChallengeSpoa(t, "<html>challenge</html>")
+	s, calls := newInternalChallengeSpoa(t)
 
 	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
 	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.7")
@@ -321,7 +372,7 @@ func TestHandleInternalChallengeHTTP_AllowedIPRelaysToAppSec(t *testing.T) {
 }
 
 func TestHandleInternalChallengeHTTP_SpoofedXForwardedForIgnoredForBanCheck(t *testing.T) {
-	s, calls := newInternalChallengeSpoa(t, "<html>challenge</html>")
+	s, calls := newInternalChallengeSpoa(t)
 	// Ban a victim IP; the attacker tries to get it "reported" as their own
 	// source by spoofing X-Forwarded-For, without HAProxy setting the trusted header.
 	s.dataset.Add(models.GetDecisionsResponse{
