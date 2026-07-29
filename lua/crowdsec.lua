@@ -136,12 +136,9 @@ function runtime.Handle(txn)
     end
 
     if remediation == "challenge" then
-        local status = get_txn_var(txn, "crowdsec.challenge_status")
-        if status ~= "" then
-            reply:set_status(tonumber(status))
-        else
-            reply:set_status(200)
-        end
+        runtime.logger.error("Lua handler called for 'challenge' remediation - configure HAProxy to route to the bouncer HTTP challenge backend instead")
+        return
+    end
 
         -- Body was fetched in chunks by runtime.CollectChunk (see the fetch loop
         -- in the haproxy-*.cfg examples) and accumulated on transaction-private
