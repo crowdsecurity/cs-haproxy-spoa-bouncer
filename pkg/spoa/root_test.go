@@ -8,11 +8,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crowdsecurity/crowdsec-spoa/internal/appsec"
+	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
+	"github.com/crowdsecurity/crowdsec/pkg/models"
 	"github.com/crowdsecurity/go-cs-lib/ptr"
 	"github.com/dropmorepackets/haproxy-go/pkg/encoding"
 	log "github.com/sirupsen/logrus"
@@ -241,4 +245,123 @@ func TestHandleStoredChallengeHTTP_ServesAndDeletesCachedResponse(t *testing.T) 
 
 	_, ok := s.challengeResponses.Load("tok")
 	assert.False(t, ok)
+}
+
+// newInternalChallengeSpoa builds a Spoa with a real dataset/geo database (as
+// production always provides, per cmd/root.go) wired up for
+// handleInternalChallengeHTTP tests, plus an AppSec double that counts calls
+// so tests can assert whether AppSec was reached at all.
+func newInternalChallengeSpoa(t *testing.T, appSecBody string) (*Spoa, *int32) {
+	t.Helper()
+
+	var calls int32
+	respBody, err := json.Marshal(map[string]any{
+		"action":            "challenge",
+		"http_status":       200,
+		"user_body_content": appSecBody,
+	})
+	require.NoError(t, err)
+
+	a := &appsec.AppSec{URL: "http://appsec.test/", APIKey: "test-key"}
+	require.NoError(t, a.Init(log.NewEntry(log.New())))
+	a.Client.HTTPClient.Transport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&calls, 1)
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(respBody)),
+		}, nil
+	})
+
+	s := &Spoa{
+		logger:       log.NewEntry(log.New()),
+		dataset:      dataset.New(),
+		geoDatabase:  &geo.GeoDatabase{},
+		globalAppSec: a,
+	}
+	return s, &calls
+}
+
+func TestHandleInternalChallengeHTTP_BannedIPRejectedWithoutCallingAppSec(t *testing.T) {
+	s, calls := newInternalChallengeSpoa(t, "<html>challenge</html>")
+	s.dataset.Add(models.GetDecisionsResponse{
+		{
+			Scope:  ptr.Of("IP"),
+			Value:  ptr.Of("203.0.113.5"),
+			Type:   ptr.Of("ban"),
+			Origin: ptr.Of("test"),
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	// Client-supplied header must NOT be trusted for the ban check either -
+	// only the HAProxy-set X-Crowdsec-Real-Src should be honored.
+	req.Header.Set("X-Forwarded-For", "127.0.0.1")
+	req.Header.Set("X-Crowdsec-Real-Src", "203.0.113.5")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "a banned IP must not reach the AppSec engine through this endpoint")
+}
+
+func TestHandleInternalChallengeHTTP_AllowedIPRelaysToAppSec(t *testing.T) {
+	s, calls := newInternalChallengeSpoa(t, "<html>challenge</html>")
+
+	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.7")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "<html>challenge</html>")
+	assert.Equal(t, int32(1), atomic.LoadInt32(calls), "a non-banned IP should still be relayed to AppSec")
+}
+
+func TestHandleInternalChallengeHTTP_SpoofedXForwardedForIgnoredForBanCheck(t *testing.T) {
+	s, calls := newInternalChallengeSpoa(t, "<html>challenge</html>")
+	// Ban a victim IP; the attacker tries to get it "reported" as their own
+	// source by spoofing X-Forwarded-For, without HAProxy setting the trusted header.
+	s.dataset.Add(models.GetDecisionsResponse{
+		{
+			Scope:  ptr.Of("IP"),
+			Value:  ptr.Of("203.0.113.99"),
+			Type:   ptr.Of("ban"),
+			Origin: ptr.Of("test"),
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req.Header.Set("X-Forwarded-For", "203.0.113.99")
+	req.RemoteAddr = "198.51.100.50:12345"
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	// Since X-Crowdsec-Real-Src is absent, trustedChallengeClientIP falls back to
+	// RemoteAddr (198.51.100.50), which is not banned, so the request is relayed -
+	// proving the spoofed X-Forwarded-For value was not the one checked or forwarded.
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, int32(1), atomic.LoadInt32(calls))
+}
+
+func TestTrustedChallengeClientIP(t *testing.T) {
+	t.Run("uses X-Crowdsec-Real-Src when present", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+		req.Header.Set("X-Forwarded-For", "10.0.0.1")
+		req.Header.Set("X-Crowdsec-Real-Src", "203.0.113.9")
+		req.RemoteAddr = "127.0.0.1:9100"
+
+		assert.Equal(t, "203.0.113.9", trustedChallengeClientIP(req))
+	})
+
+	t.Run("falls back to RemoteAddr when header absent", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+		req.Header.Set("X-Forwarded-For", "10.0.0.1")
+		req.RemoteAddr = "192.0.2.1:54321"
+
+		assert.Equal(t, "192.0.2.1", trustedChallengeClientIP(req))
+	})
 }

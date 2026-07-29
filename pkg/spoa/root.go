@@ -853,6 +853,24 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// This endpoint is reached without going through the normal SPOE
+	// crowdsec-http-body/no-body flow (HAProxy routes crowdsec_challenge_backend_path
+	// requests here directly, bypassing send-spoe-group - see haproxy*.cfg), so it
+	// never gets the IP/dataset ban check that every other request goes through.
+	// Re-run that cheap, local check here before relaying anything to AppSec, so an
+	// already-banned/challenged/captcha'd IP can't use this path as a side channel
+	// into the AppSec engine. This intentionally does NOT run the full
+	// validateWithAppSec pipeline (that would mint a *new* challenge_url token here,
+	// which is wrong: this endpoint relays an already-issued challenge's follow-up
+	// asset/verification traffic, not a fresh top-level decision).
+	remoteIP := trustedChallengeClientIP(r)
+	if ip, parseErr := netip.ParseAddr(remoteIP); parseErr == nil {
+		if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem >= remediation.Captcha {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
+
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(maxBodyBufferSize)))
 	_ = r.Body.Close()
 	if err != nil {
@@ -864,7 +882,7 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 		Host:      r.Host,
 		Method:    r.Method,
 		URL:       r.URL.RequestURI(),
-		RemoteIP:  clientIPFromRequest(r),
+		RemoteIP:  remoteIP,
 		UserAgent: r.UserAgent(),
 		Version:   r.Proto,
 		Headers:   r.Header.Clone(),
@@ -909,12 +927,19 @@ func writeChallengeData(w http.ResponseWriter, challengeData *appsec.AppSecChall
 	_, _ = w.Write([]byte(challengeData.Body))
 }
 
-func clientIPFromRequest(r *http.Request) string {
-	for _, headerName := range []string{"X-Forwarded-For", "X-Real-IP"} {
-		if header := r.Header.Get(headerName); header != "" {
-			ip, _, _ := strings.Cut(header, ",")
-			return strings.TrimSpace(ip)
-		}
+// trustedChallengeClientIP returns the client IP for a request routed to the
+// challenge HTTP backend. It deliberately does NOT trust client-supplied
+// X-Forwarded-For/X-Real-IP headers: this endpoint bypasses the normal SPOE
+// flow (see crowdsec_challenge_backend_path in haproxy*.cfg), so nothing else
+// validates those headers here, and HAProxy's "option forwardfor" appends
+// rather than replaces an existing X-Forwarded-For - meaning a client-supplied
+// value would win over HAProxy's own if naively read with Header.Get. Instead,
+// haproxy*.cfg overwrites a single dedicated header (X-Crowdsec-Real-Src) with
+// HAProxy's own verified %[src] immediately before routing to this backend,
+// the same trust model crowdsec.cfg uses for src-ip=src in the normal flow.
+func trustedChallengeClientIP(r *http.Request) string {
+	if trusted := r.Header.Get("X-Crowdsec-Real-Src"); trusted != "" {
+		return trusted
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -1084,8 +1109,8 @@ func (s *Spoa) getIPRemediation(_ context.Context, writer *encoding.ActionWriter
 		} else if record != nil {
 			iso := geo.GetIsoCodeFromRecord(record)
 			if iso != "" {
-				// Always set the ISO code variable when available
-				_ = writer.SetString(encoding.VarScopeTransaction, "isocode", iso)
+				// Always set the ISO code variable when available.
+				setIsoCodeVar(writer, iso)
 
 				// If no IP-specific remediation, check country-based remediation
 				if r < remediation.Unknown {
@@ -1100,6 +1125,16 @@ func (s *Spoa) getIPRemediation(_ context.Context, writer *encoding.ActionWriter
 	}
 
 	return r, origin
+}
+
+// setIsoCodeVar sets the isocode SPOE transaction variable when a writer is
+// available. writer is nil when getIPRemediation is called from a plain
+// net/http handler (e.g. handleInternalChallengeHTTP) that has no SPOE
+// transaction to write a variable to.
+func setIsoCodeVar(writer *encoding.ActionWriter, iso string) {
+	if writer != nil {
+		_ = writer.SetString(encoding.VarScopeTransaction, "isocode", iso)
+	}
 }
 
 // extractIPMessageData extracts all KV entries from crowdsec-ip message in a single pass
