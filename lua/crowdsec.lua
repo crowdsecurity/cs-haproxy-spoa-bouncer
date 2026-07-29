@@ -97,11 +97,10 @@ local function get_txn_var(txn, key)
     return var
 end
 
--- AppSec challenge bodies can exceed the 64KB SPOE frame limit, so the bouncer
--- hands them back one chunk at a time (see crowdsec-challenge-chunk in
--- crowdsec.cfg and the unrolled fetch loop in the haproxy-*.cfg examples).
--- This action runs once per fetched chunk and accumulates it on the
--- transaction's private storage, which persists across the whole request
+-- AppSec challenge bodies can exceed the 64KB SPOE frame limit.
+-- In the shipped haproxy-*.cfg examples, challenge responses are therefore served
+-- by routing the request to the bouncer's HTTP challenge backend
+-- (see /crowdsec-challenge/ and challenge_http_listen).
 -- unlike SPOE variables and isn't subject to their size limit.
 -- @param txn the transaction
 -- @return nil
