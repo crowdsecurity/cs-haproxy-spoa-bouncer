@@ -754,33 +754,36 @@ func (s *Spoa) validateWithAppSec(
 func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challengeData *appsec.AppSecChallengeData, requestID string) bool {
 	status := challengeData.StatusCode
 	if status <= 0 {
-		status = http.StatusOK
+			status = http.StatusOK
 	}
 
 	body := challengeData.Body
 	headers := challengeData.Headers
 	if body == "" {
-		body = fallbackChallengeBody
-		headers = cloneChallengeHeaders(headers)
-		if !hasChallengeHeader(headers, "Content-Type") {
-			headers["Content-Type"] = []string{"text/html; charset=utf-8"}
-		}
-		if !hasChallengeHeader(headers, "Cache-Control") {
-			headers["Cache-Control"] = []string{"no-cache, no-store"}
-		}
+			body = fallbackChallengeBody
+			headers = cloneChallengeHeaders(headers)
+			if !hasChallengeHeader(headers, "Content-Type") {
+					headers["Content-Type"] = []string{"text/html; charset=utf-8"}
+			}
+			if !hasChallengeHeader(headers, "Cache-Control") {
+					headers["Cache-Control"] = []string{"no-cache, no-store"}
+			}
 	}
 
 	token := s.challengeTokenFromRequestID(requestID)
 
 	s.challengeResponses.Store(token, &challengeResponseEntry{
-		status:    status,
-		body:      body,
-		headers:   cloneHTTPHeader(headers),
-		cookies:   append([]string(nil), challengeData.Cookies...),
-		expiresAt: time.Now().Add(challengeResponseTTL),
+			status:    status,
+			body:      body,
+			headers:   cloneHTTPHeader(headers),
+			cookies:   append([]string(nil), challengeData.Cookies...),
+			expiresAt: time.Now().Add(challengeResponseTTL),
 	})
 
-	_ = writer.SetString(encoding.VarScopeTransaction, "challenge_url", challengePathPrefix+token)
+	err: = writer.SetString(encoding.VarScopeTransaction, "challenge_url", challengePathPrefix+token)
+	if err != nil {
+			return false
+	}
 	return true
 }
 
