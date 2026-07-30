@@ -1,0 +1,145 @@
+package spoa
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestNewChallengeCache_DefaultsWhenNonPositive(t *testing.T) {
+	for _, n := range []int{0, -1, -100} {
+		c := newChallengeCache(n)
+		assert.Equal(t, defaultChallengeCacheMaxEntries, c.maxItems, "maxItems=%d should fall back to the default", n)
+	}
+}
+
+func TestChallengeCache_StoreLoadDelete(t *testing.T) {
+	c := newChallengeCache(10)
+
+	_, ok := c.Load("missing")
+	assert.False(t, ok)
+
+	entry := &challengeResponseEntry{body: "hello"}
+	c.Store("k", entry)
+
+	got, ok := c.Load("k")
+	require.True(t, ok)
+	assert.Same(t, entry, got)
+
+	c.Delete("k")
+	_, ok = c.Load("k")
+	assert.False(t, ok, "deleted entry should no longer be present")
+}
+
+func TestChallengeCache_LoadAndDeleteIsSingleUse(t *testing.T) {
+	c := newChallengeCache(10)
+	c.Store("k", &challengeResponseEntry{body: "once"})
+
+	got, ok := c.LoadAndDelete("k")
+	require.True(t, ok)
+	assert.Equal(t, "once", got.body)
+
+	_, ok = c.LoadAndDelete("k")
+	assert.False(t, ok, "a second fetch of the same token must miss")
+}
+
+func TestChallengeCache_StoreOnExistingKeyDoesNotEvict(t *testing.T) {
+	c := newChallengeCache(2)
+	c.Store("a", &challengeResponseEntry{body: "a1"})
+	c.Store("b", &challengeResponseEntry{body: "b1"})
+
+	// Re-storing an existing key at capacity must update in place, not evict
+	// another entry to make room - it isn't a net-new entry.
+	c.Store("a", &challengeResponseEntry{body: "a2"})
+
+	got, ok := c.Load("a")
+	require.True(t, ok)
+	assert.Equal(t, "a2", got.body)
+
+	_, ok = c.Load("b")
+	assert.True(t, ok, "unrelated entry must survive an update to a different key")
+}
+
+func TestChallengeCache_EvictsOldestFirstUnderPressure(t *testing.T) {
+	c := newChallengeCache(3)
+
+	c.Store("first", &challengeResponseEntry{body: "1"})
+	c.Store("second", &challengeResponseEntry{body: "2"})
+	c.Store("third", &challengeResponseEntry{body: "3"})
+
+	// At capacity: inserting a 4th distinct key must evict "first" (the
+	// oldest by insertion order), not "second" or "third".
+	c.Store("fourth", &challengeResponseEntry{body: "4"})
+
+	_, ok := c.Load("first")
+	assert.False(t, ok, "oldest entry should have been evicted to make room")
+
+	for _, key := range []string{"second", "third", "fourth"} {
+		_, ok := c.Load(key)
+		assert.True(t, ok, "entry %q should still be present", key)
+	}
+
+	// Cache never grows past its configured bound.
+	count := 0
+	c.Range(func(string, *challengeResponseEntry) bool {
+		count++
+		return true
+	})
+	assert.Equal(t, 3, count)
+}
+
+func TestChallengeCache_EvictionContinuesUnderSustainedPressure(t *testing.T) {
+	c := newChallengeCache(5)
+
+	for i := range 100 {
+		c.Store(string(rune('a'+i%26))+string(rune(i)), &challengeResponseEntry{})
+	}
+
+	count := 0
+	c.Range(func(string, *challengeResponseEntry) bool {
+		count++
+		return true
+	})
+	assert.Equal(t, 5, count, "cache must stay bounded no matter how many entries are stored over time")
+}
+
+func TestChallengeCache_RangeVisitsOldestFirstAndToleratesDeleteDuringRange(t *testing.T) {
+	c := newChallengeCache(10)
+	c.Store("a", &challengeResponseEntry{body: "1"})
+	c.Store("b", &challengeResponseEntry{body: "2"})
+	c.Store("c", &challengeResponseEntry{body: "3"})
+
+	var visited []string
+	c.Range(func(key string, _ *challengeResponseEntry) bool {
+		visited = append(visited, key)
+		// Mirrors cleanupChallengeResponses: delete the entry currently being
+		// visited from inside the callback.
+		c.Delete(key)
+		return true
+	})
+
+	assert.Equal(t, []string{"a", "b", "c"}, visited, "Range should visit entries oldest-inserted first")
+
+	count := 0
+	c.Range(func(string, *challengeResponseEntry) bool {
+		count++
+		return true
+	})
+	assert.Equal(t, 0, count, "all entries deleted during Range should be gone afterward")
+}
+
+func TestChallengeCache_RangeStopsWhenCallbackReturnsFalse(t *testing.T) {
+	c := newChallengeCache(10)
+	c.Store("a", &challengeResponseEntry{})
+	c.Store("b", &challengeResponseEntry{})
+	c.Store("c", &challengeResponseEntry{})
+
+	var visited []string
+	c.Range(func(key string, _ *challengeResponseEntry) bool {
+		visited = append(visited, key)
+		return key != "b"
+	})
+
+	assert.Equal(t, []string{"a", "b"}, visited, "Range must stop as soon as f returns false")
+}

@@ -31,6 +31,7 @@ func newTestSpoa(t *testing.T) *Spoa {
 		logger:                  log.NewEntry(log.New()),
 		ChallengeHTTPListenAddr: dummyListener{},
 		challengeTokenKey:       [32]byte{1, 2, 3},
+		challengeResponses:      newChallengeCache(0),
 	}
 }
 
@@ -48,11 +49,8 @@ func (a dummyAddr) String() string  { return string(a) }
 func loadChallengeEntry(t *testing.T, s *Spoa, token string) *challengeResponseEntry {
 	t.Helper()
 
-	entryAny, ok := s.challengeResponses.Load(token)
+	entry, ok := s.challengeResponses.Load(token)
 	require.True(t, ok, "expected a cached challenge response for %q", token)
-
-	entry, ok := entryAny.(*challengeResponseEntry)
-	require.True(t, ok, "cached value for %q was not a *challengeResponseEntry", token)
 
 	return entry
 }
@@ -145,7 +143,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func TestValidateWithAppSec_ChallengeWithoutHTTPBackend_FallsBackToBan(t *testing.T) {
-	s := &Spoa{logger: log.NewEntry(log.New())}
+	s := &Spoa{logger: log.NewEntry(log.New()), challengeResponses: newChallengeCache(0)}
 	appSec := newChallengeAppSec(t, strings.Repeat("x", 150000))
 
 	msgData := &HTTPMessageData{}
@@ -156,7 +154,7 @@ func TestValidateWithAppSec_ChallengeWithoutHTTPBackend_FallsBackToBan(t *testin
 	assert.Equal(t, remediation.Ban, got)
 
 	stored := false
-	s.challengeResponses.Range(func(_, _ any) bool {
+	s.challengeResponses.Range(func(_ string, _ *challengeResponseEntry) bool {
 		stored = true
 		return false
 	})
@@ -175,7 +173,7 @@ func TestValidateWithAppSec_ChallengeWithoutUniqueID_FallsBackToBan(t *testing.T
 	assert.Equal(t, remediation.Ban, got)
 
 	stored := false
-	s.challengeResponses.Range(func(_, _ any) bool {
+	s.challengeResponses.Range(func(_ string, _ *challengeResponseEntry) bool {
 		stored = true
 		return false
 	})
@@ -276,10 +274,11 @@ func newInternalChallengeSpoa(t *testing.T) (*Spoa, *int32) {
 	})
 
 	s := &Spoa{
-		logger:       log.NewEntry(log.New()),
-		dataset:      dataset.New(),
-		geoDatabase:  &geo.GeoDatabase{},
-		globalAppSec: a,
+		logger:             log.NewEntry(log.New()),
+		dataset:            dataset.New(),
+		geoDatabase:        &geo.GeoDatabase{},
+		globalAppSec:       a,
+		challengeResponses: newChallengeCache(0),
 	}
 	return s, &calls
 }

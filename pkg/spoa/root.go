@@ -103,8 +103,9 @@ type Spoa struct {
 	// challengeResponses holds full AppSec challenge responses keyed by an
 	// HMAC-derived token from HAProxy's unique-id. HAProxy receives only the
 	// tokenized URL over SPOE, then streams the body from this bouncer over
-	// normal HTTP.
-	challengeResponses sync.Map
+	// normal HTTP. Bounded (see challengeCache) so a burst of issued-but-never-
+	// fetched challenges can't grow memory without bound.
+	challengeResponses *challengeCache
 	challengeTokenKey  [32]byte
 }
 
@@ -120,11 +121,15 @@ type SpoaConfig struct {
 	TcpAddr           string
 	UnixAddr          string
 	ChallengeHTTPAddr string
-	Dataset           *dataset.DataSet
-	HostManager       *host.Manager
-	GeoDatabase       *geo.GeoDatabase
-	GlobalAppSec      *appsec.AppSec // Global AppSec config (used when no host matched)
-	Logger            *log.Entry     // Parent logger to inherit from
+	// ChallengeCacheMaxEntries caps how many pending AppSec challenge responses
+	// can be held in memory awaiting HAProxy's fetch (see challengeCache).
+	// <= 0 falls back to defaultChallengeCacheMaxEntries.
+	ChallengeCacheMaxEntries int
+	Dataset                  *dataset.DataSet
+	HostManager              *host.Manager
+	GeoDatabase              *geo.GeoDatabase
+	GlobalAppSec             *appsec.AppSec // Global AppSec config (used when no host matched)
+	Logger                   *log.Entry     // Parent logger to inherit from
 }
 
 func New(config *SpoaConfig) (*Spoa, error) {
@@ -147,11 +152,12 @@ func New(config *SpoaConfig) (*Spoa, error) {
 	// No worker-specific log level; inherits from parent logger
 
 	s := &Spoa{
-		logger:       workerLogger,
-		dataset:      config.Dataset,
-		hostManager:  config.HostManager,
-		geoDatabase:  config.GeoDatabase,
-		globalAppSec: config.GlobalAppSec,
+		logger:             workerLogger,
+		dataset:            config.Dataset,
+		hostManager:        config.HostManager,
+		geoDatabase:        config.GeoDatabase,
+		globalAppSec:       config.GlobalAppSec,
+		challengeResponses: newChallengeCache(config.ChallengeCacheMaxEntries),
 	}
 	if _, err := rand.Read(s.challengeTokenKey[:]); err != nil {
 		return nil, fmt.Errorf("failed to initialize challenge token key: %w", err)
@@ -293,8 +299,8 @@ func (s *Spoa) cleanupChallengeResponses(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			s.challengeResponses.Range(func(key, value any) bool {
-				if entry, ok := value.(*challengeResponseEntry); ok && now.After(entry.expiresAt) {
+			s.challengeResponses.Range(func(key string, entry *challengeResponseEntry) bool {
+				if now.After(entry.expiresAt) {
 					s.challengeResponses.Delete(key)
 				}
 				return true
@@ -811,13 +817,7 @@ func (s *Spoa) handleStoredChallengeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	entryAny, ok := s.challengeResponses.LoadAndDelete(token)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-
-	entry, ok := entryAny.(*challengeResponseEntry)
+	entry, ok := s.challengeResponses.LoadAndDelete(token)
 	if !ok || time.Now().After(entry.expiresAt) {
 		http.NotFound(w, r)
 		return
