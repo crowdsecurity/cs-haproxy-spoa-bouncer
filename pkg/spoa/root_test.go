@@ -150,9 +150,10 @@ func TestValidateWithAppSec_ChallengeWithoutHTTPBackend_FallsBackToBan(t *testin
 	msgData := &HTTPMessageData{}
 	writer := encoding.NewActionWriter(make([]byte, 1<<20), 0)
 
-	got := s.validateWithAppSec(t.Context(), writer, msgData, nil, appSec, remediation.Allow, time.Second)
+	got, issued := s.validateWithAppSec(t.Context(), writer, msgData, nil, appSec, remediation.Allow, time.Second)
 
 	assert.Equal(t, remediation.Ban, got)
+	assert.False(t, issued)
 
 	stored := false
 	s.challengeResponses.Range(func(_ string, _ *challengeResponseEntry) bool {
@@ -169,9 +170,10 @@ func TestValidateWithAppSec_ChallengeWithoutUniqueID_FallsBackToBan(t *testing.T
 	msgData := &HTTPMessageData{}
 	writer := encoding.NewActionWriter(make([]byte, 1<<20), 0)
 
-	got := s.validateWithAppSec(t.Context(), writer, msgData, nil, appSec, remediation.Allow, time.Second)
+	got, issued := s.validateWithAppSec(t.Context(), writer, msgData, nil, appSec, remediation.Allow, time.Second)
 
 	assert.Equal(t, remediation.Ban, got)
+	assert.False(t, issued)
 
 	stored := false
 	s.challengeResponses.Range(func(_ string, _ *challengeResponseEntry) bool {
@@ -189,9 +191,10 @@ func TestValidateWithAppSec_ChallengeStoresResponseAndSetsURL(t *testing.T) {
 	msgData := &HTTPMessageData{ID: ptr.Of("req-abc")}
 	writer := encoding.NewActionWriter(make([]byte, 1<<20), 0)
 
-	got := s.validateWithAppSec(t.Context(), writer, msgData, nil, appSec, remediation.Allow, time.Second)
+	got, issued := s.validateWithAppSec(t.Context(), writer, msgData, nil, appSec, remediation.Allow, time.Second)
 
 	require.Equal(t, remediation.Challenge, got)
+	assert.True(t, issued)
 
 	actions := decodeSetVarActions(t, writer.Bytes())
 	require.Contains(t, actions, "challenge_url")
@@ -210,9 +213,10 @@ func TestValidateWithAppSec_ChallengeWithEmptyBody_StoresFallbackBody(t *testing
 	msgData := &HTTPMessageData{ID: ptr.Of("req-empty-body")}
 	writer := encoding.NewActionWriter(make([]byte, 1<<20), 0)
 
-	got := s.validateWithAppSec(t.Context(), writer, msgData, nil, appSec, remediation.Allow, time.Second)
+	got, issued := s.validateWithAppSec(t.Context(), writer, msgData, nil, appSec, remediation.Allow, time.Second)
 
 	require.Equal(t, remediation.Challenge, got)
+	assert.True(t, issued)
 
 	actions := decodeSetVarActions(t, writer.Bytes())
 	require.Contains(t, actions, "challenge_url")
@@ -386,14 +390,7 @@ func TestHandleInternalChallengeHTTP_CaptchaPendingIPRejectedWithoutCallingAppSe
 	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "a captcha-pending IP must not reach the AppSec engine through this endpoint")
 }
 
-// TestHandleInternalChallengeHTTP_DatasetChallengeRemediationStillRelayed guards
-// against re-introducing rem >= remediation.Captcha (Challenge sorts above
-// Captcha in the ordering, so that comparison would also block it). If the
-// dataset itself already resolved this IP to "challenge" (e.g. a decision with
-// Type "challenge" added via cscli/LAPI), that's exactly the case this relay
-// exists to serve - AppSec is the authority on what to do with it next, not a
-// reason to 403 before ever asking AppSec.
-func TestHandleInternalChallengeHTTP_DatasetChallengeRemediationStillRelayed(t *testing.T) {
+func TestHandleInternalChallengeHTTP_DatasetChallengeRejectedWithoutCallingAppSec(t *testing.T) {
 	s, calls := newInternalChallengeSpoa(t)
 	s.dataset.Add(models.GetDecisionsResponse{
 		{
@@ -410,8 +407,8 @@ func TestHandleInternalChallengeHTTP_DatasetChallengeRemediationStillRelayed(t *
 
 	s.handleInternalChallengeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, int32(1), atomic.LoadInt32(calls), "a dataset-level challenge remediation must still be relayed to AppSec")
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "a dataset-level challenge remediation must not reach AppSec through the internal relay")
 }
 
 func TestHandleInternalChallengeHTTP_AllowedIPRelaysToAppSec(t *testing.T) {

@@ -556,6 +556,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 
 	var matchedHost *host.Host
 	datasetRemediation := r // Track remediation after dataset check (before AppSec)
+	appSecChallengeIssued := false
 
 	// defer a function that always sets the remediation and counts metrics at end of processing
 	defer func() {
@@ -563,6 +564,18 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		if matchedHost == nil && r == remediation.Captcha {
 			s.logger.Warn("remediation is captcha, no matching host was found cannot issue captcha remediation reverting to ban")
 			r = remediation.Ban
+		}
+
+		// Dataset-level "challenge" decisions do not carry AppSec challenge
+		// body/cookie data and cannot be served by HAProxy without a challenge_url.
+		// Only AppSec-issued challenges that successfully injected the URL are
+		// allowed to remain as challenge remediations.
+		if r == remediation.Challenge && !appSecChallengeIssued {
+			s.logger.Warn("challenge remediation without AppSec challenge data cannot be served, reverting to ban")
+			r = remediation.Ban
+			if matchedHost != nil {
+				matchedHost.Ban.InjectKeyValues(writer)
+			}
 		}
 
 		// Always set the final remediation in the transaction
@@ -618,7 +631,9 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	if matchedHost == nil {
 		appSec, timeout, alwaysSend := s.getAppSecConfig(nil)
 		if appSec != nil && shouldRunAppSec(r, alwaysSend) {
-			r = s.validateWithAppSec(ctx, writer, msgData, nil, appSec, r, timeout)
+			var issued bool
+			r, issued = s.validateWithAppSec(ctx, writer, msgData, nil, appSec, r, timeout)
+			appSecChallengeIssued = appSecChallengeIssued || issued
 		}
 		return
 	}
@@ -641,7 +656,9 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	// Validate with AppSec if configured
 	appSec, timeout, alwaysSend := s.getAppSecConfig(matchedHost)
 	if appSec != nil && shouldRunAppSec(r, alwaysSend) {
-		r = s.validateWithAppSec(ctx, writer, msgData, matchedHost, appSec, r, timeout)
+		var issued bool
+		r, issued = s.validateWithAppSec(ctx, writer, msgData, matchedHost, appSec, r, timeout)
+		appSecChallengeIssued = appSecChallengeIssued || issued
 		if r == remediation.Ban {
 			matchedHost.Ban.InjectKeyValues(writer)
 		}
@@ -669,7 +686,8 @@ func shouldRunAppSec(r remediation.Remediation, alwaysSend bool) bool {
 	return r < remediation.Captcha || alwaysSend
 }
 
-// validateWithAppSec performs AppSec validation and returns the remediation.
+// validateWithAppSec performs AppSec validation and returns the remediation plus
+// whether an AppSec challenge response was successfully injected for HAProxy.
 func (s *Spoa) validateWithAppSec(
 	ctx context.Context,
 	writer *encoding.ActionWriter,
@@ -678,7 +696,7 @@ func (s *Spoa) validateWithAppSec(
 	appSecToUse *appsec.AppSec,
 	currentRemediation remediation.Remediation,
 	requestTimeout time.Duration,
-) remediation.Remediation {
+) (remediation.Remediation, bool) {
 	appSecReq := msgData.buildAppSecRequest()
 
 	logger := s.logger
@@ -695,7 +713,7 @@ func (s *Spoa) validateWithAppSec(
 	appSecRemediation, challengeData, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
 	if err != nil {
 		logger.WithError(err).Warn("AppSec validation failed, using original remediation")
-		return currentRemediation
+		return currentRemediation, false
 	}
 
 	logger.WithField("remediation", appSecRemediation.String()).Debug("AppSec validation result")
@@ -717,19 +735,20 @@ func (s *Spoa) validateWithAppSec(
 		if appSecRemediation == remediation.Challenge && challengeData != nil {
 			if s.ChallengeHTTPListenAddr == nil {
 				logger.Error("cannot serve AppSec challenge: challenge_http_listen is not configured, falling back to ban")
-				return remediation.Ban
+				return remediation.Ban, false
 			}
 			if msgData.ID == nil || *msgData.ID == "" {
 				logger.Error("cannot serve AppSec challenge: HAProxy sent no unique request id (configure unique-id-format), falling back to ban")
-				return remediation.Ban
+				return remediation.Ban, false
 			}
 			if !s.injectChallengeKeyValues(writer, challengeData, *msgData.ID) {
-				return remediation.Ban
+				return remediation.Ban, false
 			}
+			return appSecRemediation, true
 		}
-		return appSecRemediation
+		return appSecRemediation, false
 	}
-	return currentRemediation
+	return currentRemediation, false
 }
 
 func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challengeData *appsec.AppSecChallengeData, requestID string) bool {
@@ -871,17 +890,9 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	// pipeline (that would mint a *new* challenge_url token here, which is wrong:
 	// this endpoint relays an already-issued challenge's follow-up asset/
 	// verification traffic, not a fresh top-level decision).
-	//
-	// Deliberately not blocking on remediation.Challenge here, even though it sits
-	// above Captcha in the ordering: if the dataset itself already resolved this
-	// IP to "challenge" (e.g. a decision with Type "challenge" from the LAPI/cscli -
-	// see remediation.FromString, used as-is in pkg/dataset/root.go), that is
-	// exactly what this relay exists to serve. Rejecting it here would block the
-	// one case this endpoint is for; AppSec remains the authority on what to do
-	// with the request.
 	remoteIP := trustedChallengeClientIP(r)
 	if ip, parseErr := netip.ParseAddr(remoteIP); parseErr == nil {
-		if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem == remediation.Ban || rem == remediation.Captcha {
+		if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem >= remediation.Captcha {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
