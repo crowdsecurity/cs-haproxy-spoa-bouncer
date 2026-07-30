@@ -874,7 +874,12 @@ func (s *Spoa) handleStoredChallengeHTTP(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Request) {
-	appSecToUse := s.globalAppSec
+	var matchedHost *host.Host
+	if r.Host != "" && s.hostManager != nil {
+		matchedHost = s.hostManager.MatchFirstHost(r.Host)
+	}
+
+	appSecToUse, timeout, _ := s.getAppSecConfig(matchedHost)
 	if appSecToUse == nil || !appSecToUse.IsValid() {
 		http.NotFound(w, r)
 		return
@@ -916,7 +921,7 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 		Body:      body,
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), appSecToUse.TimeoutOrDefault())
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
 	remediationResult, challengeData, err := appSecToUse.ValidateRequest(ctx, req)

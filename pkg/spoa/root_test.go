@@ -17,6 +17,7 @@ import (
 	"github.com/crowdsecurity/crowdsec-spoa/internal/geo"
 	"github.com/crowdsecurity/crowdsec-spoa/internal/remediation"
 	"github.com/crowdsecurity/crowdsec-spoa/pkg/dataset"
+	"github.com/crowdsecurity/crowdsec-spoa/pkg/host"
 	"github.com/crowdsecurity/crowdsec/pkg/models"
 	"github.com/crowdsecurity/go-cs-lib/ptr"
 	"github.com/dropmorepackets/haproxy-go/pkg/encoding"
@@ -141,6 +142,36 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+func newCountingChallengeAppSecTransport(t *testing.T, body string, calls *int32) http.RoundTripper {
+	t.Helper()
+
+	respBody, err := json.Marshal(map[string]any{
+		"action":            "challenge",
+		"http_status":       200,
+		"user_body_content": body,
+	})
+	require.NoError(t, err)
+
+	return roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		atomic.AddInt32(calls, 1)
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(respBody)),
+		}, nil
+	})
+}
+
+func newCountingChallengeAppSec(t *testing.T, body string, calls *int32) appsec.AppSec {
+	t.Helper()
+
+	a := appsec.AppSec{URL: "http://appsec.test/", APIKey: "test-key"}
+	require.NoError(t, a.Init(log.NewEntry(log.New())))
+	a.Client.HTTPClient.Transport = newCountingChallengeAppSecTransport(t, body, calls)
+
+	return a
 }
 
 func TestValidateWithAppSec_ChallengeWithoutHTTPBackend_FallsBackToBan(t *testing.T) {
@@ -423,6 +454,82 @@ func TestHandleInternalChallengeHTTP_AllowedIPRelaysToAppSec(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "<html>challenge</html>")
 	assert.Equal(t, int32(1), atomic.LoadInt32(calls), "a non-banned IP should still be relayed to AppSec")
+}
+
+func TestHandleInternalChallengeHTTP_UsesHostSpecificAppSec(t *testing.T) {
+	var hostCalls int32
+	var globalCalls int32
+
+	globalAppSec := newCountingChallengeAppSec(t, "<html>global challenge</html>", &globalCalls)
+
+	hostManager := host.NewManager(log.NewEntry(log.New()))
+	matchedHost := &host.Host{
+		Host: "protected.example.com",
+		AppSec: appsec.AppSec{
+			URL:    "http://appsec.test/",
+			APIKey: "test-key",
+		},
+	}
+	hostManager.AddHost(matchedHost)
+	matchedHost.AppSec.Client.HTTPClient.Transport = newCountingChallengeAppSecTransport(t, "<html>host challenge</html>", &hostCalls)
+
+	s := &Spoa{
+		logger:             log.NewEntry(log.New()),
+		dataset:            dataset.New(),
+		geoDatabase:        &geo.GeoDatabase{},
+		hostManager:        hostManager,
+		globalAppSec:       &globalAppSec,
+		challengeResponses: newChallengeCache(0),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://protected.example.com"+challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.8")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "<html>host challenge</html>")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&hostCalls))
+	assert.Equal(t, int32(0), atomic.LoadInt32(&globalCalls), "matched host AppSec should take precedence over global AppSec")
+}
+
+func TestHandleInternalChallengeHTTP_FallsBackToGlobalAppSecWhenHostDoesNotMatch(t *testing.T) {
+	var hostCalls int32
+	var globalCalls int32
+
+	globalAppSec := newCountingChallengeAppSec(t, "<html>global challenge</html>", &globalCalls)
+
+	hostManager := host.NewManager(log.NewEntry(log.New()))
+	matchedHost := &host.Host{
+		Host: "protected.example.com",
+		AppSec: appsec.AppSec{
+			URL:    "http://appsec.test/",
+			APIKey: "test-key",
+		},
+	}
+	hostManager.AddHost(matchedHost)
+	matchedHost.AppSec.Client.HTTPClient.Transport = newCountingChallengeAppSecTransport(t, "<html>host challenge</html>", &hostCalls)
+
+	s := &Spoa{
+		logger:             log.NewEntry(log.New()),
+		dataset:            dataset.New(),
+		geoDatabase:        &geo.GeoDatabase{},
+		hostManager:        hostManager,
+		globalAppSec:       &globalAppSec,
+		challengeResponses: newChallengeCache(0),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://other.example.com"+challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.9")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "<html>global challenge</html>")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&hostCalls))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&globalCalls), "global AppSec should handle unmatched hosts")
 }
 
 func TestHandleInternalChallengeHTTP_SpoofedXForwardedForIgnoredForBanCheck(t *testing.T) {
