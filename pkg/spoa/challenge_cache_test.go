@@ -61,21 +61,24 @@ func TestChallengeCache_StoreOnExistingKeyDoesNotEvict(t *testing.T) {
 	assert.True(t, ok, "unrelated entry must survive an update to a different key")
 }
 
-func TestChallengeCache_EvictsOldestFirstUnderPressure(t *testing.T) {
+func TestChallengeCache_EvictsLeastRecentlyUsedUnderPressure(t *testing.T) {
 	c := newChallengeCache(3)
 
 	c.Store("first", &challengeResponseEntry{body: "1"})
 	c.Store("second", &challengeResponseEntry{body: "2"})
 	c.Store("third", &challengeResponseEntry{body: "3"})
 
-	// At capacity: inserting a 4th distinct key must evict "first" (the
-	// oldest by insertion order), not "second" or "third".
+	_, ok := c.Load("first")
+	require.True(t, ok)
+
+	// At capacity: inserting a 4th distinct key must evict the least-recently
+	// used entry. "first" was just read, so "second" is evicted.
 	c.Store("fourth", &challengeResponseEntry{body: "4"})
 
-	_, ok := c.Load("first")
-	assert.False(t, ok, "oldest entry should have been evicted to make room")
+	_, ok = c.Load("second")
+	assert.False(t, ok, "least-recently used entry should have been evicted to make room")
 
-	for _, key := range []string{"second", "third", "fourth"} {
+	for _, key := range []string{"first", "third", "fourth"} {
 		_, ok := c.Load(key)
 		assert.True(t, ok, "entry %q should still be present", key)
 	}
@@ -104,22 +107,22 @@ func TestChallengeCache_EvictionContinuesUnderSustainedPressure(t *testing.T) {
 	assert.Equal(t, 5, count, "cache must stay bounded no matter how many entries are stored over time")
 }
 
-func TestChallengeCache_RangeVisitsOldestFirstAndToleratesDeleteDuringRange(t *testing.T) {
+func TestChallengeCache_RangeToleratesDeleteDuringRange(t *testing.T) {
 	c := newChallengeCache(10)
 	c.Store("a", &challengeResponseEntry{body: "1"})
 	c.Store("b", &challengeResponseEntry{body: "2"})
 	c.Store("c", &challengeResponseEntry{body: "3"})
 
-	var visited []string
+	visited := map[string]bool{}
 	c.Range(func(key string, _ *challengeResponseEntry) bool {
-		visited = append(visited, key)
+		visited[key] = true
 		// Mirrors cleanupChallengeResponses: delete the entry currently being
 		// visited from inside the callback.
 		c.Delete(key)
 		return true
 	})
 
-	assert.Equal(t, []string{"a", "b", "c"}, visited, "Range should visit entries oldest-inserted first")
+	assert.Equal(t, map[string]bool{"a": true, "b": true, "c": true}, visited)
 
 	count := 0
 	c.Range(func(string, *challengeResponseEntry) bool {
@@ -135,11 +138,11 @@ func TestChallengeCache_RangeStopsWhenCallbackReturnsFalse(t *testing.T) {
 	c.Store("b", &challengeResponseEntry{})
 	c.Store("c", &challengeResponseEntry{})
 
-	var visited []string
+	visited := 0
 	c.Range(func(key string, _ *challengeResponseEntry) bool {
-		visited = append(visited, key)
-		return key != "b"
+		visited++
+		return false
 	})
 
-	assert.Equal(t, []string{"a", "b"}, visited, "Range must stop as soon as f returns false")
+	assert.Equal(t, 1, visited, "Range must stop as soon as f returns false")
 }

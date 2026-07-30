@@ -1,8 +1,10 @@
 package spoa
 
 import (
-	"container/list"
+	"errors"
 	"sync"
+
+	"github.com/bluele/gcache"
 )
 
 // defaultChallengeCacheMaxEntries bounds how many pending AppSec challenge
@@ -22,23 +24,13 @@ import (
 // falls back to this default.
 const defaultChallengeCacheMaxEntries = 1000
 
-// challengeCache is a bounded, concurrency-safe cache of pending challenge
-// responses keyed by a token. Once at capacity, storing a new entry evicts
-// the oldest one first (by insertion order, not last-access) rather than
-// rejecting the new entry or growing past the configured limit - a request
-// that's been waiting longest to be fetched is the best candidate to drop.
+// challengeCache is a small adapter around the cache implementation already
+// used by CrowdSec. It keeps the challenge-specific single-use LoadAndDelete
+// semantics while delegating size/TTL eviction to gcache.
 type challengeCache struct {
 	mu       sync.Mutex
-	ll       *list.List // front = oldest, back = most recently inserted/updated
-	items    map[string]*list.Element
+	cache    gcache.Cache
 	maxItems int
-}
-
-// challengeCacheEntry is the value stored in the backing list; ll.Element.Value
-// is always a *challengeCacheEntry.
-type challengeCacheEntry struct {
-	key   string
-	value *challengeResponseEntry
 }
 
 // newChallengeCache creates a challengeCache bounded to maxItems entries.
@@ -49,36 +41,18 @@ func newChallengeCache(maxItems int) *challengeCache {
 	}
 
 	return &challengeCache{
-		ll:       list.New(),
-		items:    make(map[string]*list.Element),
+		cache:    gcache.New(maxItems).LRU().Expiration(challengeResponseTTL).Build(),
 		maxItems: maxItems,
 	}
 }
 
-// Store inserts or replaces the entry for key. A replaced key is moved to the
-// back (treated as freshly inserted). If adding a genuinely new key would
-// exceed maxItems, the oldest entry is evicted first to make room - Store
-// never fails or drops the entry being stored.
+// Store inserts or replaces the entry for key. If adding a genuinely new key
+// would exceed maxItems, gcache evicts the least-recently-used entry.
 func (c *challengeCache) Store(key string, value *challengeResponseEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if el, ok := c.items[key]; ok {
-		el.Value.(*challengeCacheEntry).value = value //nolint:forcetypeassert // only *challengeCacheEntry is ever stored in c.ll
-		c.ll.MoveToBack(el)
-		return
-	}
-
-	for c.ll.Len() >= c.maxItems {
-		oldest := c.ll.Front()
-		if oldest == nil {
-			break
-		}
-		c.removeElementLocked(oldest)
-	}
-
-	el := c.ll.PushBack(&challengeCacheEntry{key: key, value: value})
-	c.items[key] = el
+	_ = c.cache.SetWithExpire(key, value, challengeResponseTTL)
 }
 
 // Load returns the entry for key, if present, without removing it.
@@ -86,12 +60,16 @@ func (c *challengeCache) Load(key string) (*challengeResponseEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	el, ok := c.items[key]
-	if !ok {
+	value, err := c.cache.GetIFPresent(key)
+	if errors.Is(err, gcache.KeyNotFoundError) {
+		return nil, false
+	}
+	if err != nil {
 		return nil, false
 	}
 
-	return el.Value.(*challengeCacheEntry).value, true //nolint:forcetypeassert // only *challengeCacheEntry is ever stored in c.ll
+	entry, ok := value.(*challengeResponseEntry)
+	return entry, ok
 }
 
 // LoadAndDelete returns the entry for key, if present, and removes it -
@@ -101,15 +79,18 @@ func (c *challengeCache) LoadAndDelete(key string) (*challengeResponseEntry, boo
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	el, ok := c.items[key]
-	if !ok {
+	value, err := c.cache.GetIFPresent(key)
+	if errors.Is(err, gcache.KeyNotFoundError) {
+		return nil, false
+	}
+	if err != nil {
 		return nil, false
 	}
 
-	value := el.Value.(*challengeCacheEntry).value //nolint:forcetypeassert // only *challengeCacheEntry is ever stored in c.ll
-	c.removeElementLocked(el)
+	c.cache.Remove(key)
 
-	return value, true
+	entry, ok := value.(*challengeResponseEntry)
+	return entry, ok
 }
 
 // Delete removes the entry for key, if present.
@@ -117,37 +98,32 @@ func (c *challengeCache) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if el, ok := c.items[key]; ok {
-		c.removeElementLocked(el)
-	}
+	c.cache.Remove(key)
 }
 
-// Range calls f for every entry, oldest-inserted first, stopping early if f
-// returns false. The traversal is snapshotted under the lock before f is
-// invoked, so f is free to call Delete (including deleting the very entry it
-// was just given, as cleanupChallengeResponses does) without deadlocking or
-// corrupting iteration - matching sync.Map.Range's contract of tolerating
-// concurrent deletion during a range.
+// Range calls f for every unexpired entry, stopping early if f returns false.
+// The traversal is snapshotted under the lock before f is invoked, so f is free
+// to call Delete without deadlocking.
 func (c *challengeCache) Range(f func(key string, value *challengeResponseEntry) bool) {
 	c.mu.Lock()
-	snapshot := make([]challengeCacheEntry, 0, c.ll.Len())
-	for el := c.ll.Front(); el != nil; el = el.Next() {
-		ce := el.Value.(*challengeCacheEntry) //nolint:revive,forcetypeassert // only *challengeCacheEntry is ever stored in c.ll
-		snapshot = append(snapshot, challengeCacheEntry{key: ce.key, value: ce.value})
+	items := c.cache.GetALL(true)
+	snapshot := make(map[string]*challengeResponseEntry, len(items))
+	for key, value := range items {
+		keyString, ok := key.(string)
+		if !ok {
+			continue
+		}
+		entry, ok := value.(*challengeResponseEntry)
+		if !ok {
+			continue
+		}
+		snapshot[keyString] = entry
 	}
 	c.mu.Unlock()
 
-	for _, entry := range snapshot {
-		if !f(entry.key, entry.value) {
+	for key, entry := range snapshot {
+		if !f(key, entry) {
 			return
 		}
 	}
-}
-
-// removeElementLocked removes el from both the list and the key index.
-// Caller must hold c.mu.
-func (c *challengeCache) removeElementLocked(el *list.Element) {
-	entry := el.Value.(*challengeCacheEntry) //nolint:revive,forcetypeassert // only *challengeCacheEntry is ever stored in c.ll
-	delete(c.items, entry.key)
-	c.ll.Remove(el)
 }

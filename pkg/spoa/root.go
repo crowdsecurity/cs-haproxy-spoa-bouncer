@@ -299,14 +299,22 @@ func (s *Spoa) cleanupChallengeResponses(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			s.challengeResponses.Range(func(key string, entry *challengeResponseEntry) bool {
-				if now.After(entry.expiresAt) {
-					s.challengeResponses.Delete(key)
-				}
-				return true
-			})
+			s.sweepExpiredChallengeResponses(now)
 		}
 	}
+}
+
+// sweepExpiredChallengeResponses deletes every cached challenge response whose
+// expiresAt is before now. Split out from cleanupChallengeResponses so the
+// sweep logic itself can be exercised directly in tests against a specific
+// time, without waiting on the real challengeResponseTTL ticker.
+func (s *Spoa) sweepExpiredChallengeResponses(now time.Time) {
+	s.challengeResponses.Range(func(key string, entry *challengeResponseEntry) bool {
+		if now.After(entry.expiresAt) {
+			s.challengeResponses.Delete(key)
+		}
+		return true
+	})
 }
 
 func (s *Spoa) Shutdown(ctx context.Context) error {

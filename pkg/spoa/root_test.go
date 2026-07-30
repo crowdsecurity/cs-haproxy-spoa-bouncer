@@ -2,6 +2,7 @@ package spoa
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -243,6 +244,63 @@ func TestHandleStoredChallengeHTTP_ServesAndDeletesCachedResponse(t *testing.T) 
 
 	_, ok := s.challengeResponses.Load("tok")
 	assert.False(t, ok)
+}
+
+func TestHandleStoredChallengeHTTP_ExpiredEntryReturnsNotFound(t *testing.T) {
+	s := newTestSpoa(t)
+	s.challengeResponses.Store("tok", &challengeResponseEntry{
+		status: http.StatusOK,
+		body:   "stale challenge body",
+		// Already expired: LoadAndDelete will still find it (the cleanup sweep
+		// hasn't reclaimed it yet), but it must not be served.
+		expiresAt: time.Now().Add(-time.Second),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, challengePathPrefix+"tok", http.NoBody)
+	rec := httptest.NewRecorder()
+	s.handleStoredChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "stale challenge body")
+
+	_, ok := s.challengeResponses.Load("tok")
+	assert.False(t, ok, "an expired entry should still be consumed (LoadAndDelete) even though it isn't served")
+}
+
+func TestSweepExpiredChallengeResponses_RemovesOnlyExpiredEntries(t *testing.T) {
+	s := newTestSpoa(t)
+	now := time.Now()
+
+	s.challengeResponses.Store("expired", &challengeResponseEntry{body: "old", expiresAt: now.Add(-time.Second)})
+	s.challengeResponses.Store("fresh", &challengeResponseEntry{body: "new", expiresAt: now.Add(time.Minute)})
+
+	s.sweepExpiredChallengeResponses(now)
+
+	_, ok := s.challengeResponses.Load("expired")
+	assert.False(t, ok, "expired entry should have been reclaimed by the sweep")
+
+	fresh, ok := s.challengeResponses.Load("fresh")
+	require.True(t, ok, "non-expired entry should survive the sweep")
+	assert.Equal(t, "new", fresh.body)
+}
+
+func TestCleanupChallengeResponses_StopsOnContextCancel(t *testing.T) {
+	s := newTestSpoa(t)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		s.cleanupChallengeResponses(ctx)
+		close(done)
+	}()
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanupChallengeResponses did not return promptly after context cancellation")
+	}
 }
 
 // newInternalChallengeSpoa builds a Spoa with a real dataset/geo database (as
