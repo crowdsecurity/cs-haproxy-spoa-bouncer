@@ -135,9 +135,10 @@ For `/crowdsec-internal/challenge/*` follow-up traffic:
 - When AppSec allows the request - which for a proof submission means the challenge
   was solved - the bouncer forwards AppSec's own response unchanged: status, body
   and every `Set-Cookie`. The proof cookie rides back on that response and is what
-  the browser replays on its retry, so it must not be dropped. Only framing headers
-  (`Content-Length`, `Transfer-Encoding`, `Connection`, and the other hop-by-hop
-  headers) are stripped, because the bouncer sets its own.
+  the browser replays on its retry, so it must not be dropped. The response is
+  forwarded as-is; Go's HTTP client already consumes `Connection` and
+  `Transfer-Encoding` before the bouncer sees them, and the `Content-Length` that
+  reaches it always matches the body it read.
 - When AppSec blocks the request, the bouncer returns a plain `403` rather than
   leaking AppSec's JSON decision envelope to the browser.
 

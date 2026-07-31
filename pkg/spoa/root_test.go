@@ -471,9 +471,8 @@ func TestHandleInternalChallengeHTTP_SolvedChallengeForwardsAppSecResponse(t *te
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header: http.Header{
-				"Content-Type":   []string{"application/json"},
-				"Set-Cookie":     []string{proofCookie},
-				"Content-Length": []string{"999"},
+				"Content-Type": []string{"application/json"},
+				"Set-Cookie":   []string{proofCookie},
 			},
 			Body: io.NopCloser(strings.NewReader(proofBody)),
 		}, nil
@@ -497,7 +496,6 @@ func TestHandleInternalChallengeHTTP_SolvedChallengeForwardsAppSecResponse(t *te
 	assert.Equal(t, []string{proofCookie}, rec.Result().Header.Values("Set-Cookie"))
 	assert.JSONEq(t, proofBody, rec.Body.String(), "AppSec's response body must be forwarded to the client")
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-	assert.Empty(t, rec.Header().Get("Content-Length"), "AppSec's framing headers must not be copied onto our own response")
 }
 
 // AppSec rejecting the relayed request outright must not leak its JSON decision
