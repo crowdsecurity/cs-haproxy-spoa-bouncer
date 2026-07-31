@@ -181,6 +181,8 @@ func (a *AppSec) Do(ctx context.Context, req *AppSecRequest) (*AppSecResponse, e
 		return nil, err
 	}
 	if len(body) > maxAppSecResponseBodySize {
+		// Drain the remaining bytes so Go can reuse the keep-alive connection.
+		_, _ = io.Copy(io.Discard, resp.Body)
 		a.logger.Errorf("AppSec response body exceeds %d bytes, rejecting", maxAppSecResponseBodySize)
 		return nil, fmt.Errorf("AppSec response body too large")
 	}
