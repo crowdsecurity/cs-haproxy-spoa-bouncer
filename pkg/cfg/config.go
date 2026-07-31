@@ -29,13 +29,13 @@ type PprofConfig struct {
 }
 
 type BouncerConfig struct {
-	Logging          cslogging.LoggingConfig `yaml:",inline"`
-	Hosts            []*host.Host            `yaml:"hosts"`
-	HostsDir         string                  `yaml:"hosts_dir"`
-	Geo              geo.GeoDatabase         `yaml:",inline"`
-	ListenTCP        string                  `yaml:"listen_tcp"`
-	ListenUnix       string                  `yaml:"listen_unix"`
-	ChallengeHTTP    string                  `yaml:"challenge_http_listen,omitempty"`
+	Logging       cslogging.LoggingConfig `yaml:",inline"`
+	Hosts         []*host.Host            `yaml:"hosts"`
+	HostsDir      string                  `yaml:"hosts_dir"`
+	Geo           geo.GeoDatabase         `yaml:",inline"`
+	ListenTCP     string                  `yaml:"listen_tcp"`
+	ListenUnix    string                  `yaml:"listen_unix"`
+	ChallengeHTTP string                  `yaml:"challenge_http_listen,omitempty"`
 	// ChallengeCacheMaxEntries caps how many pending AppSec challenge responses
 	// can be held in memory at once, awaiting HAProxy's fetch over the challenge
 	// HTTP backend (see pkg/spoa's challengeCache). Without a cap, a burst of
@@ -46,12 +46,12 @@ type BouncerConfig struct {
 	// oldest still-pending entry is evicted to make room for a new one, rather
 	// than growing further or rejecting the new challenge. Entries that simply
 	// go stale are released earlier than that by the periodic TTL sweep.
-	ChallengeCacheMaxEntries int `yaml:"challenge_cache_max_entries,omitempty"`
-	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
-	PprofConfig      PprofConfig             `yaml:"pprof"`
-	APIKey           string                  `yaml:"api_key"`              // LAPI API key (also used for AppSec)
-	AppSecURL        string                  `yaml:"appsec_url,omitempty"` // Global AppSec URL
-	AppSecTimeout    time.Duration           `yaml:"appsec_timeout,omitempty"`
+	ChallengeCacheMaxEntries int              `yaml:"challenge_cache_max_entries,omitempty"`
+	PrometheusConfig         PrometheusConfig `yaml:"prometheus"`
+	PprofConfig              PprofConfig      `yaml:"pprof"`
+	APIKey                   string           `yaml:"api_key"`              // LAPI API key (also used for AppSec)
+	AppSecURL                string           `yaml:"appsec_url,omitempty"` // Global AppSec URL
+	AppSecTimeout            time.Duration    `yaml:"appsec_timeout,omitempty"`
 }
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).
