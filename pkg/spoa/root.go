@@ -45,6 +45,7 @@ const (
 	challengeHTTPReadTimeout       = 10 * time.Second
 	challengeHTTPWriteTimeout      = 10 * time.Second
 	challengeHTTPIdleTimeout       = 30 * time.Second
+	challengeRelayTTL              = 5 * time.Minute
 )
 
 var (
@@ -111,6 +112,8 @@ type Spoa struct {
 	// normal HTTP. Bounded (see challengeCache) so a burst of issued-but-never-
 	// fetched challenges can't grow memory without bound.
 	challengeResponses *challengeCache
+	challengeRelays    map[string]challengeRelayEntry
+	challengeRelaysMu  sync.Mutex
 	challengeTokenKey  [32]byte
 }
 
@@ -119,6 +122,13 @@ type challengeResponseEntry struct {
 	body      string
 	headers   http.Header
 	cookies   []string
+	expiresAt time.Time
+}
+
+type challengeRelayEntry struct {
+	appSec    *appsec.AppSec
+	timeout   time.Duration
+	host      string
 	expiresAt time.Time
 }
 
@@ -163,6 +173,7 @@ func New(config *SpoaConfig) (*Spoa, error) {
 		geoDatabase:        config.GeoDatabase,
 		globalAppSec:       config.GlobalAppSec,
 		challengeResponses: newChallengeCache(config.ChallengeCacheMaxEntries),
+		challengeRelays:    make(map[string]challengeRelayEntry),
 	}
 	if _, err := rand.Read(s.challengeTokenKey[:]); err != nil {
 		return nil, fmt.Errorf("failed to initialize challenge token key: %w", err)
@@ -313,6 +324,7 @@ func (s *Spoa) cleanupChallengeResponses(ctx context.Context) {
 			return
 		case now := <-ticker.C:
 			s.sweepExpiredChallengeResponses(now)
+			s.sweepExpiredChallengeRelays(now)
 		}
 	}
 }
@@ -328,6 +340,49 @@ func (s *Spoa) sweepExpiredChallengeResponses(now time.Time) {
 		}
 		return true
 	})
+}
+
+func (s *Spoa) storeChallengeRelay(token string, entry challengeRelayEntry) {
+	s.challengeRelaysMu.Lock()
+	defer s.challengeRelaysMu.Unlock()
+
+	if s.challengeRelays == nil {
+		s.challengeRelays = make(map[string]challengeRelayEntry)
+	}
+	s.challengeRelays[token] = entry
+}
+
+func (s *Spoa) loadChallengeRelay(token string, now time.Time) (challengeRelayEntry, bool) {
+	s.challengeRelaysMu.Lock()
+	defer s.challengeRelaysMu.Unlock()
+
+	entry, ok := s.challengeRelays[token]
+	if !ok {
+		return challengeRelayEntry{}, false
+	}
+	if now.After(entry.expiresAt) {
+		delete(s.challengeRelays, token)
+		return challengeRelayEntry{}, false
+	}
+	return entry, true
+}
+
+func (s *Spoa) deleteChallengeRelay(token string) {
+	s.challengeRelaysMu.Lock()
+	defer s.challengeRelaysMu.Unlock()
+
+	delete(s.challengeRelays, token)
+}
+
+func (s *Spoa) sweepExpiredChallengeRelays(now time.Time) {
+	s.challengeRelaysMu.Lock()
+	defer s.challengeRelaysMu.Unlock()
+
+	for token, entry := range s.challengeRelays {
+		if now.After(entry.expiresAt) {
+			delete(s.challengeRelays, token)
+		}
+	}
 }
 
 func (s *Spoa) Shutdown(ctx context.Context) error {
@@ -754,7 +809,7 @@ func (s *Spoa) validateWithAppSec(
 				logger.Error("cannot serve AppSec challenge: HAProxy sent no unique request id (configure unique-id-format), falling back to ban")
 				return remediation.Ban, false
 			}
-			if !s.injectChallengeKeyValues(writer, challengeData, *msgData.ID) {
+			if !s.injectChallengeKeyValues(writer, challengeData, *msgData.ID, appSecToUse, requestTimeout, appSecReq.Host) {
 				return remediation.Ban, false
 			}
 			return appSecRemediation, true
@@ -764,7 +819,7 @@ func (s *Spoa) validateWithAppSec(
 	return currentRemediation, false
 }
 
-func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challengeData *appsec.AppSecChallengeData, requestID string) bool {
+func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challengeData *appsec.AppSecChallengeData, requestID string, appSecToUse *appsec.AppSec, timeout time.Duration, challengeHost string) bool {
 	status := challengeData.StatusCode
 	if status <= 0 {
 		status = http.StatusOK
@@ -778,6 +833,7 @@ func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challenge
 	}
 
 	token := s.challengeTokenFromRequestID(requestID)
+	body = rewriteChallengeInternalURLs(body, token)
 
 	s.challengeResponses.Store(token, &challengeResponseEntry{
 		status:    status,
@@ -786,12 +842,28 @@ func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challenge
 		cookies:   append([]string(nil), challengeData.Cookies...),
 		expiresAt: time.Now().Add(challengeResponseTTL),
 	})
+	s.storeChallengeRelay(token, challengeRelayEntry{
+		appSec:    appSecToUse,
+		timeout:   timeout,
+		host:      challengeHost,
+		expiresAt: time.Now().Add(challengeRelayTTL),
+	})
 
 	err := writer.SetString(encoding.VarScopeTransaction, "challenge_url", challengePathPrefix+token)
 	if err != nil {
+		s.challengeResponses.Delete(token)
+		s.deleteChallengeRelay(token)
 		return false
 	}
 	return true
+}
+
+func rewriteChallengeInternalURLs(body, token string) string {
+	scopedPrefix := challengeInternalPathPrefix + token + "/"
+	if strings.Contains(body, scopedPrefix) {
+		return body
+	}
+	return strings.ReplaceAll(body, challengeInternalPathPrefix, scopedPrefix)
 }
 
 func (s *Spoa) challengeTokenFromRequestID(requestID string) string {
@@ -845,16 +917,24 @@ func (s *Spoa) handleStoredChallengeHTTP(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Request) {
-	var matchedHost *host.Host
-	if r.Host != "" && s.hostManager != nil {
-		matchedHost = s.hostManager.MatchFirstHost(r.Host)
+	token, appSecPath, ok := parseChallengeRelayPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	relay, ok := s.loadChallengeRelay(token, time.Now())
+	if !ok {
+		http.NotFound(w, r)
+		return
 	}
 
-	appSecToUse, timeout, _ := s.getAppSecConfig(matchedHost)
+	appSecToUse, timeout := relay.appSec, relay.timeout
 	if appSecToUse == nil || !appSecToUse.IsValid() {
 		http.NotFound(w, r)
 		return
 	}
+	r.URL.Path = appSecPath
+	r.URL.RawPath = ""
 
 	// This endpoint is reached without going through the normal SPOE
 	// crowdsec-http-body/no-body flow (HAProxy routes crowdsec_challenge_backend_path
@@ -911,7 +991,7 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 
 	req := &appsec.AppSecRequest{
-		Host:      r.Host,
+		Host:      challengeRelayHost(relay, r.Host),
 		Method:    r.Method,
 		URL:       r.URL.RequestURI(),
 		RemoteIP:  remoteIP,
@@ -945,6 +1025,25 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 		// would be challenged again forever.
 		writeRelayedResponse(w, appSecResp)
 	}
+}
+
+func parseChallengeRelayPath(path string) (token, appSecPath string, ok bool) {
+	tail, found := strings.CutPrefix(path, challengeInternalPathPrefix)
+	if !found {
+		return "", "", false
+	}
+	token, rest, found := strings.Cut(tail, "/")
+	if !found || token == "" || rest == "" || strings.Contains(token, "/") {
+		return "", "", false
+	}
+	return token, challengeInternalPathPrefix + rest, true
+}
+
+func challengeRelayHost(relay challengeRelayEntry, fallback string) string {
+	if relay.host != "" {
+		return relay.host
+	}
+	return fallback
 }
 
 // writeRelayedResponse hands AppSec's raw response back to the client unchanged,

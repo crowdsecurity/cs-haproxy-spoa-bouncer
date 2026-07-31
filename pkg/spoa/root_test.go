@@ -57,6 +57,22 @@ func loadChallengeEntry(t *testing.T, s *Spoa, token string) *challengeResponseE
 	return entry
 }
 
+func storeTestChallengeRelay(t *testing.T, s *Spoa, appSecToUse *appsec.AppSec) string {
+	t.Helper()
+
+	token := "relay-token"
+	s.storeChallengeRelay(token, challengeRelayEntry{
+		appSec:    appSecToUse,
+		timeout:   time.Second,
+		expiresAt: time.Now().Add(time.Minute),
+	})
+	return token
+}
+
+func tokenizedChallengePath(token, path string) string {
+	return challengeInternalPathPrefix + token + "/" + strings.TrimPrefix(path, "/")
+}
+
 func TestNewChallengeHTTPServerSetsTimeouts(t *testing.T) {
 	s := newTestSpoa(t)
 
@@ -249,6 +265,33 @@ func TestValidateWithAppSec_ChallengeStoresResponseAndSetsURL(t *testing.T) {
 	assert.Equal(t, body, entry.body)
 }
 
+func TestValidateWithAppSec_ChallengeRewritesInternalURLsAndStoresRelay(t *testing.T) {
+	s := newTestSpoa(t)
+	body := `<script src="/crowdsec-internal/challenge/worker.js"></script><form action="/crowdsec-internal/challenge/submit"></form>`
+	appSec := newChallengeAppSec(t, body)
+
+	msgData := &HTTPMessageData{
+		ID:   ptr.Of("req-rewrite"),
+		Host: ptr.Of("protected.example.com"),
+	}
+	writer := encoding.NewActionWriter(make([]byte, 1<<20), 0)
+
+	got, issued := s.validateWithAppSec(t.Context(), writer, msgData, nil, appSec, remediation.Allow, time.Second)
+
+	require.Equal(t, remediation.Challenge, got)
+	assert.True(t, issued)
+
+	token := s.challengeTokenFromRequestID("req-rewrite")
+	entry := loadChallengeEntry(t, s, token)
+	assert.Contains(t, entry.body, "/crowdsec-internal/challenge/"+token+"/worker.js")
+	assert.Contains(t, entry.body, "/crowdsec-internal/challenge/"+token+"/submit")
+
+	relay, ok := s.loadChallengeRelay(token, time.Now())
+	require.True(t, ok)
+	assert.Same(t, appSec, relay.appSec)
+	assert.Equal(t, "protected.example.com", relay.host)
+}
+
 func TestValidateWithAppSec_ChallengeWithEmptyBody_FallsBackToBan(t *testing.T) {
 	s := newTestSpoa(t)
 	appSec := newChallengeAppSec(t, "")
@@ -345,6 +388,24 @@ func TestCleanupChallengeResponses_StopsOnContextCancel(t *testing.T) {
 	}
 }
 
+func TestSweepExpiredChallengeRelays_RemovesOnlyExpiredEntries(t *testing.T) {
+	s := newTestSpoa(t)
+	appSec := newChallengeAppSec(t, "<html>challenge</html>")
+	now := time.Now()
+
+	s.storeChallengeRelay("expired", challengeRelayEntry{appSec: appSec, timeout: time.Second, expiresAt: now.Add(-time.Second)})
+	s.storeChallengeRelay("fresh", challengeRelayEntry{appSec: appSec, timeout: time.Second, expiresAt: now.Add(time.Minute)})
+
+	s.sweepExpiredChallengeRelays(now)
+
+	_, ok := s.loadChallengeRelay("expired", now)
+	assert.False(t, ok)
+
+	relay, ok := s.loadChallengeRelay("fresh", now)
+	require.True(t, ok)
+	assert.Same(t, appSec, relay.appSec)
+}
+
 // newInternalChallengeSpoa builds a Spoa with a real dataset/geo database (as
 // production always provides, per cmd/root.go) wired up for
 // handleInternalChallengeHTTP tests, plus an AppSec double that counts calls
@@ -383,8 +444,35 @@ func newInternalChallengeSpoa(t *testing.T) (*Spoa, *int32) {
 	return s, &calls
 }
 
+func TestHandleInternalChallengeHTTP_MissingRelayTokenReturnsNotFound(t *testing.T) {
+	s, calls := newInternalChallengeSpoa(t)
+
+	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.7")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "AppSec must not be reached without an issued challenge token")
+}
+
+func TestHandleInternalChallengeHTTP_UnknownRelayTokenReturnsNotFound(t *testing.T) {
+	s, calls := newInternalChallengeSpoa(t)
+
+	req := httptest.NewRequest(http.MethodGet, tokenizedChallengePath("unknown-token", "asset.js"), http.NoBody)
+	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.7")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "AppSec must not be reached with an unknown challenge token")
+}
+
 func TestHandleInternalChallengeHTTP_BannedIPRejectedWithoutCallingAppSec(t *testing.T) {
 	s, calls := newInternalChallengeSpoa(t)
+	token := storeTestChallengeRelay(t, s, s.globalAppSec)
 	s.dataset.Add(models.GetDecisionsResponse{
 		{
 			Scope:  ptr.Of("IP"),
@@ -394,7 +482,7 @@ func TestHandleInternalChallengeHTTP_BannedIPRejectedWithoutCallingAppSec(t *tes
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, tokenizedChallengePath(token, "asset.js"), http.NoBody)
 	// Client-supplied header must NOT be trusted for the ban check either -
 	// only the HAProxy-set X-Crowdsec-Real-Src should be honored.
 	req.Header.Set("X-Forwarded-For", "127.0.0.1")
@@ -415,6 +503,7 @@ func TestHandleInternalChallengeHTTP_BannedIPRejectedWithoutCallingAppSec(t *tes
 // already reach AppSec through the normal SPOE path.
 func TestHandleInternalChallengeHTTP_CaptchaIPStillRelaysToAppSec(t *testing.T) {
 	s, calls := newInternalChallengeSpoa(t)
+	token := storeTestChallengeRelay(t, s, s.globalAppSec)
 	s.dataset.Add(models.GetDecisionsResponse{
 		{
 			Scope:  ptr.Of("IP"),
@@ -424,7 +513,7 @@ func TestHandleInternalChallengeHTTP_CaptchaIPStillRelaysToAppSec(t *testing.T) 
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, tokenizedChallengePath(token, "asset.js"), http.NoBody)
 	req.Header.Set("X-Crowdsec-Real-Src", "203.0.113.6")
 	rec := httptest.NewRecorder()
 
@@ -437,6 +526,7 @@ func TestHandleInternalChallengeHTTP_CaptchaIPStillRelaysToAppSec(t *testing.T) 
 
 func TestHandleInternalChallengeHTTP_DatasetChallengeRejectedWithoutCallingAppSec(t *testing.T) {
 	s, calls := newInternalChallengeSpoa(t)
+	token := storeTestChallengeRelay(t, s, s.globalAppSec)
 	s.dataset.Add(models.GetDecisionsResponse{
 		{
 			Scope:  ptr.Of("IP"),
@@ -446,7 +536,7 @@ func TestHandleInternalChallengeHTTP_DatasetChallengeRejectedWithoutCallingAppSe
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, tokenizedChallengePath(token, "asset.js"), http.NoBody)
 	req.Header.Set("X-Crowdsec-Real-Src", "203.0.113.7")
 	rec := httptest.NewRecorder()
 
@@ -458,8 +548,9 @@ func TestHandleInternalChallengeHTTP_DatasetChallengeRejectedWithoutCallingAppSe
 
 func TestHandleInternalChallengeHTTP_AllowedIPRelaysToAppSec(t *testing.T) {
 	s, calls := newInternalChallengeSpoa(t)
+	token := storeTestChallengeRelay(t, s, s.globalAppSec)
 
-	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, tokenizedChallengePath(token, "asset.js"), http.NoBody)
 	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.7")
 	rec := httptest.NewRecorder()
 
@@ -468,6 +559,44 @@ func TestHandleInternalChallengeHTTP_AllowedIPRelaysToAppSec(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "<html>challenge</html>")
 	assert.Equal(t, int32(1), atomic.LoadInt32(calls), "a non-banned IP should still be relayed to AppSec")
+}
+
+func TestHandleInternalChallengeHTTP_ValidRelayTokenStripsTokenBeforeAppSec(t *testing.T) {
+	var gotURI string
+	a := &appsec.AppSec{URL: "http://appsec.test/", APIKey: "test-key"}
+	require.NoError(t, a.Init(log.NewEntry(log.New())))
+	a.Client.HTTPClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotURI = req.Header.Get("X-Crowdsec-Appsec-Uri")
+		respBody, err := json.Marshal(map[string]any{
+			"action":            "challenge",
+			"http_status":       200,
+			"user_body_content": "<html>challenge</html>",
+		})
+		require.NoError(t, err)
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(respBody)),
+		}, nil
+	})
+
+	s := &Spoa{
+		logger:             log.NewEntry(log.New()),
+		dataset:            dataset.New(),
+		geoDatabase:        &geo.GeoDatabase{},
+		globalAppSec:       a,
+		challengeResponses: newChallengeCache(0),
+	}
+	token := storeTestChallengeRelay(t, s, a)
+
+	req := httptest.NewRequest(http.MethodGet, tokenizedChallengePath(token, "worker.js")+"?v=1", http.NoBody)
+	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.12")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "/crowdsec-internal/challenge/worker.js?v=1", gotURI)
 }
 
 // A solved challenge is AppSec answering 200 with the proof cookie the browser
@@ -499,8 +628,9 @@ func TestHandleInternalChallengeHTTP_SolvedChallengeForwardsAppSecResponse(t *te
 		globalAppSec:       a,
 		challengeResponses: newChallengeCache(0),
 	}
+	token := storeTestChallengeRelay(t, s, a)
 
-	req := httptest.NewRequest(http.MethodPost, challengeInternalPathPrefix+"validate", strings.NewReader("proof=solved"))
+	req := httptest.NewRequest(http.MethodPost, tokenizedChallengePath(token, "validate"), strings.NewReader("proof=solved"))
 	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.10")
 	rec := httptest.NewRecorder()
 
@@ -532,8 +662,9 @@ func TestHandleInternalChallengeHTTP_BanFromAppSecReturnsPlainForbidden(t *testi
 		globalAppSec:       a,
 		challengeResponses: newChallengeCache(0),
 	}
+	token := storeTestChallengeRelay(t, s, a)
 
-	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, tokenizedChallengePath(token, "asset.js"), http.NoBody)
 	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.11")
 	rec := httptest.NewRecorder()
 
@@ -543,7 +674,7 @@ func TestHandleInternalChallengeHTTP_BanFromAppSecReturnsPlainForbidden(t *testi
 	assert.NotContains(t, rec.Body.String(), "action")
 }
 
-func TestHandleInternalChallengeHTTP_UsesHostSpecificAppSec(t *testing.T) {
+func TestHandleInternalChallengeHTTP_RelayTokenPinsAppSecConfig(t *testing.T) {
 	var hostCalls int32
 	var globalCalls int32
 
@@ -568,8 +699,15 @@ func TestHandleInternalChallengeHTTP_UsesHostSpecificAppSec(t *testing.T) {
 		globalAppSec:       &globalAppSec,
 		challengeResponses: newChallengeCache(0),
 	}
+	token := "relay-token"
+	s.storeChallengeRelay(token, challengeRelayEntry{
+		appSec:    &matchedHost.AppSec,
+		timeout:   time.Second,
+		host:      matchedHost.Host,
+		expiresAt: time.Now().Add(time.Minute),
+	})
 
-	req := httptest.NewRequest(http.MethodGet, "http://protected.example.com"+challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "http://other.example.com"+tokenizedChallengePath(token, "asset.js"), http.NoBody)
 	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.8")
 	rec := httptest.NewRecorder()
 
@@ -578,49 +716,12 @@ func TestHandleInternalChallengeHTTP_UsesHostSpecificAppSec(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "<html>host challenge</html>")
 	assert.Equal(t, int32(1), atomic.LoadInt32(&hostCalls))
-	assert.Equal(t, int32(0), atomic.LoadInt32(&globalCalls), "matched host AppSec should take precedence over global AppSec")
-}
-
-func TestHandleInternalChallengeHTTP_FallsBackToGlobalAppSecWhenHostDoesNotMatch(t *testing.T) {
-	var hostCalls int32
-	var globalCalls int32
-
-	globalAppSec := newCountingChallengeAppSec(t, "<html>global challenge</html>", &globalCalls)
-
-	hostManager := host.NewManager(log.NewEntry(log.New()))
-	matchedHost := &host.Host{
-		Host: "protected.example.com",
-		AppSec: appsec.AppSec{
-			URL:    "http://appsec.test/",
-			APIKey: "test-key",
-		},
-	}
-	hostManager.AddHost(matchedHost)
-	matchedHost.AppSec.Client.HTTPClient.Transport = newCountingChallengeAppSecTransport(t, "<html>host challenge</html>", &hostCalls)
-
-	s := &Spoa{
-		logger:             log.NewEntry(log.New()),
-		dataset:            dataset.New(),
-		geoDatabase:        &geo.GeoDatabase{},
-		hostManager:        hostManager,
-		globalAppSec:       &globalAppSec,
-		challengeResponses: newChallengeCache(0),
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "http://other.example.com"+challengeInternalPathPrefix+"asset.js", http.NoBody)
-	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.9")
-	rec := httptest.NewRecorder()
-
-	s.handleInternalChallengeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "<html>global challenge</html>")
-	assert.Equal(t, int32(0), atomic.LoadInt32(&hostCalls))
-	assert.Equal(t, int32(1), atomic.LoadInt32(&globalCalls), "global AppSec should handle unmatched hosts")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&globalCalls), "relay must use the AppSec config stored with the issued token, not the request Host")
 }
 
 func TestHandleInternalChallengeHTTP_SpoofedXForwardedForIgnoredForBanCheck(t *testing.T) {
 	s, calls := newInternalChallengeSpoa(t)
+	token := storeTestChallengeRelay(t, s, s.globalAppSec)
 	// Ban a victim IP; the attacker tries to get it "reported" as their own
 	// source by spoofing X-Forwarded-For, without HAProxy setting the trusted header.
 	s.dataset.Add(models.GetDecisionsResponse{
@@ -632,7 +733,7 @@ func TestHandleInternalChallengeHTTP_SpoofedXForwardedForIgnoredForBanCheck(t *t
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, tokenizedChallengePath(token, "asset.js"), http.NoBody)
 	req.Header.Set("X-Forwarded-For", "203.0.113.99")
 	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.50")
 	rec := httptest.NewRecorder()
@@ -652,8 +753,9 @@ func TestHandleInternalChallengeHTTP_SpoofedXForwardedForIgnoredForBanCheck(t *t
 // events against the operator's own infrastructure. So the request is refused.
 func TestHandleInternalChallengeHTTP_MissingRealSrcFailsClosed(t *testing.T) {
 	s, calls := newInternalChallengeSpoa(t)
+	token := storeTestChallengeRelay(t, s, s.globalAppSec)
 
-	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, tokenizedChallengePath(token, "asset.js"), http.NoBody)
 	req.Header.Set("X-Forwarded-For", "203.0.113.99")
 	req.RemoteAddr = "198.51.100.50:12345"
 	rec := httptest.NewRecorder()
@@ -666,8 +768,9 @@ func TestHandleInternalChallengeHTTP_MissingRealSrcFailsClosed(t *testing.T) {
 
 func TestHandleInternalChallengeHTTP_UnparseableRealSrcFailsClosed(t *testing.T) {
 	s, calls := newInternalChallengeSpoa(t)
+	token := storeTestChallengeRelay(t, s, s.globalAppSec)
 
-	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, tokenizedChallengePath(token, "asset.js"), http.NoBody)
 	req.Header.Set("X-Crowdsec-Real-Src", "not-an-ip")
 	rec := httptest.NewRecorder()
 
