@@ -242,7 +242,21 @@ func (s *Spoa) HandleSPOE(ctx context.Context, writer *encoding.ActionWriter, me
 }
 
 func (s *Spoa) Serve(ctx context.Context) error {
-	serverError := make(chan error, 2)
+	serverCount := 0
+	if s.ListenAddr != nil {
+		serverCount++
+	}
+	if s.ListenSocket != nil {
+		serverCount++
+	}
+	if s.ChallengeHTTPListenAddr != nil {
+		serverCount++
+	}
+	if serverCount == 0 {
+		return nil
+	}
+
+	serverError := make(chan error, serverCount)
 
 	startServer := func(listener net.Listener) {
 		agent := spop.Agent{
@@ -282,10 +296,6 @@ func (s *Spoa) Serve(ctx context.Context) error {
 				serverError <- err
 			}
 		}()
-	}
-
-	if s.ListenAddr == nil && s.ListenSocket == nil && s.ChallengeHTTPListenAddr == nil {
-		return nil
 	}
 
 	go s.cleanupChallengeResponses(ctx)
