@@ -893,14 +893,25 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	// requests here directly, bypassing send-spoe-group - see haproxy*.cfg), so it
 	// never gets the IP/dataset ban check that every other request goes through.
 	// Re-run that cheap, local check here before relaying anything to AppSec, so an
-	// already-banned/captcha'd IP can't use this path as a side channel into the
-	// AppSec engine. This intentionally does NOT run the full validateWithAppSec
-	// pipeline (that would mint a *new* challenge_url token here, which is wrong:
-	// this endpoint relays an already-issued challenge's follow-up asset/
-	// verification traffic, not a fresh top-level decision).
+	// already-banned IP can't use this path as a side channel into the AppSec engine.
+	// This intentionally does NOT run the full validateWithAppSec pipeline (that would
+	// mint a *new* challenge_url token here, which is wrong: this endpoint relays an
+	// already-issued challenge's follow-up asset/verification traffic, not a fresh
+	// top-level decision).
+	//
+	// The bar is Challenge, not Captcha. A captcha'd IP can legitimately be holding an
+	// AppSec challenge at the same time - validateWithAppSec takes the more restrictive
+	// of the two, so a captcha'd IP that AppSec challenges is shown a challenge page
+	// whose assets and proof submission all land here. Rejecting Captcha would 403
+	// every one of them and leave that user with nothing to solve. It would not protect
+	// anything either: a captcha decision means "prove you are human", not "go away",
+	// and with always_send that IP's ordinary requests already reach AppSec through the
+	// normal SPOE path. Dataset-level Challenge stays rejected because it cannot be
+	// served as a browser challenge at all (see the fail-closed handling in
+	// handleHTTPRequest), so here it means the same thing as a ban.
 	remoteIP := trustedChallengeClientIP(r)
 	if ip, parseErr := netip.ParseAddr(remoteIP); parseErr == nil {
-		if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem >= remediation.Captcha {
+		if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem >= remediation.Challenge {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

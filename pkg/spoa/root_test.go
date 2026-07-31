@@ -400,7 +400,13 @@ func TestHandleInternalChallengeHTTP_BannedIPRejectedWithoutCallingAppSec(t *tes
 	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "a banned IP must not reach the AppSec engine through this endpoint")
 }
 
-func TestHandleInternalChallengeHTTP_CaptchaPendingIPRejectedWithoutCallingAppSec(t *testing.T) {
+// A captcha decision must not block challenge traffic. An IP can hold both at once:
+// validateWithAppSec takes the more restrictive of the two, so a captcha'd IP that
+// AppSec challenges gets a challenge page, and every asset and proof submission on
+// that page lands on this endpoint. 403ing them would leave the user with nothing to
+// solve, and would protect nothing - with always_send that IP's ordinary requests
+// already reach AppSec through the normal SPOE path.
+func TestHandleInternalChallengeHTTP_CaptchaIPStillRelaysToAppSec(t *testing.T) {
 	s, calls := newInternalChallengeSpoa(t)
 	s.dataset.Add(models.GetDecisionsResponse{
 		{
@@ -417,8 +423,9 @@ func TestHandleInternalChallengeHTTP_CaptchaPendingIPRejectedWithoutCallingAppSe
 
 	s.handleInternalChallengeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "a captcha-pending IP must not reach the AppSec engine through this endpoint")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "<html>challenge</html>")
+	assert.Equal(t, int32(1), atomic.LoadInt32(calls), "a captcha'd IP must still be able to complete an AppSec challenge")
 }
 
 func TestHandleInternalChallengeHTTP_DatasetChallengeRejectedWithoutCallingAppSec(t *testing.T) {

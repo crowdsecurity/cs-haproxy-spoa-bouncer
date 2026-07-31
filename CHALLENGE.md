@@ -126,8 +126,10 @@ For `/crowdsec-internal/challenge/*` follow-up traffic:
 - HAProxy routes directly to the challenge HTTP backend and skips SPOE.
 - The bouncer derives the source IP from `X-Crowdsec-Real-Src`, falling back to
   `RemoteAddr` only if the header is absent.
-- The bouncer re-checks dataset remediation and rejects `captcha`, `challenge`,
-  and `ban` decisions before relaying to AppSec.
+- The bouncer re-checks dataset remediation and rejects `challenge` and `ban`
+  decisions before relaying to AppSec. A `captcha` decision is *not* rejected: the
+  same IP can hold a captcha decision and an AppSec challenge at once, and 403ing
+  the challenge assets would leave that user with nothing to solve.
 - The bouncer matches `Host` against configured hosts and uses host-specific
   AppSec when available; otherwise it falls back to global AppSec.
 - When AppSec still returns `challenge`, the bouncer unwraps the JSON envelope and
