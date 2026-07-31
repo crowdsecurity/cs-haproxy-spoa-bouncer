@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -927,19 +928,45 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
-	remediationResult, challengeData, err := appSecToUse.ValidateRequest(ctx, req)
+	appSecResp, err := appSecToUse.Do(ctx, req)
 	if err != nil {
 		s.logger.WithError(err).Warn("AppSec internal challenge request failed")
 		http.Error(w, "challenge backend error", http.StatusBadGateway)
 		return
 	}
 
-	if remediationResult != remediation.Challenge || challengeData == nil {
-		w.WriteHeader(http.StatusNoContent)
-		return
+	switch {
+	case appSecResp.Remediation == remediation.Challenge && appSecResp.ChallengeData != nil:
+		// Still challenged: an asset request, or a proof AppSec rejected. Unwrap the
+		// JSON envelope AppSec wraps challenge content in.
+		writeChallengeData(w, appSecResp.ChallengeData)
+	case appSecResp.Remediation > remediation.Allow:
+		http.Error(w, "forbidden", http.StatusForbidden)
+	default:
+		// AppSec allowed the request, which for a proof submission means the challenge
+		// was solved. Forward AppSec's own response verbatim: the proof cookie rides
+		// back on it, and without it the browser has nothing to replay on its retry and
+		// would be challenged again forever.
+		writeRelayedResponse(w, appSecResp)
+	}
+}
+
+// writeRelayedResponse hands AppSec's raw response back to the client unchanged,
+// preserving every Set-Cookie it carries.
+func writeRelayedResponse(w http.ResponseWriter, resp *appsec.AppSecResponse) {
+	header := w.Header()
+	for name, values := range resp.Headers {
+		for _, value := range values {
+			header.Add(name, value)
+		}
 	}
 
-	writeChallengeData(w, challengeData)
+	status := resp.StatusCode
+	if status <= 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(resp.Body)
 }
 
 func writeChallengeData(w http.ResponseWriter, challengeData *appsec.AppSecChallengeData) {

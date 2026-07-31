@@ -58,10 +58,13 @@ sequenceDiagram
 
     alt AppSec still returns challenge
         AppSec-->>HTTP: Challenge asset or submit response
-        HTTP-->>Browser: AppSec response
-    else AppSec allows
-        AppSec-->>HTTP: allow
-        HTTP-->>Browser: 204 No Content
+        HTTP-->>Browser: Challenge response
+    else AppSec allows (challenge solved)
+        AppSec-->>HTTP: 200 + proof cookie
+        HTTP-->>Browser: AppSec response forwarded as-is
+    else AppSec blocks
+        AppSec-->>HTTP: ban
+        HTTP-->>Browser: 403 Forbidden
     end
 ```
 
@@ -127,6 +130,16 @@ For `/crowdsec-internal/challenge/*` follow-up traffic:
   and `ban` decisions before relaying to AppSec.
 - The bouncer matches `Host` against configured hosts and uses host-specific
   AppSec when available; otherwise it falls back to global AppSec.
+- When AppSec still returns `challenge`, the bouncer unwraps the JSON envelope and
+  serves the challenge content.
+- When AppSec allows the request - which for a proof submission means the challenge
+  was solved - the bouncer forwards AppSec's own response unchanged: status, body
+  and every `Set-Cookie`. The proof cookie rides back on that response and is what
+  the browser replays on its retry, so it must not be dropped. Only framing headers
+  (`Content-Length`, `Transfer-Encoding`, `Connection`, and the other hop-by-hop
+  headers) are stripped, because the bouncer sets its own.
+- When AppSec blocks the request, the bouncer returns a plain `403` rather than
+  leaking AppSec's JSON decision envelope to the browser.
 
 ## AppSec Challenge Response
 

@@ -456,6 +456,81 @@ func TestHandleInternalChallengeHTTP_AllowedIPRelaysToAppSec(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(calls), "a non-banned IP should still be relayed to AppSec")
 }
 
+// A solved challenge is AppSec answering 200 with the proof cookie the browser
+// replays on its retry. The relay must hand that response back untouched - if the
+// cookie is dropped the browser has nothing to replay and gets challenged forever.
+func TestHandleInternalChallengeHTTP_SolvedChallengeForwardsAppSecResponse(t *testing.T) {
+	const (
+		proofCookie = "__crowdsec_challenge_passed=abc123; Path=/; HttpOnly; SameSite=Lax"
+		proofBody   = `{"status":"ok"}`
+	)
+
+	a := &appsec.AppSec{URL: "http://appsec.test/", APIKey: "test-key"}
+	require.NoError(t, a.Init(log.NewEntry(log.New())))
+	a.Client.HTTPClient.Transport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type":   []string{"application/json"},
+				"Set-Cookie":     []string{proofCookie},
+				"Content-Length": []string{"999"},
+			},
+			Body: io.NopCloser(strings.NewReader(proofBody)),
+		}, nil
+	})
+
+	s := &Spoa{
+		logger:             log.NewEntry(log.New()),
+		dataset:            dataset.New(),
+		geoDatabase:        &geo.GeoDatabase{},
+		globalAppSec:       a,
+		challengeResponses: newChallengeCache(0),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, challengeInternalPathPrefix+"validate", strings.NewReader("proof=solved"))
+	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.10")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, []string{proofCookie}, rec.Result().Header.Values("Set-Cookie"))
+	assert.JSONEq(t, proofBody, rec.Body.String(), "AppSec's response body must be forwarded to the client")
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	assert.Empty(t, rec.Header().Get("Content-Length"), "AppSec's framing headers must not be copied onto our own response")
+}
+
+// AppSec rejecting the relayed request outright must not leak its JSON decision
+// envelope to the browser.
+func TestHandleInternalChallengeHTTP_BanFromAppSecReturnsPlainForbidden(t *testing.T) {
+	a := &appsec.AppSec{URL: "http://appsec.test/", APIKey: "test-key"}
+	require.NoError(t, a.Init(log.NewEntry(log.New())))
+	a.Client.HTTPClient.Transport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"action":"ban","http_status":403}`)),
+		}, nil
+	})
+
+	s := &Spoa{
+		logger:             log.NewEntry(log.New()),
+		dataset:            dataset.New(),
+		geoDatabase:        &geo.GeoDatabase{},
+		globalAppSec:       a,
+		challengeResponses: newChallengeCache(0),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.11")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "action")
+}
+
 func TestHandleInternalChallengeHTTP_UsesHostSpecificAppSec(t *testing.T) {
 	var hostCalls int32
 	var globalCalls int32
