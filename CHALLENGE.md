@@ -182,7 +182,7 @@ Rules:
 - `user_body_content` is served by the challenge HTTP backend.
 - `user_headers` are forwarded to the browser response.
 - Every `user_cookies` value is forwarded as `Set-Cookie`.
-- If the body is empty, the bouncer serves a fallback HTML challenge page.
+- If the body is empty, the bouncer treats the challenge as malformed and fails closed to `ban`.
 
 ## Configuration
 

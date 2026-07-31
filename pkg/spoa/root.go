@@ -773,14 +773,8 @@ func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challenge
 	body := challengeData.Body
 	headers := challengeData.Headers
 	if body == "" {
-		body = fallbackChallengeBody
-		headers = cloneChallengeHeaders(headers)
-		if !hasChallengeHeader(headers, "Content-Type") {
-			headers["Content-Type"] = []string{"text/html; charset=utf-8"}
-		}
-		if !hasChallengeHeader(headers, "Cache-Control") {
-			headers["Cache-Control"] = []string{"no-cache, no-store"}
-		}
+		s.logger.Error("cannot serve AppSec challenge: CrowdSec returned no challenge body, falling back to ban")
+		return false
 	}
 
 	token := s.challengeTokenFromRequestID(requestID)
@@ -798,45 +792,6 @@ func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challenge
 		return false
 	}
 	return true
-}
-
-const fallbackChallengeBody = `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>CrowdSec Challenge</title>
-    <style>
-      body { margin: 0; font-family: system-ui, sans-serif; color: #111827; background: #f9fafb; }
-      main { max-width: 42rem; margin: 15vh auto; padding: 2rem; }
-      h1 { font-size: 1.5rem; margin: 0 0 0.75rem; }
-      p { line-height: 1.5; margin: 0; color: #374151; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>Request challenged by CrowdSec</h1>
-      <p>The request matched an AppSec rule and was returned as a challenge, but CrowdSec did not provide a challenge page body.</p>
-    </main>
-  </body>
-</html>
-`
-
-func cloneChallengeHeaders(headers map[string][]string) map[string][]string {
-	clone := make(map[string][]string, len(headers)+2)
-	for k, values := range headers {
-		clone[k] = append([]string(nil), values...)
-	}
-	return clone
-}
-
-func hasChallengeHeader(headers map[string][]string, name string) bool {
-	for k := range headers {
-		if strings.EqualFold(k, name) {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Spoa) challengeTokenFromRequestID(requestID string) string {

@@ -249,7 +249,7 @@ func TestValidateWithAppSec_ChallengeStoresResponseAndSetsURL(t *testing.T) {
 	assert.Equal(t, body, entry.body)
 }
 
-func TestValidateWithAppSec_ChallengeWithEmptyBody_StoresFallbackBody(t *testing.T) {
+func TestValidateWithAppSec_ChallengeWithEmptyBody_FallsBackToBan(t *testing.T) {
 	s := newTestSpoa(t)
 	appSec := newChallengeAppSec(t, "")
 
@@ -258,16 +258,11 @@ func TestValidateWithAppSec_ChallengeWithEmptyBody_StoresFallbackBody(t *testing
 
 	got, issued := s.validateWithAppSec(t.Context(), writer, msgData, nil, appSec, remediation.Allow, time.Second)
 
-	require.Equal(t, remediation.Challenge, got)
-	assert.True(t, issued)
+	require.Equal(t, remediation.Ban, got)
+	assert.False(t, issued)
 
 	actions := decodeSetVarActions(t, writer.Bytes())
-	require.Contains(t, actions, "challenge_url")
-
-	token := strings.TrimPrefix(actions["challenge_url"].str, challengePathPrefix)
-	entry := loadChallengeEntry(t, s, token)
-	assert.Contains(t, entry.body, "Request challenged by CrowdSec")
-	assert.Contains(t, entry.headers.Values("Content-Type"), "text/html; charset=utf-8")
+	assert.NotContains(t, actions, "challenge_url")
 }
 
 func TestHandleStoredChallengeHTTP_ServesAndDeletesCachedResponse(t *testing.T) {
