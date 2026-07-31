@@ -11,17 +11,22 @@ import (
 // responses (see challengeResponseEntry) can be held in memory at once,
 // waiting for HAProxy to fetch them via the challenge HTTP backend.
 //
-// Without a cap, a burst of challenge-triggering requests that never complete
-// their fetch (or a deliberate flood aimed at the AppSec challenge path)
-// could grow this cache without bound between cleanupChallengeResponses'
-// periodic TTL sweeps, with each entry costing up to
-// maxAppSecResponseBodySize (1MiB). 1000 entries is a generous ceiling for
-// legitimate traffic - at the 30s challengeResponseTTL, that's ~33 newly
-// issued challenges per second sustained before eviction kicks in - while
-// still capping worst-case memory to a known amount instead of growing
-// unbounded. Configurable via challenge_cache_max_entries in the bouncer
-// config (see pkg/cfg.BouncerConfig.ChallengeCacheMaxEntries); a value <= 0
-// falls back to this default.
+// Two things bound this cache, and they cover different failure modes. This cap
+// is the hard ceiling: a burst of challenge-triggering requests that never
+// complete their fetch (or a deliberate flood aimed at the AppSec challenge path)
+// evicts least-recently-used entries rather than growing, with each entry costing
+// up to maxAppSecResponseBodySize (1MiB). cleanupChallengeResponses' periodic
+// sweep is the softer one: it releases entries whose TTL has passed, which
+// nothing else does - gcache drops an expired entry when its key is next looked
+// up, and an issued-but-never-fetched challenge is never looked up.
+//
+// 1000 entries is a generous ceiling for legitimate traffic - at the 30s
+// challengeResponseTTL, that's ~33 newly issued challenges per second sustained
+// before eviction kicks in - while still capping worst-case memory to a known
+// amount instead of growing unbounded. Configurable via
+// challenge_cache_max_entries in the bouncer config (see
+// pkg/cfg.BouncerConfig.ChallengeCacheMaxEntries); a value <= 0 falls back to
+// this default.
 const defaultChallengeCacheMaxEntries = 1000
 
 // challengeCache is a small adapter around the cache implementation already
@@ -101,12 +106,20 @@ func (c *challengeCache) Delete(key string) {
 	c.cache.Remove(key)
 }
 
-// Range calls f for every unexpired entry, stopping early if f returns false.
-// The traversal is snapshotted under the lock before f is invoked, so f is free
-// to call Delete without deadlocking.
+// Range calls f for every entry still held in memory - including ones gcache
+// already considers expired - stopping early if f returns false. The traversal is
+// snapshotted under the lock before f is invoked, so f is free to call Delete
+// without deadlocking.
+//
+// Expired entries are included deliberately: gcache's LRU never reclaims on its
+// own (an expired item stays in its map until that key is touched again or size
+// pressure evicts it), and it exposes no purge-expired call - Purge() drops
+// everything. Sweeping is therefore the only way to release the memory early, and
+// a sweep that cannot see expired entries has nothing to release. Callers that
+// want live entries only must use Load/LoadAndDelete, which do honor the TTL.
 func (c *challengeCache) Range(f func(key string, value *challengeResponseEntry) bool) {
 	c.mu.Lock()
-	items := c.cache.GetALL(true)
+	items := c.cache.GetALL(false)
 	snapshot := make(map[string]*challengeResponseEntry, len(items))
 	for key, value := range items {
 		keyString, ok := key.(string)

@@ -2,10 +2,45 @@ package spoa
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Range must surface entries that gcache's own TTL has already retired, because
+// sweeping them is the only thing that releases their memory. gcache drops an
+// expired item when that key is next looked up, but a challenge that HAProxy never
+// fetches is never looked up - which is exactly the entry that leaks - so nothing
+// reclaims it until size pressure evicts it. Expiry is driven through gcache here
+// rather than by hand-setting expiresAt, so the test uses the same clock as
+// production. Note the ordering: Range runs before Load, because Load on an
+// expired key removes it and would mask the very thing being asserted.
+func TestChallengeCache_RangeSeesEntriesGcacheHasExpired(t *testing.T) {
+	c := newChallengeCache(10)
+
+	require.NoError(t, c.cache.SetWithExpire("stale", &challengeResponseEntry{body: "old"}, time.Nanosecond))
+	time.Sleep(time.Millisecond)
+
+	seen := map[string]bool{}
+	c.Range(func(key string, _ *challengeResponseEntry) bool {
+		seen[key] = true
+		return true
+	})
+	assert.True(t, seen["stale"], "Range must see the expired entry, otherwise the sweep can never reclaim it")
+
+	_, ok := c.Load("stale")
+	assert.False(t, ok, "an expired entry must never be servable")
+
+	c.Delete("stale")
+
+	seen = map[string]bool{}
+	c.Range(func(key string, _ *challengeResponseEntry) bool {
+		seen[key] = true
+		return true
+	})
+	assert.Empty(t, seen, "the entry should be gone once swept")
+}
 
 func TestNewChallengeCache_DefaultsWhenNonPositive(t *testing.T) {
 	for _, n := range []int{0, -1, -100} {
