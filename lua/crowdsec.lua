@@ -118,11 +118,6 @@ function runtime.Handle(txn)
         return
     end
 
-    if remediation == "challenge" then
-        runtime.logger.warning("Lua handler called for 'challenge' remediation - challenge responses are streamed from the bouncer HTTP backend")
-        return
-    end
-
     if remediation == "captcha" then
         reply:set_status(200)
         reply:set_body(runtime.captcha.render({
