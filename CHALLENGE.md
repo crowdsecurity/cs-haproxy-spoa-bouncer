@@ -111,7 +111,7 @@ backend crowdsec-challenge
     timeout server 60s
     # Challenge responses are stored in the bouncer process that handled SPOE.
     # Keep this backend pinned to that same instance; do not load-balance it
-    # independently unless challenge storage is shared.
+    # independently unless challenge is shared.
     server s3 spoa:9100
 ```
 
@@ -230,7 +230,7 @@ does not have the cached response and the browser receives `404`.
 For the current implementation, run one bouncer per HAProxy or pin
 `backend crowdsec-challenge` to the same bouncer instance that handles SPOE. Do
 not configure independent load balancing for `backend crowdsec-spoa` and
-`backend crowdsec-challenge` unless you also provide shared challenge storage.
+`backend crowdsec-challenge` unless you also provide shared challenge.
 
 ## Notes
 
