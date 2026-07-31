@@ -108,6 +108,9 @@ backend crowdsec-challenge
     option forwardfor
     timeout connect 2s
     timeout server 60s
+    # Challenge responses are stored in the bouncer process that handled SPOE.
+    # Keep this backend pinned to that same instance; do not load-balance it
+    # independently unless challenge storage is shared.
     server s3 spoa:9100
 ```
 
@@ -205,6 +208,19 @@ The pending challenge cache is bounded and short-lived:
 When unset or non-positive, the cache defaults to 1000 entries. Entries are
 valid for 30 seconds and are single-use. At capacity, the cache evicts the
 least-recently-used pending challenge response.
+
+## High Availability Constraint
+
+Challenge response storage is local to each bouncer process. The initial SPOE
+request stores the challenge page in that process, and the follow-up HTTP fetch
+must reach the same process to read it. If HAProxy sends SPOE to one bouncer
+replica and routes `backend crowdsec-challenge` to another, the second replica
+does not have the cached response and the browser receives `404`.
+
+For the current implementation, run one bouncer per HAProxy or pin
+`backend crowdsec-challenge` to the same bouncer instance that handles SPOE. Do
+not configure independent load balancing for `backend crowdsec-spoa` and
+`backend crowdsec-challenge` unless you also provide shared challenge storage.
 
 ## Notes
 
