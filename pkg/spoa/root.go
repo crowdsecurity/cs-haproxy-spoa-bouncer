@@ -107,11 +107,6 @@ type Spoa struct {
 	// fetched challenges can't grow memory without bound.
 	challengeResponses *challengeCache
 	challengeTokenKey  [32]byte
-
-	// warnMissingRealSrc keeps the "HAProxy did not set X-Crowdsec-Real-Src"
-	// misconfiguration to a single log line per process. It is a static config
-	// error, so every challenge asset request would otherwise repeat it.
-	warnMissingRealSrc sync.Once
 }
 
 type challengeResponseEntry struct {
@@ -919,12 +914,10 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	// to AppSec - see trustedChallengeClientIP for why that is worse than a 403.
 	remoteIP, ok := trustedChallengeClientIP(r)
 	if !ok {
-		s.warnMissingRealSrc.Do(func() {
-			s.logger.Error("challenge backend received a request without the X-Crowdsec-Real-Src header, " +
-				"rejecting it and every request like it: add " +
-				`'http-request set-header X-Crowdsec-Real-Src %[src] if crowdsec_challenge_backend_path' ` +
-				"to the HAProxy frontend (see haproxy*.cfg and CHALLENGE.md)")
-		})
+		s.logger.Error("challenge backend received a request without the X-Crowdsec-Real-Src header, " +
+			"rejecting it and every request like it: add " +
+			`'http-request set-header X-Crowdsec-Real-Src %[src] if crowdsec_challenge_backend_path' ` +
+			"to the HAProxy frontend (see haproxy*.cfg and CHALLENGE.md)")
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
