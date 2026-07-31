@@ -40,6 +40,11 @@ const (
 	// waiting for HAProxy to route the challenged request to the HTTP challenge
 	// backend. The browser-visible challenge cookie remains governed by CrowdSec.
 	challengeResponseTTL = 30 * time.Second
+
+	challengeHTTPReadHeaderTimeout = 5 * time.Second
+	challengeHTTPReadTimeout       = 10 * time.Second
+	challengeHTTPWriteTimeout      = 10 * time.Second
+	challengeHTTPIdleTimeout       = 30 * time.Second
 )
 
 var (
@@ -259,13 +264,7 @@ func (s *Spoa) Serve(ctx context.Context) error {
 	}
 
 	if s.ChallengeHTTPListenAddr != nil {
-		mux := http.NewServeMux()
-		mux.HandleFunc(challengePathPrefix, s.handleStoredChallengeHTTP)
-		mux.HandleFunc(challengeInternalPathPrefix, s.handleInternalChallengeHTTP)
-		s.challengeHTTPServer = &http.Server{
-			Handler:           mux,
-			ReadHeaderTimeout: 5 * time.Second,
-		}
+		s.challengeHTTPServer = s.newChallengeHTTPServer()
 		s.logger.Infof("Serving challenge HTTP backend on %s", s.ChallengeHTTPListenAddr.Addr().String())
 		go func() {
 			if err := s.challengeHTTPServer.Serve(s.ChallengeHTTPListenAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -285,6 +284,20 @@ func (s *Spoa) Serve(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		return nil
+	}
+}
+
+func (s *Spoa) newChallengeHTTPServer() *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc(challengePathPrefix, s.handleStoredChallengeHTTP)
+	mux.HandleFunc(challengeInternalPathPrefix, s.handleInternalChallengeHTTP)
+
+	return &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: challengeHTTPReadHeaderTimeout,
+		ReadTimeout:       challengeHTTPReadTimeout,
+		WriteTimeout:      challengeHTTPWriteTimeout,
+		IdleTimeout:       challengeHTTPIdleTimeout,
 	}
 }
 

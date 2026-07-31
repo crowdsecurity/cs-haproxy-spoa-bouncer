@@ -57,6 +57,18 @@ func loadChallengeEntry(t *testing.T, s *Spoa, token string) *challengeResponseE
 	return entry
 }
 
+func TestNewChallengeHTTPServerSetsTimeouts(t *testing.T) {
+	s := newTestSpoa(t)
+
+	server := s.newChallengeHTTPServer()
+
+	assert.NotNil(t, server.Handler)
+	assert.Equal(t, 5*time.Second, server.ReadHeaderTimeout)
+	assert.Equal(t, 10*time.Second, server.ReadTimeout)
+	assert.Equal(t, 10*time.Second, server.WriteTimeout)
+	assert.Equal(t, 30*time.Second, server.IdleTimeout)
+}
+
 // decodedAction is a test-only decoding of a single SET-VAR action written by
 // an ActionWriter, used to assert on what handlers actually sent back to
 // HAProxy without needing HAProxy itself.
