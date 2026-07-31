@@ -107,6 +107,11 @@ type Spoa struct {
 	// fetched challenges can't grow memory without bound.
 	challengeResponses *challengeCache
 	challengeTokenKey  [32]byte
+
+	// warnMissingRealSrc keeps the "HAProxy did not set X-Crowdsec-Real-Src"
+	// misconfiguration to a single log line per process. It is a static config
+	// error, so every challenge asset request would otherwise repeat it.
+	warnMissingRealSrc sync.Once
 }
 
 type challengeResponseEntry struct {
@@ -909,12 +914,32 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	// normal SPOE path. Dataset-level Challenge stays rejected because it cannot be
 	// served as a browser challenge at all (see the fail-closed handling in
 	// handleHTTPRequest), so here it means the same thing as a ban.
-	remoteIP := trustedChallengeClientIP(r)
-	if ip, parseErr := netip.ParseAddr(remoteIP); parseErr == nil {
-		if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem >= remediation.Challenge {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
+	// Fail closed when the client IP cannot be established. Relaying anyway would
+	// skip the check below *and* label the request with the wrong source on the way
+	// to AppSec - see trustedChallengeClientIP for why that is worse than a 403.
+	remoteIP, ok := trustedChallengeClientIP(r)
+	if !ok {
+		s.warnMissingRealSrc.Do(func() {
+			s.logger.Error("challenge backend received a request without the X-Crowdsec-Real-Src header, " +
+				"rejecting it and every request like it: add " +
+				`'http-request set-header X-Crowdsec-Real-Src %[src] if crowdsec_challenge_backend_path' ` +
+				"to the HAProxy frontend (see haproxy*.cfg and CHALLENGE.md)")
+		})
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	ip, parseErr := netip.ParseAddr(remoteIP)
+	if parseErr != nil {
+		s.logger.WithField("value", remoteIP).WithError(parseErr).
+			Error("challenge backend received an unparseable X-Crowdsec-Real-Src, rejecting the request")
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem >= remediation.Challenge {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(maxBodyBufferSize)))
@@ -1000,24 +1025,31 @@ func writeChallengeData(w http.ResponseWriter, challengeData *appsec.AppSecChall
 }
 
 // trustedChallengeClientIP returns the client IP for a request routed to the
-// challenge HTTP backend. It deliberately does NOT trust client-supplied
-// X-Forwarded-For/X-Real-IP headers: this endpoint bypasses the normal SPOE
-// flow (see crowdsec_challenge_backend_path in haproxy*.cfg), so nothing else
-// validates those headers here, and HAProxy's "option forwardfor" appends
-// rather than replaces an existing X-Forwarded-For - meaning a client-supplied
-// value would win over HAProxy's own if naively read with Header.Get. Instead,
-// haproxy*.cfg overwrites a single dedicated header (X-Crowdsec-Real-Src) with
-// HAProxy's own verified %[src] immediately before routing to this backend,
-// the same trust model crowdsec.cfg uses for src-ip=src in the normal flow.
-func trustedChallengeClientIP(r *http.Request) string {
+// challenge HTTP backend, and whether one could be established at all. It
+// deliberately does NOT trust client-supplied X-Forwarded-For/X-Real-IP headers:
+// this endpoint bypasses the normal SPOE flow (see
+// crowdsec_challenge_backend_path in haproxy*.cfg), so nothing else validates
+// those headers here, and HAProxy's "option forwardfor" appends rather than
+// replaces an existing X-Forwarded-For - meaning a client-supplied value would
+// win over HAProxy's own if naively read with Header.Get. Instead, haproxy*.cfg
+// overwrites a single dedicated header (X-Crowdsec-Real-Src) with HAProxy's own
+// verified %[src] immediately before routing to this backend, the same trust
+// model crowdsec.cfg uses for src-ip=src in the normal flow.
+//
+// There is deliberately no RemoteAddr fallback. RemoteAddr here is HAProxy, not
+// the visitor, and this address is used for more than the local ban check: it is
+// forwarded to AppSec as X-Crowdsec-Appsec-Ip, which AppSec takes as ClientIP and
+// feeds to Coraza, its allowlist lookup, country rules, and the client_ip on
+// every event it emits. Falling back would therefore attribute all challenge
+// traffic to the proxy - silently corrupting allowlisting and geo decisions, and
+// raising AppSec alerts against the operator's own infrastructure. A missing
+// header means haproxy*.cfg was not updated, which the caller treats as fatal for
+// the request rather than guessing.
+func trustedChallengeClientIP(r *http.Request) (string, bool) {
 	if trusted := r.Header.Get("X-Crowdsec-Real-Src"); trusted != "" {
-		return trusted
+		return trusted, true
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return "", false
 }
 
 // buildAppSecRequest constructs an AppSecRequest from HTTPMessageData

@@ -627,16 +627,47 @@ func TestHandleInternalChallengeHTTP_SpoofedXForwardedForIgnoredForBanCheck(t *t
 
 	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
 	req.Header.Set("X-Forwarded-For", "203.0.113.99")
+	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.50")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	// The banned IP was only ever claimed via X-Forwarded-For, which is not trusted
+	// here; the HAProxy-set X-Crowdsec-Real-Src is, and it is not banned, so the
+	// request is relayed - proving the spoofed value was neither checked nor forwarded.
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, int32(1), atomic.LoadInt32(calls))
+}
+
+// Without X-Crowdsec-Real-Src the visitor's address is unknowable here: RemoteAddr
+// is HAProxy. Relaying anyway would skip the ban check and hand AppSec the proxy's
+// address as ClientIP, corrupting its allowlist/country evaluation and raising
+// events against the operator's own infrastructure. So the request is refused.
+func TestHandleInternalChallengeHTTP_MissingRealSrcFailsClosed(t *testing.T) {
+	s, calls := newInternalChallengeSpoa(t)
+
+	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req.Header.Set("X-Forwarded-For", "203.0.113.99")
 	req.RemoteAddr = "198.51.100.50:12345"
 	rec := httptest.NewRecorder()
 
 	s.handleInternalChallengeHTTP(rec, req)
 
-	// Since X-Crowdsec-Real-Src is absent, trustedChallengeClientIP falls back to
-	// RemoteAddr (198.51.100.50), which is not banned, so the request is relayed -
-	// proving the spoofed X-Forwarded-For value was not the one checked or forwarded.
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, int32(1), atomic.LoadInt32(calls))
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "AppSec must not be reached with an unknown client IP")
+}
+
+func TestHandleInternalChallengeHTTP_UnparseableRealSrcFailsClosed(t *testing.T) {
+	s, calls := newInternalChallengeSpoa(t)
+
+	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req.Header.Set("X-Crowdsec-Real-Src", "not-an-ip")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "AppSec must not be reached with an unparseable client IP")
 }
 
 func TestTrustedChallengeClientIP(t *testing.T) {
@@ -646,14 +677,18 @@ func TestTrustedChallengeClientIP(t *testing.T) {
 		req.Header.Set("X-Crowdsec-Real-Src", "203.0.113.9")
 		req.RemoteAddr = "127.0.0.1:9100"
 
-		assert.Equal(t, "203.0.113.9", trustedChallengeClientIP(req))
+		got, ok := trustedChallengeClientIP(req)
+		assert.True(t, ok)
+		assert.Equal(t, "203.0.113.9", got)
 	})
 
-	t.Run("falls back to RemoteAddr when header absent", func(t *testing.T) {
+	t.Run("reports failure rather than falling back when the header is absent", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 		req.Header.Set("X-Forwarded-For", "10.0.0.1")
 		req.RemoteAddr = "192.0.2.1:54321"
 
-		assert.Equal(t, "192.0.2.1", trustedChallengeClientIP(req))
+		got, ok := trustedChallengeClientIP(req)
+		assert.False(t, ok, "RemoteAddr is HAProxy, never the visitor - it must not be used as a fallback")
+		assert.Empty(t, got)
 	})
 }

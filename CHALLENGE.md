@@ -124,8 +124,15 @@ For the initial challenged request:
 For `/crowdsec-internal/challenge/*` follow-up traffic:
 
 - HAProxy routes directly to the challenge HTTP backend and skips SPOE.
-- The bouncer derives the source IP from `X-Crowdsec-Real-Src`, falling back to
-  `RemoteAddr` only if the header is absent.
+- The bouncer takes the source IP from `X-Crowdsec-Real-Src` and nothing else. If
+  the header is missing or unparseable the request is refused with `403` — there is
+  no `RemoteAddr` fallback, because `RemoteAddr` here is HAProxy rather than the
+  visitor. Besides skipping the ban check, guessing would send the proxy's address
+  to AppSec as `X-Crowdsec-Appsec-Ip`, which AppSec uses as `ClientIP` for Coraza,
+  allowlist lookups, country rules and the `client_ip` on every event it emits —
+  silently attributing all challenge traffic to your own infrastructure. A missing
+  header means the HAProxy config above was not applied; the bouncer logs that once
+  and rejects.
 - The bouncer re-checks dataset remediation and rejects `challenge` and `ban`
   decisions before relaying to AppSec. A `captcha` decision is *not* rejected: the
   same IP can hold a captcha decision and an AppSec challenge at once, and 403ing
