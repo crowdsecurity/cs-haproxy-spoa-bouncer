@@ -920,7 +920,7 @@ func (s *Spoa) handleStoredChallengeHTTP(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Request) {
-	_, appSecPath, relay, ok := s.challengeRelayFromRequest(r)
+	appSecPath, relay, ok := s.challengeRelayFromRequest(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -1025,37 +1025,16 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-func (s *Spoa) challengeRelayFromRequest(r *http.Request) (token, appSecPath string, relay challengeRelayEntry, ok bool) {
-	if token, appSecPath, ok = parseChallengeRelayPath(r.URL.Path); ok {
-		if relay, ok = s.loadChallengeRelay(token, time.Now()); ok {
-			return token, appSecPath, relay, true
-		}
-		if isLikelyChallengeRelayToken(token) {
-			return "", "", challengeRelayEntry{}, false
-		}
-	}
-
-	token, ok = challengeRelayCookieToken(r)
+func (s *Spoa) challengeRelayFromRequest(r *http.Request) (appSecPath string, relay challengeRelayEntry, ok bool) {
+	token, ok := challengeRelayCookieToken(r)
 	if !ok {
-		return "", "", challengeRelayEntry{}, false
+		return "", challengeRelayEntry{}, false
 	}
 	relay, ok = s.loadChallengeRelay(token, time.Now())
 	if !ok {
-		return "", "", challengeRelayEntry{}, false
+		return "", challengeRelayEntry{}, false
 	}
-	return token, r.URL.Path, relay, true
-}
-
-func parseChallengeRelayPath(path string) (token, appSecPath string, ok bool) {
-	tail, found := strings.CutPrefix(path, challengeInternalPathPrefix)
-	if !found {
-		return "", "", false
-	}
-	token, rest, found := strings.Cut(tail, "/")
-	if !found || token == "" || rest == "" || strings.Contains(token, "/") {
-		return "", "", false
-	}
-	return token, challengeInternalPathPrefix + rest, true
+	return r.URL.Path, relay, true
 }
 
 func challengeRelayCookieToken(r *http.Request) (string, bool) {
@@ -1075,18 +1054,6 @@ func newChallengeRelayCookie(token string) *http.Cookie {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}
-}
-
-func isLikelyChallengeRelayToken(value string) bool {
-	if len(value) != 32 {
-		return false
-	}
-	for _, r := range value {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
-			return false
-		}
-	}
-	return true
 }
 
 func challengeRelayHost(relay challengeRelayEntry, fallback string) string {
