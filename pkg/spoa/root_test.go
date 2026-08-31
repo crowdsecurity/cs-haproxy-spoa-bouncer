@@ -69,6 +69,37 @@ func storeTestChallengeRelay(t *testing.T, s *Spoa, appSecToUse *appsec.AppSec) 
 	return token
 }
 
+func newChallengeRelayURIRecorder(t *testing.T) (*Spoa, *string) {
+	t.Helper()
+
+	var gotURI string
+	a := &appsec.AppSec{URL: "http://appsec.test/", APIKey: "test-key"}
+	require.NoError(t, a.Init(log.NewEntry(log.New())))
+	a.Client.HTTPClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotURI = req.Header.Get("X-Crowdsec-Appsec-Uri")
+		respBody, err := json.Marshal(map[string]any{
+			"action":            "challenge",
+			"http_status":       200,
+			"user_body_content": "<html>challenge</html>",
+		})
+		require.NoError(t, err)
+
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(respBody)),
+		}, nil
+	})
+
+	return &Spoa{
+		logger:             log.NewEntry(log.New()),
+		dataset:            dataset.New(),
+		geoDatabase:        &geo.GeoDatabase{},
+		globalAppSec:       a,
+		challengeResponses: newChallengeCache(0),
+	}, &gotURI
+}
+
 func TestNewChallengeHTTPServerSetsTimeouts(t *testing.T) {
 	s := newTestSpoa(t)
 
@@ -569,32 +600,8 @@ func TestHandleInternalChallengeHTTP_AllowedIPRelaysToAppSec(t *testing.T) {
 }
 
 func TestHandleInternalChallengeHTTP_RelayCookieRelaysBareInternalPath(t *testing.T) {
-	var gotURI string
-	a := &appsec.AppSec{URL: "http://appsec.test/", APIKey: "test-key"}
-	require.NoError(t, a.Init(log.NewEntry(log.New())))
-	a.Client.HTTPClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		gotURI = req.Header.Get("X-Crowdsec-Appsec-Uri")
-		respBody, err := json.Marshal(map[string]any{
-			"action":            "challenge",
-			"http_status":       200,
-			"user_body_content": "<html>challenge</html>",
-		})
-		require.NoError(t, err)
-		return &http.Response{
-			StatusCode: http.StatusForbidden,
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(bytes.NewReader(respBody)),
-		}, nil
-	})
-
-	s := &Spoa{
-		logger:             log.NewEntry(log.New()),
-		dataset:            dataset.New(),
-		geoDatabase:        &geo.GeoDatabase{},
-		globalAppSec:       a,
-		challengeResponses: newChallengeCache(0),
-	}
-	token := storeTestChallengeRelay(t, s, a)
+	s, gotURI := newChallengeRelayURIRecorder(t)
+	token := storeTestChallengeRelay(t, s, s.globalAppSec)
 
 	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"pow-worker.js?v=1", http.NoBody)
 	req.AddCookie(newChallengeRelayCookie(token))
@@ -604,7 +611,7 @@ func TestHandleInternalChallengeHTTP_RelayCookieRelaysBareInternalPath(t *testin
 	s.handleInternalChallengeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "/crowdsec-internal/challenge/pow-worker.js?v=1", gotURI)
+	assert.Equal(t, "/crowdsec-internal/challenge/pow-worker.js?v=1", *gotURI)
 }
 
 func TestHandleInternalChallengeHTTP_TokenizedInternalURLWithoutCookieReturnsNotFound(t *testing.T) {
@@ -622,32 +629,8 @@ func TestHandleInternalChallengeHTTP_TokenizedInternalURLWithoutCookieReturnsNot
 }
 
 func TestHandleInternalChallengeHTTP_RelayCookieKeepsPathUnchangedForAppSec(t *testing.T) {
-	var gotURI string
-	a := &appsec.AppSec{URL: "http://appsec.test/", APIKey: "test-key"}
-	require.NoError(t, a.Init(log.NewEntry(log.New())))
-	a.Client.HTTPClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		gotURI = req.Header.Get("X-Crowdsec-Appsec-Uri")
-		respBody, err := json.Marshal(map[string]any{
-			"action":            "challenge",
-			"http_status":       200,
-			"user_body_content": "<html>challenge</html>",
-		})
-		require.NoError(t, err)
-		return &http.Response{
-			StatusCode: http.StatusForbidden,
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(bytes.NewReader(respBody)),
-		}, nil
-	})
-
-	s := &Spoa{
-		logger:             log.NewEntry(log.New()),
-		dataset:            dataset.New(),
-		geoDatabase:        &geo.GeoDatabase{},
-		globalAppSec:       a,
-		challengeResponses: newChallengeCache(0),
-	}
-	token := storeTestChallengeRelay(t, s, a)
+	s, gotURI := newChallengeRelayURIRecorder(t)
+	token := storeTestChallengeRelay(t, s, s.globalAppSec)
 
 	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"worker.js?v=1", http.NoBody)
 	req.AddCookie(newChallengeRelayCookie(token))
@@ -657,7 +640,7 @@ func TestHandleInternalChallengeHTTP_RelayCookieKeepsPathUnchangedForAppSec(t *t
 	s.handleInternalChallengeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "/crowdsec-internal/challenge/worker.js?v=1", gotURI)
+	assert.Equal(t, "/crowdsec-internal/challenge/worker.js?v=1", *gotURI)
 }
 
 func TestHandleInternalChallengeHTTP_DoesNotMutateRelayedChallengeAssets(t *testing.T) {
