@@ -112,10 +112,15 @@ type Spoa struct {
 	// challenge URL over SPOE, then streams the body from this bouncer over
 	// normal HTTP. Bounded (see challengeCache) so a burst of issued-but-never-
 	// fetched challenges can't grow memory without bound.
-	challengeResponses *challengeCache
-	challengeRelays    map[string]challengeRelayEntry
-	challengeRelaysMu  sync.Mutex
-	challengeTokenKey  [32]byte
+	challengeResponses *challengeCache[*challengeResponseEntry]
+	// challengeRelays holds the AppSec config an already-issued challenge's
+	// follow-up asset/proof requests must be relayed to, keyed by the same token.
+	// Bounded for the same reason as challengeResponses, and separate from it
+	// because the two have different lifecycles: a response is fetched once and
+	// dropped, while a relay must survive every asset fetch and the proof
+	// submission that follow (hence challengeRelayTTL, ten times longer).
+	challengeRelays   *challengeCache[challengeRelayEntry]
+	challengeTokenKey [32]byte
 }
 
 type challengeResponseEntry struct {
@@ -174,7 +179,7 @@ func New(config *SpoaConfig) (*Spoa, error) {
 		geoDatabase:        config.GeoDatabase,
 		globalAppSec:       config.GlobalAppSec,
 		challengeResponses: newChallengeCache(config.ChallengeCacheMaxEntries),
-		challengeRelays:    make(map[string]challengeRelayEntry),
+		challengeRelays:    newChallengeRelayCache(config.ChallengeCacheMaxEntries),
 	}
 	if _, err := rand.Read(s.challengeTokenKey[:]); err != nil {
 		return nil, fmt.Errorf("failed to initialize challenge token key: %w", err)
@@ -353,47 +358,18 @@ func (s *Spoa) sweepExpiredChallengeResponses(now time.Time) {
 	})
 }
 
-func (s *Spoa) storeChallengeRelay(token string, entry challengeRelayEntry) {
-	s.challengeRelaysMu.Lock()
-	defer s.challengeRelaysMu.Unlock()
-
-	if s.challengeRelays == nil {
-		s.challengeRelays = make(map[string]challengeRelayEntry)
-	}
-	s.challengeRelays[token] = entry
-}
-
-func (s *Spoa) loadChallengeRelay(token string, now time.Time) (challengeRelayEntry, bool) {
-	s.challengeRelaysMu.Lock()
-	defer s.challengeRelaysMu.Unlock()
-
-	entry, ok := s.challengeRelays[token]
-	if !ok {
-		return challengeRelayEntry{}, false
-	}
-	if now.After(entry.expiresAt) {
-		delete(s.challengeRelays, token)
-		return challengeRelayEntry{}, false
-	}
-	return entry, true
-}
-
-func (s *Spoa) deleteChallengeRelay(token string) {
-	s.challengeRelaysMu.Lock()
-	defer s.challengeRelaysMu.Unlock()
-
-	delete(s.challengeRelays, token)
-}
-
+// sweepExpiredChallengeRelays deletes every cached challenge relay whose
+// expiresAt is before now. Needed for the same reason as
+// sweepExpiredChallengeResponses: gcache only drops an expired entry when its
+// key is next touched, and a challenge that is issued but never solved is never
+// touched again.
 func (s *Spoa) sweepExpiredChallengeRelays(now time.Time) {
-	s.challengeRelaysMu.Lock()
-	defer s.challengeRelaysMu.Unlock()
-
-	for token, entry := range s.challengeRelays {
+	s.challengeRelays.Range(func(key string, entry challengeRelayEntry) bool {
 		if now.After(entry.expiresAt) {
-			delete(s.challengeRelays, token)
+			s.challengeRelays.Delete(key)
 		}
-	}
+		return true
+	})
 }
 
 func (s *Spoa) Shutdown(ctx context.Context) error {
@@ -852,7 +828,7 @@ func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challenge
 		cookies:   append([]string(nil), challengeData.Cookies...),
 		expiresAt: time.Now().Add(challengeResponseTTL),
 	})
-	s.storeChallengeRelay(token, challengeRelayEntry{
+	s.challengeRelays.Store(token, challengeRelayEntry{
 		appSec:    appSecToUse,
 		timeout:   timeout,
 		host:      challengeHost,
@@ -862,7 +838,7 @@ func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challenge
 	err := writer.SetString(encoding.VarScopeTransaction, "challenge_url", challengePathPrefix+token)
 	if err != nil {
 		s.challengeResponses.Delete(token)
-		s.deleteChallengeRelay(token)
+		s.challengeRelays.Delete(token)
 		return false
 	}
 	return true
@@ -1030,8 +1006,8 @@ func (s *Spoa) challengeRelayFromRequest(r *http.Request) (appSecPath string, re
 	if !ok {
 		return "", challengeRelayEntry{}, false
 	}
-	relay, ok = s.loadChallengeRelay(token, time.Now())
-	if !ok {
+	relay, ok = s.challengeRelays.Load(token)
+	if !ok || time.Now().After(relay.expiresAt) {
 		return "", challengeRelayEntry{}, false
 	}
 	return r.URL.Path, relay, true

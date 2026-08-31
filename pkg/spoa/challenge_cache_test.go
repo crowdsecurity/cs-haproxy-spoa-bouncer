@@ -1,6 +1,7 @@
 package spoa
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -180,4 +181,37 @@ func TestChallengeCache_RangeStopsWhenCallbackReturnsFalse(t *testing.T) {
 	})
 
 	assert.Equal(t, 1, visited, "Range must stop as soon as f returns false")
+}
+
+func TestNewChallengeRelayCache_ScalesTheConfiguredCap(t *testing.T) {
+	// Relay entries live challengeRelayCacheRatio times longer than response
+	// entries, so they get proportionally more slots from the same operator knob
+	// - otherwise the relay cache would start evicting live challenges at a
+	// fraction of the rate the response cache tolerates.
+	assert.Equal(t, 10*challengeRelayCacheRatio, newChallengeRelayCache(10).maxItems)
+	assert.Equal(t, defaultChallengeCacheMaxEntries*challengeRelayCacheRatio, newChallengeRelayCache(0).maxItems)
+	assert.Positive(t, newChallengeRelayCache(math.MaxInt).maxItems, "scaling a huge cap must not overflow into a negative size")
+}
+
+func TestChallengeRelayCache_IsBounded(t *testing.T) {
+	c := newBoundedChallengeCache[challengeRelayEntry](2, challengeRelayTTL)
+
+	c.Store("first", challengeRelayEntry{host: "1"})
+	c.Store("second", challengeRelayEntry{host: "2"})
+
+	_, ok := c.Load("first")
+	require.True(t, ok)
+
+	// The point of the cap: a flood of issued-but-never-solved challenges evicts
+	// the entries nobody came back for, rather than growing without bound. A
+	// browser working through its challenge keeps touching its own entry, so
+	// "first" survives and the untouched "second" goes.
+	c.Store("third", challengeRelayEntry{host: "3"})
+
+	_, ok = c.Load("second")
+	assert.False(t, ok, "least-recently used relay should have been evicted to make room")
+
+	got, ok := c.Load("first")
+	require.True(t, ok, "a relay that is actively being used must not be evicted")
+	assert.Equal(t, "1", got.host)
 }

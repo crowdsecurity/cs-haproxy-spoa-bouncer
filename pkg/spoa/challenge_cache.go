@@ -2,7 +2,9 @@ package spoa
 
 import (
 	"errors"
+	"math"
 	"sync"
+	"time"
 
 	"github.com/bluele/gcache"
 )
@@ -29,77 +31,118 @@ import (
 // this default.
 const defaultChallengeCacheMaxEntries = 1000
 
+// challengeRelayCacheRatio scales the configured cache size into the relay
+// cache's own cap, so operators keep a single knob. Relay entries live this many
+// times longer than response entries, so they need proportionally more slots to
+// absorb the same rate of newly issued challenges before evicting. The extra
+// slots are cheap: a challengeRelayEntry is a couple hundred bytes, against up
+// to 1MiB for a challengeResponseEntry.
+const challengeRelayCacheRatio = int(challengeRelayTTL / challengeResponseTTL)
+
 // challengeCache is a small adapter around the cache implementation already
 // used by CrowdSec. It keeps the challenge-specific single-use LoadAndDelete
 // semantics while delegating size/TTL eviction to gcache.
-type challengeCache struct {
+//
+// Both challenge-side stores use it. LRU is the right policy for each: under a
+// flood the entries worth evicting are exactly the ones nobody ever fetches,
+// while a browser actually working through a challenge keeps touching its own
+// entries and so stays at the hot end of the list.
+type challengeCache[T any] struct {
 	mu       sync.Mutex
 	cache    gcache.Cache
 	maxItems int
+	ttl      time.Duration
 }
 
-// newChallengeCache creates a challengeCache bounded to maxItems entries.
-// maxItems <= 0 falls back to defaultChallengeCacheMaxEntries.
-func newChallengeCache(maxItems int) *challengeCache {
+// newBoundedChallengeCache creates a challengeCache holding at most maxItems
+// entries, each expiring after ttl. maxItems <= 0 falls back to
+// defaultChallengeCacheMaxEntries.
+func newBoundedChallengeCache[T any](maxItems int, ttl time.Duration) *challengeCache[T] {
 	if maxItems <= 0 {
 		maxItems = defaultChallengeCacheMaxEntries
 	}
 
-	return &challengeCache{
-		cache:    gcache.New(maxItems).LRU().Expiration(challengeResponseTTL).Build(),
+	return &challengeCache[T]{
+		cache:    gcache.New(maxItems).LRU().Expiration(ttl).Build(),
 		maxItems: maxItems,
+		ttl:      ttl,
 	}
+}
+
+// newChallengeCache creates the cache holding pending challenge responses.
+// maxItems <= 0 falls back to defaultChallengeCacheMaxEntries.
+func newChallengeCache(maxItems int) *challengeCache[*challengeResponseEntry] {
+	return newBoundedChallengeCache[*challengeResponseEntry](maxItems, challengeResponseTTL)
+}
+
+// newChallengeRelayCache creates the cache holding challenge relay entries,
+// bounded to challengeRelayCacheRatio times the configured response cap so a
+// flood of issued-but-never-solved challenges cannot grow memory without bound.
+// maxItems <= 0 falls back to defaultChallengeCacheMaxEntries before scaling.
+func newChallengeRelayCache(maxItems int) *challengeCache[challengeRelayEntry] {
+	if maxItems <= 0 {
+		maxItems = defaultChallengeCacheMaxEntries
+	}
+	if maxItems > math.MaxInt/challengeRelayCacheRatio {
+		maxItems = math.MaxInt / challengeRelayCacheRatio
+	}
+
+	return newBoundedChallengeCache[challengeRelayEntry](maxItems*challengeRelayCacheRatio, challengeRelayTTL)
 }
 
 // Store inserts or replaces the entry for key. If adding a genuinely new key
 // would exceed maxItems, gcache evicts the least-recently-used entry.
-func (c *challengeCache) Store(key string, value *challengeResponseEntry) {
+func (c *challengeCache[T]) Store(key string, value T) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	_ = c.cache.SetWithExpire(key, value, challengeResponseTTL)
+	_ = c.cache.SetWithExpire(key, value, c.ttl)
 }
 
 // Load returns the entry for key, if present, without removing it.
-func (c *challengeCache) Load(key string) (*challengeResponseEntry, bool) {
+func (c *challengeCache[T]) Load(key string) (T, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	value, err := c.cache.GetIFPresent(key)
-	if errors.Is(err, gcache.KeyNotFoundError) {
-		return nil, false
-	}
-	if err != nil {
-		return nil, false
-	}
-
-	entry, ok := value.(*challengeResponseEntry)
-	return entry, ok
+	return c.get(key)
 }
 
 // LoadAndDelete returns the entry for key, if present, and removes it -
 // giving the single-fetch-then-gone semantics the challenge HTTP backend
 // relies on.
-func (c *challengeCache) LoadAndDelete(key string) (*challengeResponseEntry, bool) {
+func (c *challengeCache[T]) LoadAndDelete(key string) (T, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	value, err := c.cache.GetIFPresent(key)
-	if errors.Is(err, gcache.KeyNotFoundError) {
-		return nil, false
+	entry, ok := c.get(key)
+	if !ok {
+		return entry, false
 	}
-	if err != nil {
-		return nil, false
-	}
-
 	c.cache.Remove(key)
 
-	entry, ok := value.(*challengeResponseEntry)
+	return entry, true
+}
+
+// get performs the lookup shared by Load and LoadAndDelete. Callers must hold
+// the lock.
+func (c *challengeCache[T]) get(key string) (T, bool) {
+	var zero T
+
+	value, err := c.cache.GetIFPresent(key)
+	if errors.Is(err, gcache.KeyNotFoundError) {
+		return zero, false
+	}
+	if err != nil {
+		return zero, false
+	}
+
+	entry, ok := value.(T)
+
 	return entry, ok
 }
 
 // Delete removes the entry for key, if present.
-func (c *challengeCache) Delete(key string) {
+func (c *challengeCache[T]) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -117,16 +160,16 @@ func (c *challengeCache) Delete(key string) {
 // everything. Sweeping is therefore the only way to release the memory early, and
 // a sweep that cannot see expired entries has nothing to release. Callers that
 // want live entries only must use Load/LoadAndDelete, which do honor the TTL.
-func (c *challengeCache) Range(f func(key string, value *challengeResponseEntry) bool) {
+func (c *challengeCache[T]) Range(f func(key string, value T) bool) {
 	c.mu.Lock()
 	items := c.cache.GetALL(false)
-	snapshot := make(map[string]*challengeResponseEntry, len(items))
+	snapshot := make(map[string]T, len(items))
 	for key, value := range items {
 		keyString, ok := key.(string)
 		if !ok {
 			continue
 		}
-		entry, ok := value.(*challengeResponseEntry)
+		entry, ok := value.(T)
 		if !ok {
 			continue
 		}

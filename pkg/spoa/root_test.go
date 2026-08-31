@@ -34,6 +34,7 @@ func newTestSpoa(t *testing.T) *Spoa {
 		ChallengeHTTPListenAddr: dummyListener{},
 		challengeTokenKey:       [32]byte{1, 2, 3},
 		challengeResponses:      newChallengeCache(0),
+		challengeRelays:         newChallengeRelayCache(0),
 	}
 }
 
@@ -61,7 +62,7 @@ func storeTestChallengeRelay(t *testing.T, s *Spoa, appSecToUse *appsec.AppSec) 
 	t.Helper()
 
 	token := "relay-token"
-	s.storeChallengeRelay(token, challengeRelayEntry{
+	s.challengeRelays.Store(token, challengeRelayEntry{
 		appSec:    appSecToUse,
 		timeout:   time.Second,
 		expiresAt: time.Now().Add(time.Minute),
@@ -97,6 +98,7 @@ func newChallengeRelayURIRecorder(t *testing.T) (*Spoa, *string) {
 		geoDatabase:        &geo.GeoDatabase{},
 		globalAppSec:       a,
 		challengeResponses: newChallengeCache(0),
+		challengeRelays:    newChallengeRelayCache(0),
 	}, &gotURI
 }
 
@@ -230,7 +232,7 @@ func newCountingChallengeAppSec(t *testing.T, body string, calls *int32) appsec.
 }
 
 func TestValidateWithAppSec_ChallengeWithoutHTTPBackend_FallsBackToBan(t *testing.T) {
-	s := &Spoa{logger: log.NewEntry(log.New()), challengeResponses: newChallengeCache(0)}
+	s := &Spoa{logger: log.NewEntry(log.New()), challengeResponses: newChallengeCache(0), challengeRelays: newChallengeRelayCache(0)}
 	appSec := newChallengeAppSec(t, strings.Repeat("x", 150000))
 
 	msgData := &HTTPMessageData{}
@@ -312,7 +314,7 @@ func TestValidateWithAppSec_ChallengeStoresRelayWithoutMutatingInternalURLs(t *t
 	entry := loadChallengeEntry(t, s, token)
 	assert.Equal(t, body, entry.body)
 
-	relay, ok := s.loadChallengeRelay(token, time.Now())
+	relay, ok := s.challengeRelays.Load(token)
 	require.True(t, ok)
 	assert.Same(t, appSec, relay.appSec)
 	assert.Equal(t, "protected.example.com", relay.host)
@@ -426,15 +428,15 @@ func TestSweepExpiredChallengeRelays_RemovesOnlyExpiredEntries(t *testing.T) {
 	appSec := newChallengeAppSec(t, "<html>challenge</html>")
 	now := time.Now()
 
-	s.storeChallengeRelay("expired", challengeRelayEntry{appSec: appSec, timeout: time.Second, expiresAt: now.Add(-time.Second)})
-	s.storeChallengeRelay("fresh", challengeRelayEntry{appSec: appSec, timeout: time.Second, expiresAt: now.Add(time.Minute)})
+	s.challengeRelays.Store("expired", challengeRelayEntry{appSec: appSec, timeout: time.Second, expiresAt: now.Add(-time.Second)})
+	s.challengeRelays.Store("fresh", challengeRelayEntry{appSec: appSec, timeout: time.Second, expiresAt: now.Add(time.Minute)})
 
 	s.sweepExpiredChallengeRelays(now)
 
-	_, ok := s.loadChallengeRelay("expired", now)
+	_, ok := s.challengeRelays.Load("expired")
 	assert.False(t, ok)
 
-	relay, ok := s.loadChallengeRelay("fresh", now)
+	relay, ok := s.challengeRelays.Load("fresh")
 	require.True(t, ok)
 	assert.Same(t, appSec, relay.appSec)
 }
@@ -473,6 +475,7 @@ func newInternalChallengeSpoa(t *testing.T) (*Spoa, *int32) {
 		geoDatabase:        &geo.GeoDatabase{},
 		globalAppSec:       a,
 		challengeResponses: newChallengeCache(0),
+		challengeRelays:    newChallengeRelayCache(0),
 	}
 	return s, &calls
 }
@@ -671,6 +674,7 @@ func TestHandleInternalChallengeHTTP_DoesNotMutateRelayedChallengeAssets(t *test
 		geoDatabase:        &geo.GeoDatabase{},
 		globalAppSec:       a,
 		challengeResponses: newChallengeCache(0),
+		challengeRelays:    newChallengeRelayCache(0),
 	}
 	token := storeTestChallengeRelay(t, s, a)
 
@@ -714,6 +718,7 @@ func TestHandleInternalChallengeHTTP_SolvedChallengeForwardsAppSecResponse(t *te
 		geoDatabase:        &geo.GeoDatabase{},
 		globalAppSec:       a,
 		challengeResponses: newChallengeCache(0),
+		challengeRelays:    newChallengeRelayCache(0),
 	}
 	token := storeTestChallengeRelay(t, s, a)
 
@@ -749,6 +754,7 @@ func TestHandleInternalChallengeHTTP_BanFromAppSecReturnsPlainForbidden(t *testi
 		geoDatabase:        &geo.GeoDatabase{},
 		globalAppSec:       a,
 		challengeResponses: newChallengeCache(0),
+		challengeRelays:    newChallengeRelayCache(0),
 	}
 	token := storeTestChallengeRelay(t, s, a)
 
@@ -787,9 +793,10 @@ func TestHandleInternalChallengeHTTP_RelayTokenPinsAppSecConfig(t *testing.T) {
 		hostManager:        hostManager,
 		globalAppSec:       &globalAppSec,
 		challengeResponses: newChallengeCache(0),
+		challengeRelays:    newChallengeRelayCache(0),
 	}
 	token := "relay-token"
-	s.storeChallengeRelay(token, challengeRelayEntry{
+	s.challengeRelays.Store(token, challengeRelayEntry{
 		appSec:    &matchedHost.AppSec,
 		timeout:   time.Second,
 		host:      matchedHost.Host,
