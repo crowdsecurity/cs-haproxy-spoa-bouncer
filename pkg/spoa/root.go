@@ -35,6 +35,7 @@ import (
 const (
 	challengePathPrefix         = "/crowdsec-challenge/"
 	challengeInternalPathPrefix = "/crowdsec-internal/challenge/"
+	challengeRelayCookieName    = "__crowdsec_challenge_relay"
 
 	// challengeResponseTTL bounds how long a challenge page is held in memory
 	// waiting for HAProxy to route the challenged request to the HTTP challenge
@@ -108,7 +109,7 @@ type Spoa struct {
 
 	// challengeResponses holds full AppSec challenge responses keyed by an
 	// HMAC-derived token from HAProxy's unique-id. HAProxy receives only the
-	// tokenized URL over SPOE, then streams the body from this bouncer over
+	// challenge URL over SPOE, then streams the body from this bouncer over
 	// normal HTTP. Bounded (see challengeCache) so a burst of issued-but-never-
 	// fetched challenges can't grow memory without bound.
 	challengeResponses *challengeCache
@@ -843,7 +844,6 @@ func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challenge
 	}
 
 	token := s.challengeTokenFromRequestID(requestID)
-	body = rewriteChallengeInternalURLs(body, token)
 
 	s.challengeResponses.Store(token, &challengeResponseEntry{
 		status:    status,
@@ -866,14 +866,6 @@ func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challenge
 		return false
 	}
 	return true
-}
-
-func rewriteChallengeInternalURLs(body, token string) string {
-	scopedPrefix := challengeInternalPathPrefix + token + "/"
-	if strings.Contains(body, scopedPrefix) {
-		return body
-	}
-	return strings.ReplaceAll(body, challengeInternalPathPrefix, scopedPrefix)
 }
 
 func (s *Spoa) challengeTokenFromRequestID(requestID string) string {
@@ -911,6 +903,7 @@ func (s *Spoa) handleStoredChallengeHTTP(w http.ResponseWriter, r *http.Request)
 	for _, cookie := range entry.cookies {
 		w.Header().Add("Set-Cookie", cookie)
 	}
+	http.SetCookie(w, newChallengeRelayCookie(token))
 	if w.Header().Get("Content-Type") == "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	}
@@ -927,12 +920,7 @@ func (s *Spoa) handleStoredChallengeHTTP(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Request) {
-	token, appSecPath, ok := parseChallengeRelayPath(r.URL.Path)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	relay, ok := s.loadChallengeRelay(token, time.Now())
+	_, appSecPath, relay, ok := s.challengeRelayFromRequest(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -1037,6 +1025,27 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+func (s *Spoa) challengeRelayFromRequest(r *http.Request) (token, appSecPath string, relay challengeRelayEntry, ok bool) {
+	if token, appSecPath, ok = parseChallengeRelayPath(r.URL.Path); ok {
+		if relay, ok = s.loadChallengeRelay(token, time.Now()); ok {
+			return token, appSecPath, relay, true
+		}
+		if isLikelyChallengeRelayToken(token) {
+			return "", "", challengeRelayEntry{}, false
+		}
+	}
+
+	token, ok = challengeRelayCookieToken(r)
+	if !ok {
+		return "", "", challengeRelayEntry{}, false
+	}
+	relay, ok = s.loadChallengeRelay(token, time.Now())
+	if !ok {
+		return "", "", challengeRelayEntry{}, false
+	}
+	return token, r.URL.Path, relay, true
+}
+
 func parseChallengeRelayPath(path string) (token, appSecPath string, ok bool) {
 	tail, found := strings.CutPrefix(path, challengeInternalPathPrefix)
 	if !found {
@@ -1047,6 +1056,37 @@ func parseChallengeRelayPath(path string) (token, appSecPath string, ok bool) {
 		return "", "", false
 	}
 	return token, challengeInternalPathPrefix + rest, true
+}
+
+func challengeRelayCookieToken(r *http.Request) (string, bool) {
+	cookie, err := r.Cookie(challengeRelayCookieName)
+	if err != nil || cookie.Value == "" || strings.Contains(cookie.Value, "/") {
+		return "", false
+	}
+	return cookie.Value, true
+}
+
+func newChallengeRelayCookie(token string) *http.Cookie {
+	return &http.Cookie{
+		Name:     challengeRelayCookieName,
+		Value:    token,
+		Path:     challengeInternalPathPrefix,
+		MaxAge:   int(challengeRelayTTL.Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+func isLikelyChallengeRelayToken(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	for _, r := range value {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 func challengeRelayHost(relay challengeRelayEntry, fallback string) string {

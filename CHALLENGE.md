@@ -5,7 +5,10 @@ and the SPOA bouncer.
 
 Challenges are served on the original requested URL. HAProxy rewrites the path
 to an internal tokenized URL returned by the bouncer, then streams the challenge
-response from the bouncer's HTTP challenge backend.
+response from the bouncer's HTTP challenge backend. Follow-up challenge asset
+and proof requests keep AppSec's original `/crowdsec-internal/challenge/*`
+paths; the bouncer maps them to the issued challenge through a path-scoped,
+HttpOnly relay cookie.
 
 ## Components
 
@@ -49,11 +52,11 @@ sequenceDiagram
     SPOA-->>HAProxy: remediation=challenge + challenge_url
     HAProxy->>HTTP: Rewrite path to challenge_url and route to challenge backend
     HTTP->>Cache: LoadAndDelete(token)
-    HTTP-->>Browser: Challenge response
+    HTTP-->>Browser: Challenge response + relay cookie
 
     Browser->>HAProxy: Challenge asset or proof submission
-    HAProxy->>HTTP: Route /crowdsec-internal/challenge/<token>/* to challenge backend
-    HTTP->>Cache: Validate relay token and strip it from path
+    HAProxy->>HTTP: Route /crowdsec-internal/challenge/* to challenge backend
+    HTTP->>Cache: Validate relay cookie
     HTTP->>HTTP: Re-check dataset remediation for source IP
     HTTP->>AppSec: Relay request using AppSec config stored with token
 
@@ -121,22 +124,21 @@ For the initial challenged request:
 
 - AppSec returns HTTP `403` with JSON challenge data.
 - The bouncer stores the full challenge response in an in-memory bounded cache.
-- The bouncer rewrites challenge-internal URLs in the response body so
-  `/crowdsec-internal/challenge/*` becomes
-  `/crowdsec-internal/challenge/<token>/*`.
 - The bouncer stores a short-lived relay session under the same token.
 - The bouncer returns only `remediation=challenge` and `challenge_url` through SPOE.
 - HAProxy routes the same client request to `/crowdsec-challenge/<token>`.
-- The challenge HTTP backend serves the cached response once and deletes it.
+- The challenge HTTP backend serves the cached response once, sets
+  `__crowdsec_challenge_relay` as an HttpOnly cookie scoped to
+  `/crowdsec-internal/challenge/`, and deletes the cached response.
 
-For `/crowdsec-internal/challenge/<token>/*` follow-up traffic:
+For `/crowdsec-internal/challenge/*` follow-up traffic:
 
 - HAProxy routes directly to the challenge HTTP backend and skips SPOE.
-- The bouncer requires a live relay token issued with an AppSec challenge. A
-  missing, malformed, unknown, or expired token returns `404` without calling
-  AppSec.
-- The bouncer strips `<token>` before relaying, so AppSec still receives its
-  expected `/crowdsec-internal/challenge/*` path.
+- The bouncer requires a live relay token in the
+  `__crowdsec_challenge_relay` cookie issued with an AppSec challenge. A missing,
+  malformed, unknown, or expired token returns `404` without calling AppSec.
+- The bouncer relays the browser's path unchanged, so AppSec receives its
+  expected `/crowdsec-internal/challenge/*` URL.
 - The bouncer takes the source IP from `X-Crowdsec-Real-Src` and nothing else. If
   the header is missing or unparseable the request is refused with `403` — there is
   no `RemoteAddr` fallback, because `RemoteAddr` here is HAProxy rather than the
