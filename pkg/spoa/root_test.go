@@ -481,11 +481,29 @@ func TestChallengeRelayFromRequest_DeletesExpiredRelay(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
 	req.AddCookie(newChallengeRelayCookie(token, false))
 
-	_, _, ok := s.challengeRelayFromRequest(req)
+	_, _, _, _, ok := s.challengeRelayFromRequest(req)
 	assert.False(t, ok)
 
 	_, stillPresent := s.challengeRelays.Load(token)
 	assert.False(t, stillPresent)
+}
+
+func TestChallengeRelayFromRequest_PreservesQueryString(t *testing.T) {
+	s := newTestSpoa(t)
+	token := "relay-with-query"
+	s.challengeRelays.Store(token, challengeRelayEntry{
+		timeout:   time.Second,
+		expiresAt: time.Now().Add(time.Minute),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"worker.js?v=1&lang=en", http.NoBody)
+	req.AddCookie(newChallengeRelayCookie(token, false))
+
+	path, rawPath, rawQuery, _, ok := s.challengeRelayFromRequest(req)
+	require.True(t, ok)
+	assert.Equal(t, challengeInternalPathPrefix+"worker.js", path)
+	assert.Equal(t, "", rawPath)
+	assert.Equal(t, "v=1&lang=en", rawQuery)
 }
 
 // newInternalChallengeSpoa builds a Spoa wired for handleInternalChallengeHTTP tests,

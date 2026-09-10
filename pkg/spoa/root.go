@@ -883,7 +883,7 @@ func (s *Spoa) handleStoredChallengeHTTP(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Request) {
-	appSecPath, relay, ok := s.challengeRelayFromRequest(r)
+	appSecPath, appSecRawPath, appSecRawQuery, relay, ok := s.challengeRelayFromRequest(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -895,7 +895,8 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	r.URL.Path = appSecPath
-	r.URL.RawPath = ""
+	r.URL.RawPath = appSecRawPath
+	r.URL.RawQuery = appSecRawQuery
 
 	// HAProxy routes these requests here directly, so they skip the SPOE ban check.
 	// Re-run it here, but let captcha'd IPs through: they may be solving a challenge.
@@ -970,20 +971,20 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-func (s *Spoa) challengeRelayFromRequest(r *http.Request) (appSecPath string, relay challengeRelayEntry, ok bool) {
+func (s *Spoa) challengeRelayFromRequest(r *http.Request) (appSecPath string, appSecRawPath string, appSecRawQuery string, relay challengeRelayEntry, ok bool) {
 	token, ok := challengeRelayCookieToken(r)
 	if !ok {
-		return "", challengeRelayEntry{}, false
+		return "", "", "", challengeRelayEntry{}, false
 	}
 	relay, ok = s.challengeRelays.Load(token)
 	if !ok {
-		return "", challengeRelayEntry{}, false
+		return "", "", "", challengeRelayEntry{}, false
 	}
 	if time.Now().After(relay.expiresAt) {
 		s.challengeRelays.Delete(token)
-		return "", challengeRelayEntry{}, false
+		return "", "", "", challengeRelayEntry{}, false
 	}
-	return r.URL.Path, relay, true
+	return r.URL.Path, r.URL.RawPath, r.URL.RawQuery, relay, true
 }
 
 func challengeRelayCookieToken(r *http.Request) (string, bool) {
