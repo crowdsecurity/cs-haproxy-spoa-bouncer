@@ -29,17 +29,21 @@ type PprofConfig struct {
 }
 
 type BouncerConfig struct {
-	Logging          cslogging.LoggingConfig `yaml:",inline"`
-	Hosts            []*host.Host            `yaml:"hosts"`
-	HostsDir         string                  `yaml:"hosts_dir"`
-	Geo              geo.GeoDatabase         `yaml:",inline"`
-	ListenTCP        string                  `yaml:"listen_tcp"`
-	ListenUnix       string                  `yaml:"listen_unix"`
-	PrometheusConfig PrometheusConfig        `yaml:"prometheus"`
-	PprofConfig      PprofConfig             `yaml:"pprof"`
-	APIKey           string                  `yaml:"api_key"`              // LAPI API key (also used for AppSec)
-	AppSecURL        string                  `yaml:"appsec_url,omitempty"` // Global AppSec URL
-	AppSecTimeout    time.Duration           `yaml:"appsec_timeout,omitempty"`
+	Logging       cslogging.LoggingConfig `yaml:",inline"`
+	Hosts         []*host.Host            `yaml:"hosts"`
+	HostsDir      string                  `yaml:"hosts_dir"`
+	Geo           geo.GeoDatabase         `yaml:",inline"`
+	ListenTCP     string                  `yaml:"listen_tcp"`
+	ListenUnix    string                  `yaml:"listen_unix"`
+	ChallengeHTTP string                  `yaml:"challenge_http_listen,omitempty"`
+	// ChallengeCacheMaxEntries caps how many pending AppSec challenge responses are held
+	// in memory. Past the cap, the least recently used entry is evicted. Defaults to 1000.
+	ChallengeCacheMaxEntries int              `yaml:"challenge_cache_max_entries,omitempty"`
+	PrometheusConfig         PrometheusConfig `yaml:"prometheus"`
+	PprofConfig              PprofConfig      `yaml:"pprof"`
+	APIKey                   string           `yaml:"api_key"`              // LAPI API key (also used for AppSec)
+	AppSecURL                string           `yaml:"appsec_url,omitempty"` // Global AppSec URL
+	AppSecTimeout            time.Duration    `yaml:"appsec_timeout,omitempty"`
 }
 
 // MergedConfig() returns the byte content of the patched configuration file (with .yaml.local).

@@ -18,7 +18,7 @@ These diagrams focus on what you configure and observe in HAProxy: when SPOE mes
 - **SPOE message**: a request from HAProxy to the SPOA bouncer (for example `crowdsec-tcp` or `crowdsec-http-body`).
 - **SPOE group**: what HAProxy sends from the frontend via `http-request send-spoe-group ...`; a group can contain one or more SPOE messages.
 - **Remediation**: the decision HAProxy enforces (`allow`, `captcha`, `ban`).
-- **Transaction variables**: values the bouncer sets on the HAProxy transaction (for example `txn.crowdsec.remediation`) for ACLs, headers, Lua templates, redirects, and cookie management.
+- **Transaction variables**: values the bouncer sets on the HAProxy transaction (for example `txn.crowdsec.remediation`) for ACLs, headers, HAProxy templates, redirects, and cookie management.
 
 ### 1) Background: decisions sync (continuous)
 
@@ -82,9 +82,9 @@ sequenceDiagram
     SPOA-->>HAProxy: Set txn vars (remediation + metadata + captcha vars)
 
     alt remediation = ban
-        HAProxy-->>Client: 403 (rendered by Lua)
+        HAProxy-->>Client: 403 (rendered by HAProxy lf-file)
     else remediation = captcha
-        HAProxy-->>Client: 200 (captcha page rendered by Lua)
+        HAProxy-->>Client: 200 (captcha page rendered by HAProxy lf-file)
     else remediation = allow
         HAProxy->>Backend: Forward request
         Backend-->>Client: Response
@@ -105,7 +105,7 @@ sequenceDiagram
     Client->>HAProxy: HTTP request
     HAProxy->>SPOA: SPOE group crowdsec-http-no-body (GET)
     SPOA-->>HAProxy: txn vars (remediation=captcha, captcha params, captcha cookie pending)
-    HAProxy-->>Client: 200 captcha page (Lua)
+    HAProxy-->>Client: 200 captcha page (HAProxy lf-file)
 
     Note over Client,HAProxy: User solves captcha and submits the form
     Client->>HAProxy: POST captcha submission (form-encoded)
@@ -124,7 +124,7 @@ sequenceDiagram
         Backend-->>Client: Response
     else captcha invalid/missing
         SPOA-->>HAProxy: remediation=captcha (still pending)
-        HAProxy-->>Client: 200 captcha page (Lua)
+        HAProxy-->>Client: 200 captcha page (HAProxy lf-file)
     end
 ```
 
@@ -155,7 +155,7 @@ sequenceDiagram
 **Notes**
 - `crowdsec-tcp` runs first so every connection carries an initial decision, even if HTTP parsing fails later.
 - Host rules can override remediations (for example, force captcha on specific domains) and decide whether captcha cookies should be issued/cleared.
-- Captcha state is stateless and carried in a signed token cookie; HAProxy can set/clear it using transaction variables, while Lua focuses on rendering pages.
+- Captcha state is stateless and carried in a signed token cookie; HAProxy can set/clear it using transaction variables, while HAProxy renders pages with native `lf-file` templates.
 - Captcha validation requires the form body; ensure captcha POSTs are sent via the `crowdsec-http-body` SPOE group.
 - AppSec validation is optional; when enabled, HTTP requests can be forwarded to CrowdSec AppSec and the result can override the remediation.
 
@@ -203,10 +203,10 @@ sequenceDiagram
         SPOA-->>HAProxy: Set txn vars (remediation + metadata + captcha vars)
         
         alt Remediation = ban
-            HAProxy->>HAProxy: Render ban page (Lua)
+            HAProxy->>HAProxy: Render ban page with HAProxy lf-file
             HAProxy-->>Client: 403 Forbidden
         else Remediation = captcha
-            HAProxy->>HAProxy: Render captcha page (Lua)
+            HAProxy->>HAProxy: Render captcha page (HAProxy lf-file)
             HAProxy-->>Client: 200 OK
 
             Note over Client,HAProxy: Client submits captcha solution (POST)

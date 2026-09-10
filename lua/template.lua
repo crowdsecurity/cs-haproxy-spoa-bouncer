@@ -28,7 +28,7 @@ function findIfStatements(inputString, args)
             local elements = utils.split(trimLine, " ")
             local comparee = ""
             local comparer = ""
-            local agaisnt = ""
+            local against = ""
             for _, el in ipairs(elements) do
                 if el == "{{" or el == "if" or el == "}}" or el == "then" then
                     goto con
@@ -51,17 +51,17 @@ function findIfStatements(inputString, args)
                     end
                 end
                 if comparee ~= "" and comparer ~= "" then
-                    agaisnt = el
+                    against = el:match('^"(.*)"$') or el
                 end
                 ::con::
             end
             if comparer == "==" then
-                if comparee ~= agaisnt then
+                if comparee ~= against then
                     toAdd = false
                 end
             end
             if comparer == "!=" then
-                if comparee == agaisnt then
+                if comparee == against then
                     toAdd = false
                 end
             end

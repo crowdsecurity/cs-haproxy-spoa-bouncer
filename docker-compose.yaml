@@ -7,10 +7,16 @@ services:
       dockerfile: Dockerfile
     depends_on:
       - crowdsec
+    environment:
+      # haproxy and spoa are separate containers here, so the challenge HTTP
+      # backend must bind all interfaces (not 127.0.0.1) to be reachable from
+      # haproxy's "server s3 spoa:9100" over the crowdsec bridge network.
+      - CHALLENGE_HTTP_LISTEN=0.0.0.0:9100
     volumes:
       - sockets:/run/
       - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
-      - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
+      # Uncomment the line below when using haproxy-lua.cfg (Lua rendering mode):
+      # - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
       - geodb:/var/lib/crowdsec/data/
       - ./config/crowdsec-spoa-bouncer.yaml.local:/etc/crowdsec/bouncers/crowdsec-spoa-bouncer.yaml.local
     networks:
@@ -38,7 +44,10 @@ services:
       - ./config/crowdsec.cfg:/etc/haproxy/crowdsec.cfg
       - sockets:/run/
       - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
-      - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
+      # Uncomment the two lines below when using haproxy-lua.cfg (Lua rendering mode);
+      # also uncomment the matching lua: volume in the spoa service and the volumes section.
+      # - lua:/usr/lib/crowdsec-haproxy-spoa-bouncer/lua/
+      # - ./config/haproxy-lua.cfg:/usr/local/etc/haproxy/haproxy.cfg
     ports:
       - "9090:9090"
     depends_on:
@@ -63,14 +72,16 @@ services:
       - crowdsec
 
 volumes:
-  lua:
-    driver: local
   sockets:
     driver: local
   templates:
     driver: local
   geodb:
     driver: local
+  # Uncomment when using haproxy-lua.cfg; the spoa service populates this volume with
+  # Lua scripts at /usr/lib/crowdsec-haproxy-spoa-bouncer/lua/ and haproxy mounts it.
+  # lua:
+  #   driver: local
 
 networks:
   crowdsec:

@@ -46,8 +46,8 @@ func Execute() error {
 
 	// Handle version flags
 	if *bouncerVersion {
-		fmt.Fprint(os.Stdout, version.FullString())
-		return nil
+		_, err := fmt.Fprint(os.Stdout, version.FullString())
+		return err
 	}
 
 	if configPath == nil || *configPath == "" {
@@ -60,8 +60,8 @@ func Execute() error {
 	}
 
 	if *showConfig {
-		fmt.Println(string(configMerged))
-		return nil
+		_, err := fmt.Fprintln(os.Stdout, string(configMerged))
+		return err
 	}
 
 	configExpanded := csstring.StrictExpand(string(configMerged), os.LookupEnv)
@@ -261,13 +261,15 @@ func Execute() error {
 
 	// Create single SPOA directly with minimal configuration
 	spoaConfig := &spoa.SpoaConfig{
-		TcpAddr:      config.ListenTCP,
-		UnixAddr:     config.ListenUnix,
-		Dataset:      dataSet,
-		HostManager:  HostManager,
-		GeoDatabase:  &config.Geo,
-		GlobalAppSec: globalAppSec,
-		Logger:       spoaLogger,
+		TcpAddr:                  config.ListenTCP,
+		UnixAddr:                 config.ListenUnix,
+		ChallengeHTTPAddr:        config.ChallengeHTTP,
+		ChallengeCacheMaxEntries: config.ChallengeCacheMaxEntries,
+		Dataset:                  dataSet,
+		HostManager:              HostManager,
+		GeoDatabase:              &config.Geo,
+		GlobalAppSec:             globalAppSec,
+		Logger:                   spoaLogger,
 	}
 
 	singleSpoa, err := spoa.New(spoaConfig)

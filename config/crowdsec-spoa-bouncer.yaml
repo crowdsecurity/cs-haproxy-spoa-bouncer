@@ -17,8 +17,25 @@ insecure_skip_verify: false
 # Configure TCP and/or Unix socket listeners
 listen_tcp: 0.0.0.0:9000
 listen_unix: /run/crowdsec-spoa/spoa.sock
+# Use 0.0.0.0:9100 instead if HAProxy runs on a different host or container
+# than this bouncer (e.g. the split haproxy/spoa containers in docker-compose.yaml) -
+# 127.0.0.1 only works when both processes share the same network namespace.
+challenge_http_listen: 127.0.0.1:9100
+# Caps how many pending AppSec challenge responses can be held in memory at once,
+# awaiting HAProxy's fetch over the challenge HTTP backend above. Defaults to 1000
+# when unset, which comfortably covers legitimate traffic (at the 30s cache TTL,
+# that's ~33 newly issued challenges per second sustained) while still bounding
+# worst-case memory instead of letting it grow unbounded under a flood of
+# challenge-triggering requests that never complete their fetch. Once full, the
+# oldest still-pending entry is evicted to make room for a new one.
+#challenge_cache_max_entries: 1000
 #asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
 #city_database_path: /var/lib/crowdsec/data/GeoLite2-City.mmdb
+
+## Global AppSec configuration (optional)
+## Used for virtual patching and JavaScript challenge decisions.
+#appsec_url: http://127.0.0.1:7422/
+#appsec_timeout: 200ms
 
 prometheus:
   enabled: false

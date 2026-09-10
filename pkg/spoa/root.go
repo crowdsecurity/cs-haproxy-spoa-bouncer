@@ -3,8 +3,13 @@ package spoa
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -25,6 +30,23 @@ import (
 	"github.com/dropmorepackets/haproxy-go/spop"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
+)
+
+const (
+	challengePathPrefix         = "/crowdsec-challenge/"
+	challengeInternalPathPrefix = "/crowdsec-internal/challenge/"
+	challengeRelayCookieName    = "__crowdsec_challenge_relay"
+
+	// challengeResponseTTL bounds how long a challenge page is held in memory
+	// waiting for HAProxy to route the challenged request to the HTTP challenge
+	// backend. The browser-visible challenge cookie remains governed by CrowdSec.
+	challengeResponseTTL = 30 * time.Second
+
+	challengeHTTPReadHeaderTimeout = 5 * time.Second
+	challengeHTTPReadTimeout       = 10 * time.Second
+	challengeHTTPWriteTimeout      = 10 * time.Second
+	challengeHTTPIdleTimeout       = 30 * time.Second
+	challengeRelayTTL              = 5 * time.Minute
 )
 
 var (
@@ -74,24 +96,54 @@ var (
 )
 
 type Spoa struct {
-	ListenAddr   net.Listener
-	ListenSocket net.Listener
-	logger       *log.Entry
+	ListenAddr              net.Listener
+	ListenSocket            net.Listener
+	ChallengeHTTPListenAddr net.Listener
+	challengeHTTPServer     *http.Server
+	logger                  *log.Entry
 	// Direct access to shared data (no IPC needed)
 	dataset      *dataset.DataSet
 	hostManager  *host.Manager
 	geoDatabase  *geo.GeoDatabase
 	globalAppSec *appsec.AppSec // Global AppSec config (used when no host matched)
+
+	// challengeResponses holds AppSec challenge pages, keyed by a token derived from
+	// HAProxy's unique-id. HAProxy fetches the body over the challenge HTTP backend.
+	challengeResponses *challengeCache[*challengeResponseEntry]
+	// challengeRelays holds the AppSec config for an issued challenge's asset and proof
+	// requests. It lives longer than the response, which is fetched only once.
+	challengeRelays   *challengeCache[challengeRelayEntry]
+	challengeTokenKey [32]byte
+}
+
+type challengeResponseEntry struct {
+	status    int
+	body      string
+	headers   http.Header
+	cookies   []string
+	expiresAt time.Time
+}
+
+type challengeRelayEntry struct {
+	appSec    *appsec.AppSec
+	timeout   time.Duration
+	host      string
+	expiresAt time.Time
 }
 
 type SpoaConfig struct {
-	TcpAddr      string
-	UnixAddr     string
-	Dataset      *dataset.DataSet
-	HostManager  *host.Manager
-	GeoDatabase  *geo.GeoDatabase
-	GlobalAppSec *appsec.AppSec // Global AppSec config (used when no host matched)
-	Logger       *log.Entry     // Parent logger to inherit from
+	TcpAddr           string
+	UnixAddr          string
+	ChallengeHTTPAddr string
+	// ChallengeCacheMaxEntries caps how many pending AppSec challenge responses
+	// can be held in memory awaiting HAProxy's fetch (see challengeCache).
+	// <= 0 falls back to defaultChallengeCacheMaxEntries.
+	ChallengeCacheMaxEntries int
+	Dataset                  *dataset.DataSet
+	HostManager              *host.Manager
+	GeoDatabase              *geo.GeoDatabase
+	GlobalAppSec             *appsec.AppSec // Global AppSec config (used when no host matched)
+	Logger                   *log.Entry     // Parent logger to inherit from
 }
 
 func New(config *SpoaConfig) (*Spoa, error) {
@@ -114,11 +166,16 @@ func New(config *SpoaConfig) (*Spoa, error) {
 	// No worker-specific log level; inherits from parent logger
 
 	s := &Spoa{
-		logger:       workerLogger,
-		dataset:      config.Dataset,
-		hostManager:  config.HostManager,
-		geoDatabase:  config.GeoDatabase,
-		globalAppSec: config.GlobalAppSec,
+		logger:             workerLogger,
+		dataset:            config.Dataset,
+		hostManager:        config.HostManager,
+		geoDatabase:        config.GeoDatabase,
+		globalAppSec:       config.GlobalAppSec,
+		challengeResponses: newChallengeCache(config.ChallengeCacheMaxEntries),
+		challengeRelays:    newChallengeRelayCache(config.ChallengeCacheMaxEntries),
+	}
+	if _, err := rand.Read(s.challengeTokenKey[:]); err != nil {
+		return nil, fmt.Errorf("failed to initialize challenge token key: %w", err)
 	}
 
 	if config.TcpAddr != "" {
@@ -152,6 +209,14 @@ func New(config *SpoaConfig) (*Spoa, error) {
 		s.ListenSocket = addr
 	}
 
+	if config.ChallengeHTTPAddr != "" {
+		addr, err := net.Listen("tcp", config.ChallengeHTTPAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to listen on %s: %w", config.ChallengeHTTPAddr, err)
+		}
+		s.ChallengeHTTPListenAddr = addr
+	}
+
 	return s, nil
 }
 
@@ -176,7 +241,21 @@ func (s *Spoa) HandleSPOE(ctx context.Context, writer *encoding.ActionWriter, me
 }
 
 func (s *Spoa) Serve(ctx context.Context) error {
-	serverError := make(chan error, 2)
+	serverCount := 0
+	if s.ListenAddr != nil {
+		serverCount++
+	}
+	if s.ListenSocket != nil {
+		serverCount++
+	}
+	if s.ChallengeHTTPListenAddr != nil {
+		serverCount++
+	}
+	if serverCount == 0 {
+		return nil
+	}
+
+	serverError := make(chan error, serverCount)
 
 	startServer := func(listener net.Listener) {
 		agent := spop.Agent{
@@ -208,10 +287,17 @@ func (s *Spoa) Serve(ctx context.Context) error {
 		}()
 	}
 
-	// If no listeners are configured, return immediately
-	if s.ListenAddr == nil && s.ListenSocket == nil {
-		return nil
+	if s.ChallengeHTTPListenAddr != nil {
+		s.challengeHTTPServer = s.newChallengeHTTPServer()
+		s.logger.Infof("Serving challenge HTTP backend on %s", s.ChallengeHTTPListenAddr.Addr().String())
+		go func() {
+			if err := s.challengeHTTPServer.Serve(s.ChallengeHTTPListenAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				serverError <- err
+			}
+		}()
 	}
+
+	go s.cleanupChallengeResponses(ctx)
 
 	select {
 	case err := <-serverError:
@@ -221,22 +307,82 @@ func (s *Spoa) Serve(ctx context.Context) error {
 	}
 }
 
+func (s *Spoa) newChallengeHTTPServer() *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc(challengePathPrefix, s.handleStoredChallengeHTTP)
+	mux.HandleFunc(challengeInternalPathPrefix, s.handleInternalChallengeHTTP)
+
+	return &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: challengeHTTPReadHeaderTimeout,
+		ReadTimeout:       challengeHTTPReadTimeout,
+		WriteTimeout:      challengeHTTPWriteTimeout,
+		IdleTimeout:       challengeHTTPIdleTimeout,
+	}
+}
+
+// cleanupChallengeResponses periodically reclaims challenge responses that were
+// never fetched by HAProxy after the SPOE decision completed.
+func (s *Spoa) cleanupChallengeResponses(ctx context.Context) {
+	ticker := time.NewTicker(challengeResponseTTL)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			s.sweepExpiredChallengeResponses(now)
+			s.sweepExpiredChallengeRelays(now)
+		}
+	}
+}
+
+// sweepExpiredChallengeResponses deletes cached challenge responses that
+// expired.
+func (s *Spoa) sweepExpiredChallengeResponses(now time.Time) {
+	s.challengeResponses.Range(func(key string, entry *challengeResponseEntry) bool {
+		if now.After(entry.expiresAt) {
+			s.challengeResponses.Delete(key)
+		}
+		return true
+	})
+}
+
+// sweepExpiredChallengeRelays delete cached relays that expired
+func (s *Spoa) sweepExpiredChallengeRelays(now time.Time) {
+	s.challengeRelays.Range(func(key string, entry challengeRelayEntry) bool {
+		if now.After(entry.expiresAt) {
+			s.challengeRelays.Delete(key)
+		}
+		return true
+	})
+}
+
 func (s *Spoa) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down")
 
+	var closeErrors []error
+
 	// Close TCP listener - the library now handles waiting for handlers internally
 	if s.ListenAddr != nil {
-		s.ListenAddr.Close()
+		closeErrors = append(closeErrors, s.ListenAddr.Close())
 	}
 
 	// Close Unix socket - the library now handles waiting for handlers internally
 	if s.ListenSocket != nil {
-		s.ListenSocket.Close()
+		closeErrors = append(closeErrors, s.ListenSocket.Close())
+	}
+	if s.ChallengeHTTPListenAddr != nil {
+		closeErrors = append(closeErrors, s.ChallengeHTTPListenAddr.Close())
+	}
+	if s.challengeHTTPServer != nil {
+		closeErrors = append(closeErrors, s.challengeHTTPServer.Shutdown(ctx))
 	}
 
 	// The library's workgroup now handles waiting for all frame handlers to complete
 	// when the listeners are closed, so we don't need to wait here
-	return nil
+	return errors.Join(closeErrors...)
 }
 
 // HTTPMessageData holds all KV entries from crowdsec-http message
@@ -452,6 +598,7 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 
 	var matchedHost *host.Host
 	datasetRemediation := r // Track remediation after dataset check (before AppSec)
+	appSecChallengeIssued := false
 
 	// defer a function that always sets the remediation and counts metrics at end of processing
 	defer func() {
@@ -459,6 +606,16 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 		if matchedHost == nil && r == remediation.Captcha {
 			s.logger.Warn("remediation is captcha, no matching host was found cannot issue captcha remediation reverting to ban")
 			r = remediation.Ban
+		}
+
+		// Dataset-level "challenge" decisions carry no AppSec challenge data, so HAProxy
+		// has no page to serve. Only AppSec-issued challenges stay challenges.
+		if r == remediation.Challenge && !appSecChallengeIssued {
+			s.logger.Warn("challenge remediation without AppSec challenge data cannot be served, reverting to ban")
+			r = remediation.Ban
+			if matchedHost != nil {
+				matchedHost.Ban.InjectKeyValues(writer)
+			}
 		}
 
 		// Always set the final remediation in the transaction
@@ -514,7 +671,9 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	if matchedHost == nil {
 		appSec, timeout, alwaysSend := s.getAppSecConfig(nil)
 		if appSec != nil && shouldRunAppSec(r, alwaysSend) {
-			r = s.validateWithAppSec(ctx, msgData, nil, appSec, r, timeout)
+			var issued bool
+			r, issued = s.validateWithAppSec(ctx, writer, msgData, nil, appSec, r, timeout)
+			appSecChallengeIssued = appSecChallengeIssued || issued
 		}
 		return
 	}
@@ -537,8 +696,9 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 	// Validate with AppSec if configured
 	appSec, timeout, alwaysSend := s.getAppSecConfig(matchedHost)
 	if appSec != nil && shouldRunAppSec(r, alwaysSend) {
-		r = s.validateWithAppSec(ctx, msgData, matchedHost, appSec, r, timeout)
-		// If AppSec returns ban, inject ban values
+		var issued bool
+		r, issued = s.validateWithAppSec(ctx, writer, msgData, matchedHost, appSec, r, timeout)
+		appSecChallengeIssued = appSecChallengeIssued || issued
 		if r == remediation.Ban {
 			matchedHost.Ban.InjectKeyValues(writer)
 		}
@@ -566,19 +726,19 @@ func shouldRunAppSec(r remediation.Remediation, alwaysSend bool) bool {
 	return r < remediation.Captcha || alwaysSend
 }
 
-// validateWithAppSec performs AppSec validation and returns the remediation
-// Returns the more restrictive remediation between the current remediation and AppSec result
+// validateWithAppSec performs AppSec validation and returns the remediation plus
+// whether an AppSec challenge response was successfully injected for HAProxy.
 func (s *Spoa) validateWithAppSec(
 	ctx context.Context,
+	writer *encoding.ActionWriter,
 	msgData *HTTPMessageData,
 	matchedHost *host.Host,
 	appSecToUse *appsec.AppSec,
 	currentRemediation remediation.Remediation,
 	requestTimeout time.Duration,
-) remediation.Remediation {
+) (remediation.Remediation, bool) {
 	appSecReq := msgData.buildAppSecRequest()
 
-	// Create logger with host context
 	logger := s.logger
 	if appSecReq.Host != "" {
 		logger = logger.WithField("host", appSecReq.Host)
@@ -587,19 +747,17 @@ func (s *Spoa) validateWithAppSec(
 		logger = logger.WithField("matched_host", matchedHost.Host)
 	}
 
-	// Validate with AppSec - derive context from handler so requests cancel on shutdown
 	appSecCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
-	appSecRemediation, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
+	appSecRemediation, challengeData, err := appSecToUse.ValidateRequest(appSecCtx, appSecReq)
 	if err != nil {
 		logger.WithError(err).Warn("AppSec validation failed, using original remediation")
-		return currentRemediation
+		return currentRemediation, false
 	}
 
 	logger.WithField("remediation", appSecRemediation.String()).Debug("AppSec validation result")
 
-	// Track AppSec block metrics
 	if appSecRemediation > remediation.Allow && appSecReq.RemoteIP != "" {
 		if ipAddr, parseErr := netip.ParseAddr(appSecReq.RemoteIP); parseErr == nil {
 			ipType := "ipv4"
@@ -610,14 +768,283 @@ func (s *Spoa) validateWithAppSec(
 		}
 	}
 
-	// Return the more restrictive remediation (never downgrade security)
 	if appSecRemediation > currentRemediation {
 		if appSecRemediation == remediation.Ban && matchedHost == nil {
 			logger.Warn("AppSec returned ban but no host matched - remediation set but ban values not injected")
 		}
-		return appSecRemediation
+		if appSecRemediation == remediation.Challenge && challengeData != nil {
+			if s.ChallengeHTTPListenAddr == nil {
+				logger.Error("cannot serve AppSec challenge: challenge_http_listen is not configured, falling back to ban")
+				return remediation.Ban, false
+			}
+			if msgData.ID == nil || *msgData.ID == "" {
+				logger.Error("cannot serve AppSec challenge: HAProxy sent no unique request id (configure unique-id-format), falling back to ban")
+				return remediation.Ban, false
+			}
+			if !s.injectChallengeKeyValues(writer, challengeData, *msgData.ID, appSecToUse, requestTimeout, appSecReq.Host) {
+				return remediation.Ban, false
+			}
+			return appSecRemediation, true
+		}
+		return appSecRemediation, false
 	}
-	return currentRemediation
+	return currentRemediation, false
+}
+
+func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challengeData *appsec.AppSecChallengeData, requestID string, appSecToUse *appsec.AppSec, timeout time.Duration, challengeHost string) bool {
+	status := challengeData.StatusCode
+	if status <= 0 {
+		status = http.StatusOK
+	}
+
+	body := challengeData.Body
+	headers := challengeData.Headers
+	if body == "" {
+		s.logger.Error("cannot serve AppSec challenge: CrowdSec returned no challenge body, falling back to ban")
+		return false
+	}
+
+	token := s.challengeTokenFromRequestID(requestID)
+
+	s.challengeResponses.Store(token, &challengeResponseEntry{
+		status:    status,
+		body:      body,
+		headers:   cloneHTTPHeader(headers),
+		cookies:   append([]string(nil), challengeData.Cookies...),
+		expiresAt: time.Now().Add(challengeResponseTTL),
+	})
+	s.challengeRelays.Store(token, challengeRelayEntry{
+		appSec:    appSecToUse,
+		timeout:   timeout,
+		host:      challengeHost,
+		expiresAt: time.Now().Add(challengeRelayTTL),
+	})
+
+	err := writer.SetString(encoding.VarScopeTransaction, "challenge_url", challengePathPrefix+token)
+	if err != nil {
+		s.challengeResponses.Delete(token)
+		s.challengeRelays.Delete(token)
+		return false
+	}
+	return true
+}
+
+func (s *Spoa) challengeTokenFromRequestID(requestID string) string {
+	mac := hmac.New(sha256.New, s.challengeTokenKey[:])
+	_, _ = mac.Write([]byte(requestID))
+	return hex.EncodeToString(mac.Sum(nil)[:16])
+}
+
+func cloneHTTPHeader(headers map[string][]string) http.Header {
+	clone := make(http.Header, len(headers))
+	for k, values := range headers {
+		clone[k] = append([]string(nil), values...)
+	}
+	return clone
+}
+
+func (s *Spoa) handleStoredChallengeHTTP(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.URL.Path, challengePathPrefix)
+	if token == "" || strings.Contains(token, "/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	entry, ok := s.challengeResponses.LoadAndDelete(token)
+	if !ok || time.Now().After(entry.expiresAt) {
+		http.NotFound(w, r)
+		return
+	}
+
+	for name, values := range entry.headers {
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+	for _, cookie := range entry.cookies {
+		w.Header().Add("Set-Cookie", cookie)
+	}
+	http.SetCookie(w, newChallengeRelayCookie(token))
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	}
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "no-cache, no-store")
+	}
+
+	status := entry.status
+	if status <= 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(entry.body))
+}
+
+func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Request) {
+	appSecPath, relay, ok := s.challengeRelayFromRequest(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	appSecToUse, timeout := relay.appSec, relay.timeout
+	if appSecToUse == nil || !appSecToUse.IsValid() {
+		http.NotFound(w, r)
+		return
+	}
+	r.URL.Path = appSecPath
+	r.URL.RawPath = ""
+
+	// HAProxy routes these requests here directly, so they skip the SPOE ban check.
+	// Re-run it here, but let captcha'd IPs through: they may be solving a challenge.
+	remoteIP, ok := trustedChallengeClientIP(r)
+	if !ok {
+		s.logger.Error("challenge backend received a request without the X-Crowdsec-Real-Src header, " +
+			"rejecting it and every request like it: add " +
+			`'http-request set-header X-Crowdsec-Real-Src %[src] if crowdsec_challenge_backend_path' ` +
+			"to the HAProxy frontend (see haproxy*.cfg and CHALLENGE.md)")
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	ip, parseErr := netip.ParseAddr(remoteIP)
+	if parseErr != nil {
+		s.logger.WithField("value", remoteIP).WithError(parseErr).
+			Error("challenge backend received an unparseable X-Crowdsec-Real-Src, rejecting the request")
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem >= remediation.Challenge {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(maxBodyBufferSize)))
+	_ = r.Body.Close()
+	if err != nil {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	req := &appsec.AppSecRequest{
+		Host:      challengeRelayHost(relay, r.Host),
+		Method:    r.Method,
+		URL:       r.URL.RequestURI(),
+		RemoteIP:  remoteIP,
+		UserAgent: r.UserAgent(),
+		Version:   r.Proto,
+		Headers:   r.Header.Clone(),
+		Body:      body,
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	appSecResp, err := appSecToUse.Do(ctx, req)
+	if err != nil {
+		s.logger.WithError(err).Warn("AppSec internal challenge request failed")
+		http.Error(w, "challenge backend error", http.StatusBadGateway)
+		return
+	}
+
+	switch {
+	case appSecResp.Remediation == remediation.Challenge && appSecResp.ChallengeData != nil:
+		// Still challenged: an asset request, or a proof AppSec rejected. Unwrap the
+		// JSON envelope AppSec wraps challenge content in.
+		writeChallengeData(w, appSecResp.ChallengeData)
+	case appSecResp.Remediation > remediation.Allow:
+		http.Error(w, "forbidden", http.StatusForbidden)
+	default:
+		// AppSec allowed the request, so the challenge was solved. Forward its response
+		// verbatim: the proof cookie rides back on it.
+		writeRelayedResponse(w, appSecResp)
+	}
+}
+
+func (s *Spoa) challengeRelayFromRequest(r *http.Request) (appSecPath string, relay challengeRelayEntry, ok bool) {
+	token, ok := challengeRelayCookieToken(r)
+	if !ok {
+		return "", challengeRelayEntry{}, false
+	}
+	relay, ok = s.challengeRelays.Load(token)
+	if !ok || time.Now().After(relay.expiresAt) {
+		return "", challengeRelayEntry{}, false
+	}
+	return r.URL.Path, relay, true
+}
+
+func challengeRelayCookieToken(r *http.Request) (string, bool) {
+	cookie, err := r.Cookie(challengeRelayCookieName)
+	if err != nil || cookie.Value == "" || strings.Contains(cookie.Value, "/") {
+		return "", false
+	}
+	return cookie.Value, true
+}
+
+func newChallengeRelayCookie(token string) *http.Cookie {
+	return &http.Cookie{
+		Name:     challengeRelayCookieName,
+		Value:    token,
+		Path:     challengeInternalPathPrefix,
+		MaxAge:   int(challengeRelayTTL.Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+func challengeRelayHost(relay challengeRelayEntry, fallback string) string {
+	if relay.host != "" {
+		return relay.host
+	}
+	return fallback
+}
+
+// writeRelayedResponse hands AppSec's raw response back to the client unchanged,
+// preserving every Set-Cookie it carries.
+func writeRelayedResponse(w http.ResponseWriter, resp *appsec.AppSecResponse) {
+	header := w.Header()
+	for name, values := range resp.Headers {
+		for _, value := range values {
+			header.Add(name, value)
+		}
+	}
+
+	status := resp.StatusCode
+	if status <= 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(resp.Body)
+}
+
+func writeChallengeData(w http.ResponseWriter, challengeData *appsec.AppSecChallengeData) {
+	for name, values := range challengeData.Headers {
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+	for _, cookie := range challengeData.Cookies {
+		w.Header().Add("Set-Cookie", cookie)
+	}
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "no-cache, no-store")
+	}
+	status := challengeData.StatusCode
+	if status <= 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(challengeData.Body))
+}
+
+// trustedChallengeClientIP returns the client IP from X-Crowdsec-Real-Src, which HAProxy
+// sets from its own %[src]. Other forwarding headers and RemoteAddr are not trusted.
+func trustedChallengeClientIP(r *http.Request) (string, bool) {
+	if trusted := r.Header.Get("X-Crowdsec-Real-Src"); trusted != "" {
+		return trusted, true
+	}
+	return "", false
 }
 
 // buildAppSecRequest constructs an AppSecRequest from HTTPMessageData
@@ -781,8 +1208,8 @@ func (s *Spoa) getIPRemediation(_ context.Context, writer *encoding.ActionWriter
 		} else if record != nil {
 			iso := geo.GetIsoCodeFromRecord(record)
 			if iso != "" {
-				// Always set the ISO code variable when available
-				_ = writer.SetString(encoding.VarScopeTransaction, "isocode", iso)
+				// Always set the ISO code variable when available.
+				setIsoCodeVar(writer, iso)
 
 				// If no IP-specific remediation, check country-based remediation
 				if r < remediation.Unknown {
@@ -797,6 +1224,14 @@ func (s *Spoa) getIPRemediation(_ context.Context, writer *encoding.ActionWriter
 	}
 
 	return r, origin
+}
+
+// setIsoCodeVar sets the isocode SPOE variable when a writer is available. It is nil
+// when the caller is a plain HTTP handler with no SPOE transaction.
+func setIsoCodeVar(writer *encoding.ActionWriter, iso string) {
+	if writer != nil {
+		_ = writer.SetString(encoding.VarScopeTransaction, "isocode", iso)
+	}
 }
 
 // extractIPMessageData extracts all KV entries from crowdsec-ip message in a single pass

@@ -84,7 +84,7 @@ func BenchmarkAddRemove(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for range b.N {
+	for b.Loop() {
 		// Add decisions
 		dataset.Add(decisions)
 
@@ -100,7 +100,7 @@ func BenchmarkAddOnly(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for range b.N {
+	for b.Loop() {
 		dataset := New() // Fresh dataset each iteration
 		dataset.Add(decisions)
 	}
@@ -117,7 +117,7 @@ func BenchmarkRemoveOnly(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for range b.N {
+	for b.Loop() {
 		// Create a copy of decisions for each iteration
 		decisionsCopy := make(models.GetDecisionsResponse, len(decisions))
 		copy(decisionsCopy, decisions)
@@ -147,7 +147,7 @@ func BenchmarkDifferentSizes(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 
-			for range b.N {
+			for b.Loop() {
 				dataset.Add(decisions)
 				dataset.Remove(decisions)
 			}
@@ -254,7 +254,7 @@ func BenchmarkBartLookup(b *testing.B) {
 	testIP := netip.MustParseAddr("192.168.1.1")
 
 	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		_, _, _ = dataset.CheckIP(testIP)
 	}
 }
@@ -274,7 +274,7 @@ func BenchmarkBartAdd(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		dataset.Add(decisions)
 		dataset.Remove(decisions)
 	}
@@ -298,7 +298,7 @@ func BenchmarkBartRemove(b *testing.B) {
 	dataset.Add(decisions)
 
 	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		dataset.Remove(decisions)
 		dataset.Add(decisions)
 	}
@@ -335,7 +335,7 @@ func BenchmarkHybridVsBartOnly(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 
-			for range b.N {
+			for b.Loop() {
 				dataset := New()
 				dataset.Add(decisions)
 			}
@@ -363,7 +363,7 @@ func BenchmarkHybridVsBartOnly(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 
-			for range b.N {
+			for b.Loop() {
 				bartSet := NewBartRangeSet("test")
 				bartSet.AddBatch(ops)
 			}
@@ -404,7 +404,7 @@ func BenchmarkLookupHybrid(b *testing.B) {
 	b.Run("IPMap_hit", func(b *testing.B) {
 		ip := testIPs[0]
 		b.ResetTimer()
-		for range b.N {
+		for b.Loop() {
 			_, _, _ = dataset.CheckIP(ip)
 		}
 	})
@@ -412,7 +412,7 @@ func BenchmarkLookupHybrid(b *testing.B) {
 	b.Run("RangeSet_hit", func(b *testing.B) {
 		ip := testIPs[2]
 		b.ResetTimer()
-		for range b.N {
+		for b.Loop() {
 			_, _, _ = dataset.CheckIP(ip)
 		}
 	})
@@ -420,7 +420,7 @@ func BenchmarkLookupHybrid(b *testing.B) {
 	b.Run("No_match", func(b *testing.B) {
 		ip := testIPs[3]
 		b.ResetTimer()
-		for range b.N {
+		for b.Loop() {
 			_, _, _ = dataset.CheckIP(ip)
 		}
 	})

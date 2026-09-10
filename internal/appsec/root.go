@@ -3,6 +3,7 @@ package appsec
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -14,7 +15,30 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// AppSecChallengeData holds the challenge page content returned by AppSec when
+// it issues a JS PoW + fingerprint challenge instead of an outright block.
+type AppSecChallengeData struct {
+	StatusCode int
+	Body       string
+	Headers    map[string][]string
+	Cookies    []string
+}
+
+// appsecJSONResponse mirrors the JSON body AppSec sends for HTTP 403 responses.
+type appsecJSONResponse struct {
+	Action          string              `json:"action"`
+	HTTPStatus      int                 `json:"http_status"`
+	UserBodyContent string              `json:"user_body_content"`
+	UserCookies     []string            `json:"user_cookies"`
+	UserHeaders     map[string][]string `json:"user_headers"`
+}
+
 const DefaultRequestTimeout = 200 * time.Millisecond
+
+// maxAppSecResponseBodySize caps how much of an AppSec response body we'll
+// buffer. AppSec is a trusted local service, but this is cheap insurance
+// against a misbehaving or compromised instance sending an oversized body.
+const maxAppSecResponseBodySize = 1 << 20 // 1 MiB
 
 // AppSecRequest represents the HTTP request data to be validated by AppSec
 type AppSecRequest struct {
@@ -100,36 +124,77 @@ func (a *AppSec) TimeoutOrDefault() time.Duration {
 	return a.Timeout
 }
 
-// ValidateRequest sends the HTTP request to the AppSec engine and returns the remediation
-func (a *AppSec) ValidateRequest(ctx context.Context, req *AppSecRequest) (remediation.Remediation, error) {
-	// Use IsValid() which checks both Client and URL
+// AppSecResponse is AppSec's reply to one request: the decision plus the raw HTTP
+// response, which the challenge relay hands back to the browser as-is.
+type AppSecResponse struct {
+	StatusCode    int
+	Headers       http.Header
+	Body          []byte
+	Remediation   remediation.Remediation
+	ChallengeData *AppSecChallengeData
+}
+
+// ValidateRequest sends the HTTP request to the AppSec engine and returns the
+// resulting remediation. When AppSec issues a challenge, the second return value
+// is non-nil and contains the page content to serve to the browser.
+func (a *AppSec) ValidateRequest(ctx context.Context, req *AppSecRequest) (remediation.Remediation, *AppSecChallengeData, error) {
 	if !a.IsValid() {
 		a.logger.Debug("AppSec not configured, allowing request")
-		return remediation.Allow, nil
+		return remediation.Allow, nil, nil
 	}
 
-	// Create HTTP request to AppSec engine
+	resp, err := a.Do(ctx, req)
+	if err != nil {
+		return remediation.Allow, nil, err
+	}
+
+	return resp.Remediation, resp.ChallengeData, nil
+}
+
+// Do sends the request to AppSec and returns the decision with its raw response. An
+// error means no usable answer, so the caller should fall back to what it had.
+func (a *AppSec) Do(ctx context.Context, req *AppSecRequest) (*AppSecResponse, error) {
+	if !a.IsValid() {
+		return nil, fmt.Errorf("appsec is not configured")
+	}
+
 	httpReq, err := a.createAppSecRequest(req)
 	if err != nil {
 		a.logger.Errorf("Failed to create AppSec request: %v", err)
-		return remediation.Allow, err
+		return nil, err
 	}
 
-	// Send request to AppSec engine
 	resp, err := a.Client.HTTPClient.Do(httpReq.WithContext(ctx))
 	if err != nil {
 		a.logger.Errorf("Failed to send request to AppSec engine: %v", err)
-		return remediation.Allow, err
+		return nil, err
 	}
-	// resp is guaranteed to be non-nil when err is nil (per http.Client.Do contract)
 	defer resp.Body.Close()
 
-	// Discard response body for proper connection reuse
-	// This allows the connection to be reused via keep-alive
-	_, _ = io.Copy(io.Discard, resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAppSecResponseBodySize+1))
+	if err != nil {
+		a.logger.Errorf("Failed to read AppSec response body: %v", err)
+		return nil, err
+	}
+	if len(body) > maxAppSecResponseBodySize {
+		// Drain the remaining bytes so Go can reuse the keep-alive connection.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		a.logger.Errorf("AppSec response body exceeds %d bytes, rejecting", maxAppSecResponseBodySize)
+		return nil, fmt.Errorf("AppSec response body too large")
+	}
 
-	// Process response based on HTTP status code
-	return a.processAppSecResponse(resp)
+	rem, challengeData, err := a.processAppSecResponse(resp.StatusCode, body)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AppSecResponse{
+		StatusCode:    resp.StatusCode,
+		Headers:       resp.Header.Clone(),
+		Body:          body,
+		Remediation:   rem,
+		ChallengeData: challengeData,
+	}, nil
 }
 
 func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) {
@@ -182,29 +247,46 @@ func (a *AppSec) createAppSecRequest(req *AppSecRequest) (*http.Request, error) 
 	return httpReq, nil
 }
 
-func (a *AppSec) processAppSecResponse(resp *http.Response) (remediation.Remediation, error) {
-	switch resp.StatusCode {
+func (a *AppSec) processAppSecResponse(statusCode int, body []byte) (remediation.Remediation, *AppSecChallengeData, error) {
+	switch statusCode {
 	case http.StatusOK:
-		// Request allowed
-		return remediation.Allow, nil
+		return remediation.Allow, nil, nil
 
 	case http.StatusForbidden:
-		// Request blocked - return ban remediation
-		return remediation.Ban, nil
+		if len(body) == 0 {
+			return remediation.Ban, nil, nil
+		}
+
+		var parsed appsecJSONResponse
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			a.logger.WithError(err).Warn("failed to parse AppSec JSON response, defaulting to ban")
+			return remediation.Ban, nil, nil
+		}
+
+		if parsed.Action != "challenge" {
+			return remediation.Ban, nil, nil
+		}
+
+		cd := &AppSecChallengeData{
+			StatusCode: parsed.HTTPStatus,
+			Body:       parsed.UserBodyContent,
+			Headers:    parsed.UserHeaders,
+			Cookies:    parsed.UserCookies,
+		}
+
+		return remediation.Challenge, cd, nil
 
 	case http.StatusUnauthorized:
-		// Authentication failed
 		a.logger.Error("AppSec authentication failed - check API key")
-		return remediation.Allow, fmt.Errorf("AppSec authentication failed")
+		return remediation.Allow, nil, fmt.Errorf("AppSec authentication failed")
 
 	case http.StatusInternalServerError:
-		// AppSec engine error
 		a.logger.Error("AppSec engine error")
-		return remediation.Allow, fmt.Errorf("AppSec engine error")
+		return remediation.Allow, nil, fmt.Errorf("AppSec engine error")
 
 	default:
-		a.logger.Warnf("Unexpected AppSec response code: %d", resp.StatusCode)
-		return remediation.Allow, fmt.Errorf("unexpected AppSec response code: %d", resp.StatusCode)
+		a.logger.Warnf("Unexpected AppSec response code: %d", statusCode)
+		return remediation.Allow, nil, fmt.Errorf("unexpected AppSec response code: %d", statusCode)
 	}
 }
 
