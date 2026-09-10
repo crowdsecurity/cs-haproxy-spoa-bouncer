@@ -338,8 +338,8 @@ func (s *Spoa) cleanupChallengeResponses(ctx context.Context) {
 	}
 }
 
-// sweepExpiredChallengeResponses deletes cached challenge responses that expired before
-// now. Split out from cleanupChallengeResponses so tests can drive the clock.
+// sweepExpiredChallengeResponses deletes cached challenge responses that
+// expired.
 func (s *Spoa) sweepExpiredChallengeResponses(now time.Time) {
 	s.challengeResponses.Range(func(key string, entry *challengeResponseEntry) bool {
 		if now.After(entry.expiresAt) {
@@ -349,8 +349,7 @@ func (s *Spoa) sweepExpiredChallengeResponses(now time.Time) {
 	})
 }
 
-// sweepExpiredChallengeRelays does the same for relays. gcache only drops an expired
-// entry when its key is touched, and an unsolved challenge is never touched again.
+// sweepExpiredChallengeRelays delete cached relays that expired
 func (s *Spoa) sweepExpiredChallengeRelays(now time.Time) {
 	s.challengeRelays.Range(func(key string, entry challengeRelayEntry) bool {
 		if now.After(entry.expiresAt) {
