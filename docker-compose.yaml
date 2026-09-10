@@ -7,6 +7,11 @@ services:
       dockerfile: Dockerfile
     depends_on:
       - crowdsec
+    environment:
+      # haproxy and spoa are separate containers here, so the challenge HTTP
+      # backend must bind all interfaces (not 127.0.0.1) to be reachable from
+      # haproxy's "server s3 spoa:9100" over the crowdsec bridge network.
+      - CHALLENGE_HTTP_LISTEN=0.0.0.0:9100
     volumes:
       - sockets:/run/
       - templates:/var/lib/crowdsec-haproxy-spoa-bouncer/html/
