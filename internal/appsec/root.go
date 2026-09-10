@@ -124,10 +124,8 @@ func (a *AppSec) TimeoutOrDefault() time.Duration {
 	return a.Timeout
 }
 
-// AppSecResponse is AppSec's reply to a single request: both the decision we
-// derived from it and the raw HTTP response it came in. Callers that only need
-// the decision use ValidateRequest; the challenge relay needs the raw status,
-// headers and body so it can hand AppSec's own response back to the browser.
+// AppSecResponse is AppSec's reply to one request: the decision plus the raw HTTP
+// response, which the challenge relay hands back to the browser as-is.
 type AppSecResponse struct {
 	StatusCode    int
 	Headers       http.Header
@@ -153,10 +151,8 @@ func (a *AppSec) ValidateRequest(ctx context.Context, req *AppSecRequest) (remed
 	return resp.Remediation, resp.ChallengeData, nil
 }
 
-// Do sends the HTTP request to the AppSec engine and returns the decision along
-// with AppSec's raw response. An error means we could not get a usable answer
-// (transport failure, bad API key, engine error, unexpected status) and the
-// caller should fall back to whatever it had.
+// Do sends the request to AppSec and returns the decision with its raw response. An
+// error means no usable answer, so the caller should fall back to what it had.
 func (a *AppSec) Do(ctx context.Context, req *AppSecRequest) (*AppSecResponse, error) {
 	if !a.IsValid() {
 		return nil, fmt.Errorf("appsec is not configured")

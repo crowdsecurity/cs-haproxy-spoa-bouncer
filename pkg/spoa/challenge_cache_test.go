@@ -9,14 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Range must surface entries that gcache's own TTL has already retired, because
-// sweeping them is the only thing that releases their memory. gcache drops an
-// expired item when that key is next looked up, but a challenge that HAProxy never
-// fetches is never looked up - which is exactly the entry that leaks - so nothing
-// reclaims it until size pressure evicts it. Expiry is driven through gcache here
-// rather than by hand-setting expiresAt, so the test uses the same clock as
-// production. Note the ordering: Range runs before Load, because Load on an
-// expired key removes it and would mask the very thing being asserted.
+// Range must surface entries gcache has already expired, since sweeping them is the only
+// thing that frees them. Range runs before Load, which would remove them first.
 func TestChallengeCache_RangeSeesEntriesGcacheHasExpired(t *testing.T) {
 	c := newChallengeCache(10)
 
@@ -184,10 +178,8 @@ func TestChallengeCache_RangeStopsWhenCallbackReturnsFalse(t *testing.T) {
 }
 
 func TestNewChallengeRelayCache_ScalesTheConfiguredCap(t *testing.T) {
-	// Relay entries live challengeRelayCacheRatio times longer than response
-	// entries, so they get proportionally more slots from the same operator knob
-	// - otherwise the relay cache would start evicting live challenges at a
-	// fraction of the rate the response cache tolerates.
+	// Relay entries live longer, so they get proportionally more slots from the same
+	// operator knob. Otherwise they would be evicted while still in use.
 	assert.Equal(t, 10*challengeRelayCacheRatio, newChallengeRelayCache(10).maxItems)
 	assert.Equal(t, defaultChallengeCacheMaxEntries*challengeRelayCacheRatio, newChallengeRelayCache(0).maxItems)
 	assert.Positive(t, newChallengeRelayCache(math.MaxInt).maxItems, "scaling a huge cap must not overflow into a negative size")
@@ -202,10 +194,8 @@ func TestChallengeRelayCache_IsBounded(t *testing.T) {
 	_, ok := c.Load("first")
 	require.True(t, ok)
 
-	// The point of the cap: a flood of issued-but-never-solved challenges evicts
-	// the entries nobody came back for, rather than growing without bound. A
-	// browser working through its challenge keeps touching its own entry, so
-	// "first" survives and the untouched "second" goes.
+	// Past the cap, the least recently used entry is evicted: "first" was just touched,
+	// so "second" is the one that goes.
 	c.Store("third", challengeRelayEntry{host: "3"})
 
 	_, ok = c.Load("second")

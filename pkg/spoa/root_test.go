@@ -441,10 +441,8 @@ func TestSweepExpiredChallengeRelays_RemovesOnlyExpiredEntries(t *testing.T) {
 	assert.Same(t, appSec, relay.appSec)
 }
 
-// newInternalChallengeSpoa builds a Spoa with a real dataset/geo database (as
-// production always provides, per cmd/root.go) wired up for
-// handleInternalChallengeHTTP tests, plus an AppSec double that counts calls
-// so tests can assert whether AppSec was reached at all.
+// newInternalChallengeSpoa builds a Spoa wired for handleInternalChallengeHTTP tests,
+// with a real dataset/geo database and an AppSec double that counts calls.
 func newInternalChallengeSpoa(t *testing.T) (*Spoa, *int32) {
 	t.Helper()
 
@@ -533,12 +531,8 @@ func TestHandleInternalChallengeHTTP_BannedIPRejectedWithoutCallingAppSec(t *tes
 	assert.Equal(t, int32(0), atomic.LoadInt32(calls), "a banned IP must not reach the AppSec engine through this endpoint")
 }
 
-// A captcha decision must not block challenge traffic. An IP can hold both at once:
-// validateWithAppSec takes the more restrictive of the two, so a captcha'd IP that
-// AppSec challenges gets a challenge page, and every asset and proof submission on
-// that page lands on this endpoint. 403ing them would leave the user with nothing to
-// solve, and would protect nothing - with always_send that IP's ordinary requests
-// already reach AppSec through the normal SPOE path.
+// A captcha decision must not block challenge traffic: a captcha'd IP can be solving an
+// AppSec challenge, whose assets and proof submission all land on this endpoint.
 func TestHandleInternalChallengeHTTP_CaptchaIPStillRelaysToAppSec(t *testing.T) {
 	s, calls := newInternalChallengeSpoa(t)
 	token := storeTestChallengeRelay(t, s, s.globalAppSec)
@@ -845,10 +839,8 @@ func TestHandleInternalChallengeHTTP_SpoofedXForwardedForIgnoredForBanCheck(t *t
 	assert.Equal(t, int32(1), atomic.LoadInt32(calls))
 }
 
-// Without X-Crowdsec-Real-Src the visitor's address is unknowable here: RemoteAddr
-// is HAProxy. Relaying anyway would skip the ban check and hand AppSec the proxy's
-// address as ClientIP, corrupting its allowlist/country evaluation and raising
-// events against the operator's own infrastructure. So the request is refused.
+// Without X-Crowdsec-Real-Src the visitor's IP is unknowable here, since RemoteAddr is
+// HAProxy. So the request is refused rather than relayed with the wrong source.
 func TestHandleInternalChallengeHTTP_MissingRealSrcFailsClosed(t *testing.T) {
 	s, calls := newInternalChallengeSpoa(t)
 	token := storeTestChallengeRelay(t, s, s.globalAppSec)

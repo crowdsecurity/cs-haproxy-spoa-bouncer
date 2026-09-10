@@ -36,16 +36,8 @@ type BouncerConfig struct {
 	ListenTCP     string                  `yaml:"listen_tcp"`
 	ListenUnix    string                  `yaml:"listen_unix"`
 	ChallengeHTTP string                  `yaml:"challenge_http_listen,omitempty"`
-	// ChallengeCacheMaxEntries caps how many pending AppSec challenge responses
-	// can be held in memory at once, awaiting HAProxy's fetch over the challenge
-	// HTTP backend (see pkg/spoa's challengeCache). Without a cap, a burst of
-	// challenge-triggering requests that never complete their fetch could grow
-	// this cache unboundedly. Defaults to 1000 when unset/<=0 - see
-	// spoa.defaultChallengeCacheMaxEntries - which is generous for legitimate
-	// traffic while still bounding worst-case memory. Once at capacity, the
-	// oldest still-pending entry is evicted to make room for a new one, rather
-	// than growing further or rejecting the new challenge. Entries that simply
-	// go stale are released earlier than that by the periodic TTL sweep.
+	// ChallengeCacheMaxEntries caps how many pending AppSec challenge responses are held
+	// in memory. Past the cap, the least recently used entry is evicted. Defaults to 1000.
 	ChallengeCacheMaxEntries int              `yaml:"challenge_cache_max_entries,omitempty"`
 	PrometheusConfig         PrometheusConfig `yaml:"prometheus"`
 	PprofConfig              PprofConfig      `yaml:"pprof"`

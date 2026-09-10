@@ -107,18 +107,11 @@ type Spoa struct {
 	geoDatabase  *geo.GeoDatabase
 	globalAppSec *appsec.AppSec // Global AppSec config (used when no host matched)
 
-	// challengeResponses holds full AppSec challenge responses keyed by an
-	// HMAC-derived token from HAProxy's unique-id. HAProxy receives only the
-	// challenge URL over SPOE, then streams the body from this bouncer over
-	// normal HTTP. Bounded (see challengeCache) so a burst of issued-but-never-
-	// fetched challenges can't grow memory without bound.
+	// challengeResponses holds AppSec challenge pages, keyed by a token derived from
+	// HAProxy's unique-id. HAProxy fetches the body over the challenge HTTP backend.
 	challengeResponses *challengeCache[*challengeResponseEntry]
-	// challengeRelays holds the AppSec config an already-issued challenge's
-	// follow-up asset/proof requests must be relayed to, keyed by the same token.
-	// Bounded for the same reason as challengeResponses, and separate from it
-	// because the two have different lifecycles: a response is fetched once and
-	// dropped, while a relay must survive every asset fetch and the proof
-	// submission that follow (hence challengeRelayTTL, ten times longer).
+	// challengeRelays holds the AppSec config for an issued challenge's asset and proof
+	// requests. It lives longer than the response, which is fetched only once.
 	challengeRelays   *challengeCache[challengeRelayEntry]
 	challengeTokenKey [32]byte
 }
@@ -345,10 +338,8 @@ func (s *Spoa) cleanupChallengeResponses(ctx context.Context) {
 	}
 }
 
-// sweepExpiredChallengeResponses deletes every cached challenge response whose
-// expiresAt is before now. Split out from cleanupChallengeResponses so the
-// sweep logic itself can be exercised directly in tests against a specific
-// time, without waiting on the real challengeResponseTTL ticker.
+// sweepExpiredChallengeResponses deletes cached challenge responses that
+// expired.
 func (s *Spoa) sweepExpiredChallengeResponses(now time.Time) {
 	s.challengeResponses.Range(func(key string, entry *challengeResponseEntry) bool {
 		if now.After(entry.expiresAt) {
@@ -358,11 +349,7 @@ func (s *Spoa) sweepExpiredChallengeResponses(now time.Time) {
 	})
 }
 
-// sweepExpiredChallengeRelays deletes every cached challenge relay whose
-// expiresAt is before now. Needed for the same reason as
-// sweepExpiredChallengeResponses: gcache only drops an expired entry when its
-// key is next touched, and a challenge that is issued but never solved is never
-// touched again.
+// sweepExpiredChallengeRelays delete cached relays that expired
 func (s *Spoa) sweepExpiredChallengeRelays(now time.Time) {
 	s.challengeRelays.Range(func(key string, entry challengeRelayEntry) bool {
 		if now.After(entry.expiresAt) {
@@ -621,10 +608,8 @@ func (s *Spoa) handleHTTPRequest(ctx context.Context, writer *encoding.ActionWri
 			r = remediation.Ban
 		}
 
-		// Dataset-level "challenge" decisions do not carry AppSec challenge
-		// body/cookie data and cannot be served by HAProxy without a challenge_url.
-		// Only AppSec-issued challenges that successfully injected the URL are
-		// allowed to remain as challenge remediations.
+		// Dataset-level "challenge" decisions carry no AppSec challenge data, so HAProxy
+		// has no page to serve. Only AppSec-issued challenges stay challenges.
 		if r == remediation.Challenge && !appSecChallengeIssued {
 			s.logger.Warn("challenge remediation without AppSec challenge data cannot be served, reverting to ban")
 			r = remediation.Ban
@@ -910,30 +895,8 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	r.URL.Path = appSecPath
 	r.URL.RawPath = ""
 
-	// This endpoint is reached without going through the normal SPOE
-	// crowdsec-http-body/no-body flow (HAProxy routes crowdsec_challenge_backend_path
-	// requests here directly, bypassing send-spoe-group - see haproxy*.cfg), so it
-	// never gets the IP/dataset ban check that every other request goes through.
-	// Re-run that cheap, local check here before relaying anything to AppSec, so an
-	// already-banned IP can't use this path as a side channel into the AppSec engine.
-	// This intentionally does NOT run the full validateWithAppSec pipeline (that would
-	// mint a *new* challenge_url token here, which is wrong: this endpoint relays an
-	// already-issued challenge's follow-up asset/verification traffic, not a fresh
-	// top-level decision).
-	//
-	// The bar is Challenge, not Captcha. A captcha'd IP can legitimately be holding an
-	// AppSec challenge at the same time - validateWithAppSec takes the more restrictive
-	// of the two, so a captcha'd IP that AppSec challenges is shown a challenge page
-	// whose assets and proof submission all land here. Rejecting Captcha would 403
-	// every one of them and leave that user with nothing to solve. It would not protect
-	// anything either: a captcha decision means "prove you are human", not "go away",
-	// and with always_send that IP's ordinary requests already reach AppSec through the
-	// normal SPOE path. Dataset-level Challenge stays rejected because it cannot be
-	// served as a browser challenge at all (see the fail-closed handling in
-	// handleHTTPRequest), so here it means the same thing as a ban.
-	// Fail closed when the client IP cannot be established. Relaying anyway would
-	// skip the check below *and* label the request with the wrong source on the way
-	// to AppSec - see trustedChallengeClientIP for why that is worse than a 403.
+	// HAProxy routes these requests here directly, so they skip the SPOE ban check.
+	// Re-run it here, but let captcha'd IPs through: they may be solving a challenge.
 	remoteIP, ok := trustedChallengeClientIP(r)
 	if !ok {
 		s.logger.Error("challenge backend received a request without the X-Crowdsec-Real-Src header, " +
@@ -993,10 +956,8 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	case appSecResp.Remediation > remediation.Allow:
 		http.Error(w, "forbidden", http.StatusForbidden)
 	default:
-		// AppSec allowed the request, which for a proof submission means the challenge
-		// was solved. Forward AppSec's own response verbatim: the proof cookie rides
-		// back on it, and without it the browser has nothing to replay on its retry and
-		// would be challenged again forever.
+		// AppSec allowed the request, so the challenge was solved. Forward its response
+		// verbatim: the proof cookie rides back on it.
 		writeRelayedResponse(w, appSecResp)
 	}
 }
@@ -1077,27 +1038,8 @@ func writeChallengeData(w http.ResponseWriter, challengeData *appsec.AppSecChall
 	_, _ = w.Write([]byte(challengeData.Body))
 }
 
-// trustedChallengeClientIP returns the client IP for a request routed to the
-// challenge HTTP backend, and whether one could be established at all. It
-// deliberately does NOT trust client-supplied X-Forwarded-For/X-Real-IP headers:
-// this endpoint bypasses the normal SPOE flow (see
-// crowdsec_challenge_backend_path in haproxy*.cfg), so nothing else validates
-// those headers here, and HAProxy's "option forwardfor" appends rather than
-// replaces an existing X-Forwarded-For - meaning a client-supplied value would
-// win over HAProxy's own if naively read with Header.Get. Instead, haproxy*.cfg
-// overwrites a single dedicated header (X-Crowdsec-Real-Src) with HAProxy's own
-// verified %[src] immediately before routing to this backend, the same trust
-// model crowdsec.cfg uses for src-ip=src in the normal flow.
-//
-// There is deliberately no RemoteAddr fallback. RemoteAddr here is HAProxy, not
-// the visitor, and this address is used for more than the local ban check: it is
-// forwarded to AppSec as X-Crowdsec-Appsec-Ip, which AppSec takes as ClientIP and
-// feeds to Coraza, its allowlist lookup, country rules, and the client_ip on
-// every event it emits. Falling back would therefore attribute all challenge
-// traffic to the proxy - silently corrupting allowlisting and geo decisions, and
-// raising AppSec alerts against the operator's own infrastructure. A missing
-// header means haproxy*.cfg was not updated, which the caller treats as fatal for
-// the request rather than guessing.
+// trustedChallengeClientIP returns the client IP from X-Crowdsec-Real-Src, which HAProxy
+// sets from its own %[src]. Other forwarding headers and RemoteAddr are not trusted.
 func trustedChallengeClientIP(r *http.Request) (string, bool) {
 	if trusted := r.Header.Get("X-Crowdsec-Real-Src"); trusted != "" {
 		return trusted, true
@@ -1284,10 +1226,8 @@ func (s *Spoa) getIPRemediation(_ context.Context, writer *encoding.ActionWriter
 	return r, origin
 }
 
-// setIsoCodeVar sets the isocode SPOE transaction variable when a writer is
-// available. writer is nil when getIPRemediation is called from a plain
-// net/http handler (e.g. handleInternalChallengeHTTP) that has no SPOE
-// transaction to write a variable to.
+// setIsoCodeVar sets the isocode SPOE variable when a writer is available. It is nil
+// when the caller is a plain HTTP handler with no SPOE transaction.
 func setIsoCodeVar(writer *encoding.ActionWriter, iso string) {
 	if writer != nil {
 		_ = writer.SetString(encoding.VarScopeTransaction, "isocode", iso)
