@@ -10,7 +10,7 @@
   <body class="h-screen w-screen">
       <div class="h-full w-full flex flex-col justify-center items-center dark:bg-slate-900 dark:text-white">
         <div class="flex flex-col justify-between items-center border-2 border-black dark:border-white rounded-xl p-4 h-3/5 md:h-2/5 w-full sm:w-2/3 lg:w-1/2">
-          <button type="button" class="fixed p-4 top-0 right-0 dark-mode-toggle" aria-label="Toggle dark mode"></button>
+          <button type="button" class="fixed p-4 top-0 right-0 dark-mode-toggle" aria-label="Toggle dark mode" aria-pressed="false"></button>
           <div class="flex flex-col items-center space-y-4">
             <svg fill="black" class="h-24 w-24 warning" aria-hidden="true" focusable="false" data-prefix="fas" data-icon="exclamation-triangle" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512">
               <path d="M569.517 440.013C587.975 472.007 564.806 512 527.94 512H48.054c-36.937 0-59.999-40.055-41.577-71.987L246.423 23.985c18.467-32.009 64.72-31.951 83.154 0l239.94 416.028zM288 354c-25.405 0-46 20.595-46 46s20.595 46 46 46 46-20.595 46-46-20.595-46-46-46zm-43.673-165.346l7.418 136c.347 6.364 5.609 11.346 11.982 11.346h48.546c6.373 0 11.635-4.982 11.982-11.346l7.418-136c.375-6.874-5.098-12.654-11.982-12.654h-63.383c-6.884 0-12.356 5.78-11.981 12.654z"></path>
@@ -74,27 +74,25 @@
         const sunSvgString = '<svg class="h-6 w-6" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg"><path d="M3 12H5M5.00006 19L7.00006 17M12 19V21M17 17L19 19M5 5L7 7M19 12H21M16.9999 7L18.9999 5M12 3V5M15 12C15 13.6569 13.6569 15 12 15C10.3431 15 9 13.6569 9 12C9 10.3431 10.3431 9 12 9C13.6569 9 15 10.3431 15 12Z" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
         const svg = Array.from(document.querySelectorAll('svg'));
         const button = document.querySelector('.dark-mode-toggle');
+        const setDarkModeState = (enabled) => {
+          button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+          button.innerHTML = enabled ? sunSvgString : moonSvgString;
+        };
         window.onload = () => {
           if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            document.body.classList.add('dark');
-            svg.forEach(element => {
-              element.setAttribute('fill', 'white');
-            });
-            button.innerHTML = sunSvgString;
-          } else {
-            button.innerHTML = moonSvgString;
+          document.body.classList.add('dark');
+          svg.forEach(element => {
+            element.setAttribute('fill', 'white');
+          });
           }
+          setDarkModeState(document.body.classList.contains('dark'));
           button.addEventListener('click', function() {
           document.body.classList.toggle('dark');
           svg.forEach(element => {
             element.getAttribute('fill') === 'black' ? element.setAttribute('fill', 'white') : element.setAttribute('fill', 'black');
           });
-          if (document.body.classList.contains('dark')) {
-              button.innerHTML = sunSvgString;
-          } else {
-              button.innerHTML = moonSvgString;
-          }
-      });
+          setDarkModeState(document.body.classList.contains('dark'));
+          });
         };
       </script>
   </body>
