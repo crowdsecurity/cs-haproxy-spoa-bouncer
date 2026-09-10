@@ -194,8 +194,8 @@ func TestChallengeRelayCache_IsBounded(t *testing.T) {
 	_, ok := c.Load("first")
 	require.True(t, ok)
 
-	// A flood evicts the entries nobody came back for. "first" was just touched, so
-	// "second" is the one that goes.
+	// Past the cap, the least recently used entry is evicted: "first" was just touched,
+	// so "second" is the one that goes.
 	c.Store("third", challengeRelayEntry{host: "3"})
 
 	_, ok = c.Load("second")

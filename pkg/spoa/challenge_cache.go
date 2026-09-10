@@ -10,15 +10,15 @@ import (
 )
 
 // defaultChallengeCacheMaxEntries caps how many pending challenge responses are held
-// in memory. Past the cap the least recently used entry is evicted.
+// in memory. Past the cap, the least recently used entry is evicted.
 const defaultChallengeCacheMaxEntries = 1000
 
 // challengeRelayCacheRatio scales the configured cap for the relay cache, whose
 // entries live longer and are far smaller than challenge responses.
 const challengeRelayCacheRatio = int(challengeRelayTTL / challengeResponseTTL)
 
-// challengeCache wraps gcache with single-use LoadAndDelete semantics. It uses LRU, so
-// under a flood the entries evicted are the ones nobody ever fetches.
+// challengeCache wraps gcache with single-use LoadAndDelete semantics. Past the cap, the
+// least recently used entry is evicted, which under a flood is the one nobody fetched.
 type challengeCache[T any] struct {
 	mu       sync.Mutex
 	cache    gcache.Cache
@@ -61,7 +61,7 @@ func newChallengeRelayCache(maxItems int) *challengeCache[challengeRelayEntry] {
 }
 
 // Store inserts or replaces the entry for key. If adding a genuinely new key
-// would exceed maxItems, gcache evicts the least-recently-used entry.
+// would exceed maxItems, the least recently used entry is evicted.
 func (c *challengeCache[T]) Store(key string, value T) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

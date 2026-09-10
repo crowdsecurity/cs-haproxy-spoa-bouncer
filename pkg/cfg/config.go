@@ -36,8 +36,8 @@ type BouncerConfig struct {
 	ListenTCP     string                  `yaml:"listen_tcp"`
 	ListenUnix    string                  `yaml:"listen_unix"`
 	ChallengeHTTP string                  `yaml:"challenge_http_listen,omitempty"`
-	// ChallengeCacheMaxEntries caps how many pending AppSec challenge responses are
-	// held in memory. Defaults to 1000 when unset or <= 0; the oldest is evicted first.
+	// ChallengeCacheMaxEntries caps how many pending AppSec challenge responses are held
+	// in memory. Past the cap, the least recently used entry is evicted. Defaults to 1000.
 	ChallengeCacheMaxEntries int              `yaml:"challenge_cache_max_entries,omitempty"`
 	PrometheusConfig         PrometheusConfig `yaml:"prometheus"`
 	PprofConfig              PprofConfig      `yaml:"pprof"`
