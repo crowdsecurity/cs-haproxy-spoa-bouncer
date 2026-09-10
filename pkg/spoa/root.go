@@ -925,7 +925,13 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(maxBodyBufferSize)))
 	_ = r.Body.Close()
 	if err != nil {
-		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		s.logger.WithError(err).Error("failed to read challenge relay request body")
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 

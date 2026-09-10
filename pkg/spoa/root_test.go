@@ -201,6 +201,16 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
+type errorReadCloser struct{}
+
+func (errorReadCloser) Read([]byte) (int, error) {
+	return 0, io.ErrUnexpectedEOF
+}
+
+func (errorReadCloser) Close() error {
+	return nil
+}
+
 func newCountingChallengeAppSecTransport(t *testing.T, body string, calls *int32) http.RoundTripper {
 	t.Helper()
 
@@ -764,6 +774,22 @@ func TestHandleInternalChallengeHTTP_SolvedChallengeForwardsAppSecResponse(t *te
 	assert.Equal(t, []string{proofCookie}, rec.Result().Header.Values("Set-Cookie"))
 	assert.JSONEq(t, proofBody, rec.Body.String(), "AppSec's response body must be forwarded to the client")
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+}
+
+func TestHandleInternalChallengeHTTP_InvalidRequestBodyReturnsBadRequest(t *testing.T) {
+	s, calls := newInternalChallengeSpoa(t)
+	token := storeTestChallengeRelay(t, s, s.globalAppSec)
+
+	req := httptest.NewRequest(http.MethodPost, challengeInternalPathPrefix+"validate", http.NoBody)
+	req.Body = errorReadCloser{}
+	req.AddCookie(newChallengeRelayCookie(token, false))
+	req.Header.Set("X-Crowdsec-Real-Src", "198.51.100.10")
+	rec := httptest.NewRecorder()
+
+	s.handleInternalChallengeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, int32(0), atomic.LoadInt32(calls))
 }
 
 // AppSec rejecting the relayed request outright must not leak its JSON decision

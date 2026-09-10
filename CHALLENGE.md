@@ -81,7 +81,8 @@ mint a new top-level challenge:
 ```haproxy
 acl crowdsec_challenge_backend_path path_beg /crowdsec-challenge/ /crowdsec-internal/challenge/
 
-http-request send-spoe-group crowdsec crowdsec-http-body if !crowdsec_challenge_backend_path body_within_limit || !crowdsec_challenge_backend_path !{ req.body_size -m found }
+http-request send-spoe-group crowdsec crowdsec-http-body if !crowdsec_challenge_backend_path body_within_limit
+http-request send-spoe-group crowdsec crowdsec-http-body if !crowdsec_challenge_backend_path !{ req.body_size -m found }
 http-request send-spoe-group crowdsec crowdsec-http-no-body if !crowdsec_challenge_backend_path !body_within_limit { req.body_size -m found }
 ```
 
