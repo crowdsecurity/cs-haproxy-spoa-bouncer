@@ -121,6 +121,7 @@ type challengeResponseEntry struct {
 	body      string
 	headers   http.Header
 	cookies   []string
+	secure    bool
 	expiresAt time.Time
 }
 
@@ -781,7 +782,7 @@ func (s *Spoa) validateWithAppSec(
 				logger.Error("cannot serve AppSec challenge: HAProxy sent no unique request id (configure unique-id-format), falling back to ban")
 				return remediation.Ban, false
 			}
-			if !s.injectChallengeKeyValues(writer, challengeData, *msgData.ID, appSecToUse, requestTimeout, appSecReq.Host) {
+			if !s.injectChallengeKeyValues(writer, challengeData, *msgData.ID, msgData.SSL, appSecToUse, requestTimeout, appSecReq.Host) {
 				return remediation.Ban, false
 			}
 			return appSecRemediation, true
@@ -791,7 +792,7 @@ func (s *Spoa) validateWithAppSec(
 	return currentRemediation, false
 }
 
-func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challengeData *appsec.AppSecChallengeData, requestID string, appSecToUse *appsec.AppSec, timeout time.Duration, challengeHost string) bool {
+func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challengeData *appsec.AppSecChallengeData, requestID string, ssl *bool, appSecToUse *appsec.AppSec, timeout time.Duration, challengeHost string) bool {
 	status := challengeData.StatusCode
 	if status <= 0 {
 		status = http.StatusOK
@@ -811,6 +812,7 @@ func (s *Spoa) injectChallengeKeyValues(writer *encoding.ActionWriter, challenge
 		body:      body,
 		headers:   cloneHTTPHeader(headers),
 		cookies:   append([]string(nil), challengeData.Cookies...),
+		secure:    ssl != nil && *ssl,
 		expiresAt: time.Now().Add(challengeResponseTTL),
 	})
 	s.challengeRelays.Store(token, challengeRelayEntry{
@@ -864,7 +866,7 @@ func (s *Spoa) handleStoredChallengeHTTP(w http.ResponseWriter, r *http.Request)
 	for _, cookie := range entry.cookies {
 		w.Header().Add("Set-Cookie", cookie)
 	}
-	http.SetCookie(w, newChallengeRelayCookie(token))
+	http.SetCookie(w, newChallengeRelayCookie(token, entry.secure))
 	if w.Header().Get("Content-Type") == "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	}
@@ -915,7 +917,7 @@ func (s *Spoa) handleInternalChallengeHTTP(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem >= remediation.Challenge {
+	if rem, _ := s.getIPRemediation(r.Context(), nil, ip); rem == remediation.Challenge || rem == remediation.Ban {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -982,13 +984,14 @@ func challengeRelayCookieToken(r *http.Request) (string, bool) {
 	return cookie.Value, true
 }
 
-func newChallengeRelayCookie(token string) *http.Cookie {
+func newChallengeRelayCookie(token string, secure bool) *http.Cookie {
 	return &http.Cookie{
 		Name:     challengeRelayCookieName,
 		Value:    token,
 		Path:     challengeInternalPathPrefix,
 		MaxAge:   int(challengeRelayTTL.Seconds()),
 		HttpOnly: true,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	}
 }
