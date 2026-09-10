@@ -3,6 +3,7 @@ module github.com/crowdsecurity/crowdsec-spoa
 go 1.26.1
 
 require (
+	github.com/bluele/gcache v0.0.2
 	github.com/crowdsecurity/crowdsec v1.7.8
 	github.com/crowdsecurity/go-cs-bouncer v0.0.19
 	github.com/crowdsecurity/go-cs-lib v0.0.25

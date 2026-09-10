@@ -16,6 +16,10 @@ insecure_skip_verify: ${INSECURE_SKIP_VERIFY}
 ## SPOA listener configuration
 listen_tcp: ${LISTEN_TCP}
 #listen_unix: ${LISTEN_UNIX}
+## AppSec challenge HTTP backend (optional). Empty by default (feature disabled).
+## Must be reachable by HAProxy: use 0.0.0.0:PORT if HAProxy runs in a different
+## container/host than this bouncer (e.g. docker-compose.yaml's split services).
+challenge_http_listen: ${CHALLENGE_HTTP_LISTEN}
 
 ## GeoIP databases (optional, mount as volumes)
 #asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb

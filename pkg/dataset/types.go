@@ -2,6 +2,7 @@ package dataset
 
 import (
 	"errors"
+	"maps"
 	"sync"
 	"sync/atomic"
 
@@ -91,9 +92,7 @@ func (rM RemediationMap) Clone() RemediationMap {
 		return make(RemediationMap)
 	}
 	cloned := make(RemediationMap, len(rM))
-	for k, v := range rM {
-		cloned[k] = v // String copy is cheap
-	}
+	maps.Copy(cloned, rM)
 	return cloned
 }
 

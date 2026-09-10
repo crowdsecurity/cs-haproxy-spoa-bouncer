@@ -13,15 +13,12 @@ import (
 )
 
 func TestGetCityAndASN(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	g := &GeoDatabase{
 		ASNPath:  filepath.Join("test_data", "GeoLite2-ASN.mmdb"),
 		CityPath: filepath.Join("test_data", "GeoLite2-City.mmdb"),
 	}
 
-	g.Init(ctx)
+	g.Init(t.Context())
 
 	// Verify Init succeeded
 	assert.True(t, g.IsValid(), "GeoDatabase should be valid after successful Init")
@@ -59,15 +56,12 @@ func TestGetCityAndASN(t *testing.T) {
 }
 
 func TestInit_EmptyPaths(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	g := &GeoDatabase{
 		ASNPath:  "",
 		CityPath: "",
 	}
 
-	g.Init(ctx)
+	g.Init(t.Context())
 
 	// Should be invalid when both paths are empty
 	assert.False(t, g.IsValid(), "GeoDatabase should be invalid when both paths are empty")
@@ -80,15 +74,12 @@ func TestInit_EmptyPaths(t *testing.T) {
 }
 
 func TestInit_MissingFiles(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	g := &GeoDatabase{
 		ASNPath:  "/nonexistent/path/to/ASN.mmdb",
 		CityPath: "/nonexistent/path/to/City.mmdb",
 	}
 
-	g.Init(ctx)
+	g.Init(t.Context())
 
 	// Should be invalid when files don't exist
 	assert.False(t, g.IsValid(), "GeoDatabase should be invalid when files don't exist")
@@ -101,16 +92,13 @@ func TestInit_MissingFiles(t *testing.T) {
 }
 
 func TestInit_OneValidPath(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Test with only ASN path
 	g := &GeoDatabase{
 		ASNPath:  filepath.Join("test_data", "GeoLite2-ASN.mmdb"),
 		CityPath: "",
 	}
 
-	g.Init(ctx)
+	g.Init(t.Context())
 	assert.True(t, g.IsValid(), "GeoDatabase should be valid with only ASN path")
 
 	ip := netip.MustParseAddr("1.0.0.1")
@@ -125,23 +113,20 @@ func TestInit_OneValidPath(t *testing.T) {
 }
 
 func TestInit_InvalidPathIsDirectory(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Use test_data directory as an invalid path (it's a directory, not a file)
 	g := &GeoDatabase{
 		ASNPath:  "test_data",
 		CityPath: filepath.Join("test_data", "GeoLite2-City.mmdb"),
 	}
 
-	g.Init(ctx)
+	g.Init(t.Context())
 
 	// Should be invalid when path is a directory
 	assert.False(t, g.IsValid(), "GeoDatabase should be invalid when path is a directory")
 }
 
 func TestInit_WatchFilesGoroutine(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	g := &GeoDatabase{
@@ -175,17 +160,14 @@ func TestInit_EmptyFile(t *testing.T) {
 	tmpFile, err := os.CreateTemp(t.TempDir(), "empty-*.mmdb")
 	require.NoError(t, err)
 	tmpPath := tmpFile.Name()
-	tmpFile.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	require.NoError(t, tmpFile.Close())
 
 	g := &GeoDatabase{
 		ASNPath:  tmpPath,
 		CityPath: "",
 	}
 
-	g.Init(ctx)
+	g.Init(t.Context())
 
 	// Should be invalid when file is empty
 	assert.False(t, g.IsValid(), "GeoDatabase should be invalid when file is empty")

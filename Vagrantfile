@@ -84,8 +84,8 @@ EOF
       # Copy and configure HAProxy
       cp /vagrant/config/haproxy.cfg /etc/haproxy/haproxy.cfg 2>/dev/null || true
       cp /vagrant/config/crowdsec.cfg /etc/haproxy/crowdsec.cfg 2>/dev/null || true
-      # Update server addresses and remove the second SPOA server (port 9001 doesn't exist)
-      sed -i 's/whoami:2020/127.0.0.1:4444/g; s/spoa:9000/127.0.0.1:9000/g; /server s3 spoa:9001/d' \
+      # Update server addresses for the local VM services.
+      sed -i 's/whoami:2020/127.0.0.1:4444/g; s/spoa:9000/127.0.0.1:9000/g; s/spoa:9100/127.0.0.1:9100/g' \
         /etc/haproxy/haproxy.cfg 2>/dev/null || true
       # Increase SPOA processing timeout to accommodate AppSec calls (AppSec has 5s timeout)
       sed -i 's/timeout\s\+processing\s\+500ms/timeout     processing      6s/' \
