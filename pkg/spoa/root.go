@@ -970,7 +970,11 @@ func (s *Spoa) challengeRelayFromRequest(r *http.Request) (appSecPath string, re
 		return "", challengeRelayEntry{}, false
 	}
 	relay, ok = s.challengeRelays.Load(token)
-	if !ok || time.Now().After(relay.expiresAt) {
+	if !ok {
+		return "", challengeRelayEntry{}, false
+	}
+	if time.Now().After(relay.expiresAt) {
+		s.challengeRelays.Delete(token)
 		return "", challengeRelayEntry{}, false
 	}
 	return r.URL.Path, relay, true

@@ -460,6 +460,24 @@ func TestSweepExpiredChallengeRelays_RemovesOnlyExpiredEntries(t *testing.T) {
 	assert.Same(t, appSec, relay.appSec)
 }
 
+func TestChallengeRelayFromRequest_DeletesExpiredRelay(t *testing.T) {
+	s := newTestSpoa(t)
+	token := "expired-relay"
+	s.challengeRelays.Store(token, challengeRelayEntry{
+		timeout:   time.Second,
+		expiresAt: time.Now().Add(-time.Second),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, challengeInternalPathPrefix+"asset.js", http.NoBody)
+	req.AddCookie(newChallengeRelayCookie(token, false))
+
+	_, _, ok := s.challengeRelayFromRequest(req)
+	assert.False(t, ok)
+
+	_, stillPresent := s.challengeRelays.Load(token)
+	assert.False(t, stillPresent)
+}
+
 // newInternalChallengeSpoa builds a Spoa wired for handleInternalChallengeHTTP tests,
 // with a real dataset/geo database and an AppSec double that counts calls.
 func newInternalChallengeSpoa(t *testing.T) (*Spoa, *int32) {
