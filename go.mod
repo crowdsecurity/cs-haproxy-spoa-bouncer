@@ -1,6 +1,6 @@
 module github.com/crowdsecurity/crowdsec-spoa
 
-go 1.26.1
+go 1.27.1
 
 require (
 	github.com/bluele/gcache v0.0.2
