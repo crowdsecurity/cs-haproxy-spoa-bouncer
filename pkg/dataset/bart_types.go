@@ -140,7 +140,7 @@ func (s *BartRangeSet) updateBatch(cur *bart.Table[RemediationMap], operations [
 
 		// Use ModifyPersist to atomically update or create the prefix entry
 		// This is more efficient than DeletePersist + InsertPersist as it only traverses once
-		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationMap, exists bool) (RemediationMap, bool) {
+		next = next.ModifyPersist(prefix, func(existingData RemediationMap, exists bool) (RemediationMap, bool) {
 			if exists {
 				if valueLog != nil {
 					valueLog.Trace("exact prefix exists, merging remediations")
@@ -199,7 +199,7 @@ func (s *BartRangeSet) RemoveBatch(operations []BartRemoveOp) []*BartRemoveOp {
 
 		// Use ModifyPersist to atomically update or remove the prefix entry
 		// This is more efficient than DeletePersist + InsertPersist as it only traverses once
-		next, _, _ = next.ModifyPersist(prefix, func(existingData RemediationMap, exists bool) (RemediationMap, bool) {
+		next = next.ModifyPersist(prefix, func(existingData RemediationMap, exists bool) (RemediationMap, bool) {
 			if !exists {
 				if valueLog != nil {
 					valueLog.Trace("exact prefix not found")
