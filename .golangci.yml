@@ -71,6 +71,7 @@ linters:
     - perfsprint
     - noctx # manu
     - dupword
+    - modernize
 
 
   settings:
