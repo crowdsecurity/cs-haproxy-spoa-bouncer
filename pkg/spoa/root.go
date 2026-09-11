@@ -263,12 +263,11 @@ func (s *Spoa) Serve(ctx context.Context) error {
 			BaseContext: ctx,
 		}
 		err := agent.Serve(listener)
-		switch {
-		case errors.Is(err, net.ErrClosed):
+		if errors.Is(err, net.ErrClosed) {
 			// Server closed normally during shutdown
-		case err != nil:
-			serverError <- err
+			return
 		}
+		serverError <- err
 	}
 
 	// Launch TCP server if configured

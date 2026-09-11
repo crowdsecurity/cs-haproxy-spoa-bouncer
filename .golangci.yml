@@ -59,6 +59,7 @@ linters:
     # Too strict / too many false positives (for now?)
     #
     - exhaustruct           # Checks if all structure fields are initialized
+    - exhaustruct_v5        # Checks if all structure fields are initialized
     - forbidigo             # Forbids identifiers
     - gochecknoglobals      # Check that no global variables exist.
     - goconst               # Finds repeated strings that could be replaced by a constant
@@ -71,6 +72,7 @@ linters:
     - perfsprint
     - noctx # manu
     - dupword
+    - modernize
 
 
   settings:
@@ -196,6 +198,8 @@ linters:
         - name: use-errors-new
           disabled: true
         - name: unused-receiver
+          disabled: true
+        - name: use-slices-sort
           disabled: true
         - name: var-declaration
           disabled: true
