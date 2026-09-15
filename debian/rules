@@ -23,6 +23,7 @@ override_dh_auto_install:
 	BIN="/usr/bin/$$BOUNCER" CFG="/etc/crowdsec/bouncers" envsubst '$$BIN $$CFG' < "config/$$BOUNCER.service" > "debian/$$PKG/lib/systemd/system/$$BOUNCER.service"; \
 	mkdir -p "debian/$$PKG/usr/share/doc/$$PKG/examples"; \
 	install -m 644 -D "config/crowdsec.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/crowdsec.cfg"; \
+	install -m 644 -D "config/$$BOUNCER.yaml.challenge" "debian/$$PKG/usr/share/doc/$$PKG/examples/$$BOUNCER.yaml.challenge"; \
 	install -m 644 -D "config/haproxy.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/haproxy.cfg"; \
 	install -m 644 -D "config/haproxy-nochallenge.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/haproxy-nochallenge.cfg"; \
 	install -m 644 -D "config/haproxy-lua.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/haproxy-lua.cfg"; \
