@@ -24,6 +24,7 @@ override_dh_auto_install:
 	mkdir -p "debian/$$PKG/usr/share/doc/$$PKG/examples"; \
 	install -m 644 -D "config/crowdsec.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/crowdsec.cfg"; \
 	install -m 644 -D "config/haproxy.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/haproxy.cfg"; \
+	install -m 644 -D "config/haproxy-nochallenge.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/haproxy-nochallenge.cfg"; \
 	install -m 644 -D "config/haproxy-lua.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/haproxy-lua.cfg"; \
 	install -m 644 -D "config/haproxy-upstreamproxy.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/haproxy-upstreamproxy.cfg"; \
 	install -m 644 -D "config/haproxy-upstreamproxy-lua.cfg" "debian/$$PKG/usr/share/doc/$$PKG/examples/haproxy-upstreamproxy-lua.cfg"; \
