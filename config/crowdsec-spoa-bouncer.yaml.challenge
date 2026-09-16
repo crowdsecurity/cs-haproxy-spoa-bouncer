@@ -18,6 +18,7 @@ insecure_skip_verify: false
 listen_tcp: 0.0.0.0:9000
 listen_unix: /run/crowdsec-spoa/spoa.sock
 challenge_http_listen: 127.0.0.1:9100
+
 # Caps how many pending AppSec challenge responses can be held in memory at once,
 #challenge_cache_max_entries: 1000
 #asn_database_path: /var/lib/crowdsec/data/GeoLite2-ASN.mmdb
