@@ -124,6 +124,10 @@ function runtime.Handle(txn)
             ["captcha_site_key"]=get_txn_var(txn, "crowdsec.captcha_site_key"),
             ["captcha_frontend_key"]=get_txn_var(txn, "crowdsec.captcha_frontend_key"),
             ["captcha_frontend_js"]=get_txn_var(txn, "crowdsec.captcha_frontend_js"),
+            ["captcha_frontend_js_type"]=get_txn_var(txn, "crowdsec.captcha_frontend_js_type"),
+            ["captcha_frontend_tag"]=get_txn_var(txn, "crowdsec.captcha_frontend_tag"),
+            ["captcha_frontend_attrs"]=get_txn_var(txn, "crowdsec.captcha_frontend_attrs"),
+            ["captcha_response_field"]=get_txn_var(txn, "crowdsec.captcha_response_field"),
         }))
         -- Note: Cookie management is now handled by HAProxy via http-after-response rules
         -- using the captcha_status and captcha_cookie variables set by the SPOA bouncer

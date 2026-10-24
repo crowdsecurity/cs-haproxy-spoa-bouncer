@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
+	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -28,6 +31,9 @@ const (
 	DefaultTimeout = 5
 	// MaxTimeout is the maximum allowed timeout in seconds
 	MaxTimeout = 300
+
+	// maxVerifyResponseBytes bounds how much of the verification response is read
+	maxVerifyResponseBytes = 64 << 10
 )
 
 // Token is a type alias for jwt.Token to provide a clean public API
@@ -37,6 +43,7 @@ type Captcha struct {
 	Provider            string           `yaml:"provider"`             // Captcha Provider
 	SecretKey           string           `yaml:"secret_key"`           // Captcha Provider Secret Key (for API validation)
 	SiteKey             string           `yaml:"site_key"`             // Captcha Provider Site Key
+	Custom              CustomConfig     `yaml:"custom"`               // Settings of the generic provider (only with provider: custom)
 	FallbackRemediation string           `yaml:"fallback_remediation"` // if captcha configuration is invalid what should we fallback too
 	Timeout             int              `yaml:"timeout"`              // HTTP client timeout in seconds (default: 5)
 	Cookie              cookie.Generator `yaml:"cookie"`               // Cookie configuration (HTTP attributes like Secure, HttpOnly). Do not access directly, use GenerateCookie/GenerateUnsetCookie methods
@@ -70,6 +77,14 @@ func (c *Captcha) Init(logger *log.Entry) error {
 		Transport: transport,
 		// HTTP client timeout as safety net - should match or exceed context timeout
 		Timeout: time.Duration(c.getTimeout()) * time.Second,
+	}
+
+	if c.Provider == CustomProvider {
+		// The verification URL comes from the configuration: never follow a redirect to somewhere else
+		// with the secret key in the request body.
+		c.client.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
 	}
 
 	if c.FallbackRemediation == "" {
@@ -133,11 +148,30 @@ func (c *Captcha) InjectKeyValues(writer *encoding.ActionWriter) error {
 		return err
 	}
 
-	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_site_key", c.SiteKey)
-	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_frontend_key", providers[c.Provider].key)
-	_ = writer.SetString(encoding.VarScopeTransaction, "captcha_frontend_js", providers[c.Provider].js)
+	spec, err := c.spec()
+	if err != nil {
+		return err
+	}
+
+	for name, value := range c.frontendVars(&spec) {
+		_ = writer.SetString(encoding.VarScopeTransaction, name, value)
+	}
 
 	return nil
+}
+
+// frontendVars returns the HAProxy transaction variables used by the captcha page template.
+func (c *Captcha) frontendVars(spec *providerSpec) map[string]string {
+	return map[string]string{
+		// Both are written in HTML attributes: escape so that e.g. "&copy;" in a URL is not read as an entity
+		"captcha_site_key":         html.EscapeString(c.SiteKey),
+		"captcha_frontend_key":     spec.class,
+		"captcha_frontend_js":      html.EscapeString(spec.js),
+		"captcha_frontend_js_type": spec.jsType,
+		"captcha_frontend_tag":     spec.tag,
+		"captcha_frontend_attrs":   spec.attrs,
+		"captcha_response_field":   spec.responseField,
+	}
 }
 
 type CaptchaResponse struct {
@@ -160,27 +194,42 @@ func (c *Captcha) Validate(ctx context.Context, tokenUUID, toParse string) (bool
 		return false, fmt.Errorf("failed to parse captcha response: %w", err)
 	}
 
-	response := values.Get(fmt.Sprintf("%s-response", providers[c.Provider].key))
+	spec, err := c.spec()
+	if err != nil {
+		return false, err
+	}
+
+	// The https policy protects the secret key: do not rely on the caller having validated the configuration.
+	if spec.custom {
+		if err := c.Custom.validate(); err != nil {
+			return false, err
+		}
+	}
+
+	response := values.Get(spec.responseField)
 
 	if response == "" {
 		clog.Debug("user submitted empty captcha response")
 		return false, fmt.Errorf("empty captcha response field")
 	}
 
-	body := url.Values{}
-	body.Add("secret", c.SecretKey)
-	body.Add("response", response)
+	payload, contentType, err := encodeVerifyRequest(spec.verifyFormat, c.SecretKey, response)
+	if err != nil {
+		clog.WithError(err).Error("failed to encode captcha validation request")
+		return false, fmt.Errorf("failed to encode captcha validation request: %w", err)
+	}
 
 	// Create a context with timeout for the request
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(c.getTimeout())*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, providers[c.Provider].validate, strings.NewReader(body.Encode()))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, spec.verifyURL, strings.NewReader(payload))
 	if err != nil {
 		clog.WithError(err).Error("failed to create captcha validation request")
 		return false, fmt.Errorf("failed to create captcha validation request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Accept", "application/json")
 
 	res, err := c.client.Do(req)
 
@@ -215,21 +264,57 @@ func (c *Captcha) Validate(ctx context.Context, tokenUUID, toParse string) (bool
 	// Log HTTP status code for debugging but don't fail on non-200 since most providers return 200 regardless
 	clog.WithField("status_code", res.StatusCode).Debug("captcha provider response status")
 
-	contentType := res.Header.Get("Content-Type")
-	if !strings.Contains(contentType, "application/json") {
-		clog.WithField("content_type", contentType).Debug("invalid response content type, expected application/json")
-		return false, fmt.Errorf("invalid response content type: %s, expected application/json", contentType)
+	// Redirects are only left unfollowed for the custom provider (see Init)
+	if res.StatusCode >= http.StatusMultipleChoices && res.StatusCode < http.StatusBadRequest {
+		clog.WithField("status_code", res.StatusCode).Error("captcha verification endpoint answered with a redirect, check verify_url")
+		return false, fmt.Errorf("unexpected redirect (HTTP %d) from the captcha verification endpoint", res.StatusCode)
 	}
 
+	respContentType := res.Header.Get("Content-Type")
+	if mediaType, _, _ := mime.ParseMediaType(respContentType); mediaType != "application/json" {
+		l := clog.WithFields(log.Fields{"content_type": respContentType, "status_code": res.StatusCode})
+		switch {
+		// Some self-hosted verifiers (e.g. wicketkeeper) reject a bad solution with a plain text 400/403
+		case spec.custom && (res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusForbidden):
+			l.Warn("captcha response rejected by the verification endpoint")
+			return false, fmt.Errorf("captcha response rejected by the verification endpoint (HTTP %d)", res.StatusCode)
+		case spec.custom:
+			l.Error("invalid response content type from the captcha verification endpoint, expected application/json, check custom.verify_url")
+		default:
+			l.Debug("invalid response content type, expected application/json")
+		}
+		return false, fmt.Errorf("invalid response content type: %s (HTTP %d), expected application/json", respContentType, res.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxVerifyResponseBytes+1))
+	if err != nil {
+		clog.WithError(err).Error("failed to read captcha response")
+		return false, fmt.Errorf("failed to read captcha response: %w", err)
+	}
+
+	if len(body) > maxVerifyResponseBytes {
+		clog.Error("captcha verification response is too large")
+		return false, fmt.Errorf("captcha verification response is larger than %d bytes", maxVerifyResponseBytes)
+	}
+
+	// Unmarshal, unlike Decoder.Decode, also rejects data after the JSON document
 	captchaRes := &CaptchaResponse{}
-	if err := json.NewDecoder(res.Body).Decode(captchaRes); err != nil {
+	if err := json.Unmarshal(body, captchaRes); err != nil {
 		clog.WithError(err).Error("failed to decode captcha response")
 		return false, fmt.Errorf("failed to decode captcha response: %w", err)
 	}
 
+	// Self-hosted verifiers may reject a token with an error status (Cap answers 400/403/404 with
+	// {"success": false}), which is a normal failure. A success with an error status (gateway, WAF) is never trusted.
+	if spec.custom && res.StatusCode != http.StatusOK && captchaRes.Success {
+		clog.WithField("status_code", res.StatusCode).Error("captcha verification endpoint answered success with an unexpected status, check custom.verify_url")
+		return false, fmt.Errorf("unexpected HTTP status %d from the captcha verification endpoint", res.StatusCode)
+	}
+
 	// Create log fields once and reuse logger entry
 	logFields := log.Fields{
-		"success": captchaRes.Success,
+		"success":     captchaRes.Success,
+		"status_code": res.StatusCode,
 	}
 
 	// Add error codes if present
@@ -265,10 +350,20 @@ func (c *Captcha) IsValid() error {
 	}
 
 	if !ValidProvider(c.Provider) {
-		return fmt.Errorf("invalid captcha provider %s", c.Provider)
+		return fmt.Errorf("invalid captcha provider %s, supported providers are %s, %s, %s and %s", c.Provider,
+			HcaptchaProvider, RecaptchaProvider, TurnstileProvider, CustomProvider)
 	}
 
-	if c.SiteKey == "" {
+	if c.Provider == CustomProvider {
+		if err := c.Custom.validate(); err != nil {
+			return err
+		}
+	} else if !c.Custom.isZero() {
+		return fmt.Errorf("the custom settings can only be used with provider %q, not %q", CustomProvider, c.Provider)
+	}
+
+	// Some self-hosted captchas have no site key (e.g. the key is part of the endpoint URL)
+	if c.SiteKey == "" && c.Provider != CustomProvider {
 		return fmt.Errorf("empty captcha site key")
 	}
 
@@ -358,7 +453,8 @@ func (c *Captcha) ValidateCookie(cookieValue string) (*jwt.Token, error) {
 }
 
 // IsCaptchaSubmission checks if the body appears to be a captcha form submission
-// by looking for the provider-specific response field (e.g., "g-recaptcha-response", "h-captcha-response")
+// by looking for the provider-specific response field (e.g., "g-recaptcha-response", "h-captcha-response",
+// or the configured custom.response_field)
 // This prevents treating unrelated form submissions as captcha validation attempts
 func (c *Captcha) IsCaptchaSubmission(body string) bool {
 	if body == "" {
@@ -368,6 +464,28 @@ func (c *Captcha) IsCaptchaSubmission(body string) bool {
 	if err != nil {
 		return false
 	}
-	responseField := fmt.Sprintf("%s-response", providers[c.Provider].key)
-	return values.Has(responseField)
+	spec, err := c.spec()
+	if err != nil {
+		return false
+	}
+	return values.Has(spec.responseField)
+}
+
+// encodeVerifyRequest builds the body of the verification request in the requested format and returns
+// it along with the matching Content-Type.
+func encodeVerifyRequest(format, secret, response string) (string, string, error) {
+	if format == VerifyFormatJSON {
+		payload, err := json.Marshal(map[string]string{"secret": secret, "response": response})
+		if err != nil {
+			return "", "", fmt.Errorf("failed to marshal verification request: %w", err)
+		}
+
+		return string(payload), "application/json", nil
+	}
+
+	body := url.Values{}
+	body.Add("secret", secret)
+	body.Add("response", response)
+
+	return body.Encode(), "application/x-www-form-urlencoded", nil
 }
