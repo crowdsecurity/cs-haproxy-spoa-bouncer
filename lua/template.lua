@@ -4,10 +4,16 @@ local template = {}
 
 function template.compile(template_str, args)
 
-    for k, v in pairs(args) do
-        local var = "{{" .. k .. "}}"
-        template_str = template_str:gsub(var, v)
-    end
+    -- Single pass: a value is never searched for further "{{...}}" markers, and a function is used as
+    -- replacement so that "%" in a value (e.g. in a URL or attribute) is inserted literally instead of
+    -- being interpreted as a capture reference. Unknown markers (e.g. "{{ if ... }}") are left untouched.
+    template_str = template_str:gsub("{{([%w_]+)}}", function(name)
+        local value = args[name]
+        if value == nil then
+            return nil
+        end
+        return tostring(value)
+    end)
 
     return findIfStatements(template_str, args)
 end
