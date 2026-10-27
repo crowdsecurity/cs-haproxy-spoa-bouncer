@@ -51,4 +51,15 @@ echo "Configuration: $CONFIG"
 echo "Examples: /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/"
 echo "Documentation: https://docs.crowdsec.net/u/bouncers/haproxy_spoa"
 echo ""
-echo "Start bouncer: systemctl enable --now $SERVICE"
+
+# The prerm of the previous version stops the service on upgrade,
+# so start it again when the configuration is valid.
+if [ "$START" -eq 1 ] && "$BOUNCER" -c "$CONFIG" -t >/dev/null 2>&1; then
+    if systemctl start "$SERVICE"; then
+        echo "Bouncer started: systemctl status $SERVICE"
+    else
+        echo "cannot start service, check: journalctl -u $SERVICE" >&2
+    fi
+else
+    echo "Start bouncer: systemctl enable --now $SERVICE"
+fi
