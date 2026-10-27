@@ -78,6 +78,15 @@ rm -rf %{buildroot}
 %{_localstatedir}/lib/%{name}/html/lua/ban.html
 %{_localstatedir}/lib/%{name}/html/lua/captcha.html
 
+%pre
+# The package doesn't manage /etc/haproxy/crowdsec.cfg anymore, but the
+# %%preun of 0.4.0 and older removes it on upgrade: save it, %%posttrans
+# puts it back.
+if [ "$1" -gt 1 ] && [ -f /etc/haproxy/crowdsec.cfg ]; then
+    mkdir -p %{_localstatedir}/lib/%{name}
+    cp -p /etc/haproxy/crowdsec.cfg %{_localstatedir}/lib/%{name}/crowdsec.cfg.upgrade
+fi
+
 %post
 # Reload systemd units
 systemctl daemon-reexec >/dev/null 2>&1 || :
@@ -117,10 +126,6 @@ if [ -f "$CONFIG" ]; then
     chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
 fi
 
-if [ -d "/etc/haproxy" ]; then
-    cp /usr/share/doc/%{name}/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
-fi
-
 # Display installation message
 echo ""
 echo "=========================================="
@@ -154,13 +159,17 @@ if [ "$1" = "0" ]; then
     delete_bouncer
 fi
 
-if [ -d "/etc/haproxy" ]; then
-    cmp /etc/haproxy/crowdsec.cfg /usr/share/doc/%{name}/examples/crowdsec.cfg && rm -f /etc/haproxy/crowdsec.cfg || echo "not removing /etc/haproxy/crowdsec.cfg, it has been modified"
-fi
-
 %postun
 
 if [ "$1" == "1" ] ; then
     systemctl restart "$SERVICE" || echo "cannot restart service"
 fi
 
+%posttrans
+if [ -f %{_localstatedir}/lib/%{name}/crowdsec.cfg.upgrade ]; then
+    if [ ! -e /etc/haproxy/crowdsec.cfg ]; then
+        mv %{_localstatedir}/lib/%{name}/crowdsec.cfg.upgrade /etc/haproxy/crowdsec.cfg
+    else
+        rm -f %{_localstatedir}/lib/%{name}/crowdsec.cfg.upgrade
+    fi
+fi
