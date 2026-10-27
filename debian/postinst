@@ -30,8 +30,16 @@ if [ -f "$CONFIG" ]; then
     chgrp crowdsec-spoa "$CONFIG" 2>/dev/null || true
 fi
 
+# The prerm removes /etc/haproxy/crowdsec.cfg only if it's identical to
+# the example, so an existing file here has been modified: keep it.
+SPOE_CFG="/etc/haproxy/crowdsec.cfg"
+SPOE_EXAMPLE="/usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/crowdsec.cfg"
 if [ -d "/etc/haproxy" ]; then
-    cp /usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/crowdsec.cfg /etc/haproxy/crowdsec.cfg
+    if [ ! -e "$SPOE_CFG" ]; then
+        cp "$SPOE_EXAMPLE" "$SPOE_CFG"
+    elif ! cmp -s "$SPOE_CFG" "$SPOE_EXAMPLE"; then
+        echo "keeping modified $SPOE_CFG, compare it with $SPOE_EXAMPLE"
+    fi
 fi
 
 echo ""
