@@ -70,8 +70,8 @@ The [official documentation](https://doc.crowdsec.net/u/bouncers/haproxy_spoa) c
 
 1. Install the package (Debian/RPM), use the provided Docker image, or build locally with `make build`.
 2. Copy [`config/crowdsec-spoa-bouncer.yaml`](config/crowdsec-spoa-bouncer.yaml) to `/etc/crowdsec/bouncers/` and set your CrowdSec LAPI URL and API key.
-3. Wire the SPOE filter into HAProxy (see below) and copy the HTML templates from [`templates/`](templates/) to the path used by HAProxy.
-4. Start the service with `systemctl start crowdsec-haproxy-spoa-bouncer` or run `./crowdsec-spoa-bouncer -c /path/to/config.yaml` for local tests.
+3. Copy [`config/crowdsec.cfg`](config/crowdsec.cfg) to `/etc/haproxy/crowdsec.cfg` (packages ship it in `/usr/share/doc/crowdsec-haproxy-spoa-bouncer/examples/`, they don't touch `/etc/haproxy`), wire the SPOE filter into HAProxy (see below) and copy the HTML templates from [`templates/`](templates/) to the path used by HAProxy.
+4. Start the service with `systemctl start crowdsec-spoa-bouncer` or run `./crowdsec-spoa-bouncer -c /path/to/config.yaml` for local tests.
 
 ## Configure
 
