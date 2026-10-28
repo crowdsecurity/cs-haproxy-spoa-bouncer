@@ -14,7 +14,7 @@ A lightweight Stream Processing Offload Agent (SPOA) that contacts the CrowdSec 
 - **Real-time enforcement** – Streams decisions from CrowdSec via the Go bouncer SDK so ban/captcha/allow changes are visible within seconds.
 - **HTTP and TCP coverage** – Supports early IP checks via `crowdsec-tcp` and HTTP inspection via `crowdsec-http-body` / `crowdsec-http-no-body` to protect both web frontends and raw TCP services.
 - **Host-aware responses** – Each host entry can customize ban pages, captcha providers, and logging while sharing the same SPOA worker.
-- **Captcha challenges built in** – hCaptcha, reCAPTCHA, and Cloudflare Turnstile are supported with signed, stateless cookies so solved challenges can be verified without round-tripping to the provider.
+- **Captcha challenges built in** – hCaptcha, reCAPTCHA, and Cloudflare Turnstile are supported, as well as any siteverify-style captcha (e.g. self-hosted Cap) through the `custom` provider, with signed, stateless cookies so solved challenges can be verified without round-tripping to the provider.
 - **Memory-efficient dataset** – IPs live in a lock-free map and CIDRs are stored in a [BART](https://github.com/gaissmai/bart) radix tree, which keeps lookups in the tens of nanoseconds.
 - **Optional GeoIP tagging** – Plug in MaxMind ASN/City databases to enrich decisions with ISO country codes for templating or ACLs.
 - **Operational visibility** – Structured logging, Prometheus counters, and an optional pprof endpoint make it easy to monitor and debug the bouncer.
