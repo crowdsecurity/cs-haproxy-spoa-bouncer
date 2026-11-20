@@ -3,10 +3,13 @@ local utils = require "utils"
 local template = {}
 
 function template.compile(template_str, args)
+    -- Handle the if statements first, so that a variable value containing "{{ if ... }}" is never
+    -- interpreted as a directive.
+    template_str = findIfStatements(template_str, args)
 
     -- Single pass: a value is never searched for further "{{...}}" markers, and a function is used as
     -- replacement so that "%" in a value (e.g. in a URL or attribute) is inserted literally instead of
-    -- being interpreted as a capture reference. Unknown markers (e.g. "{{ if ... }}") are left untouched.
+    -- being interpreted as a capture reference. Unknown markers are left untouched.
     template_str = template_str:gsub("{{([%w_]+)}}", function(name)
         local value = args[name]
         if value == nil then
@@ -15,7 +18,7 @@ function template.compile(template_str, args)
         return tostring(value)
     end)
 
-    return findIfStatements(template_str, args)
+    return template_str
 end
 
 -- This function finds if statements in the template and removes the lines that are not needed
