@@ -228,10 +228,6 @@ func errInsecureHTTP(field, raw string) error {
 // parseEndpointURL checks that raw is an absolute http(s) URL without credentials or fragment, and that
 // it can safely be written in an HTML attribute.
 func parseEndpointURL(field, raw string) (*url.URL, error) {
-	if len(raw) > maxURLLen {
-		return nil, fmt.Errorf("invalid %s: URL is too long (maximum %d bytes)", field, maxURLLen)
-	}
-
 	// js_url is rendered inside an HTML attribute: refuse anything that could end it, or that is not
 	// valid in a URL anyway. Use percent-encoding.
 	if strings.ContainsAny(raw, "\"'`<>\\") || strings.IndexFunc(raw, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
@@ -253,6 +249,11 @@ func parseEndpointURL(field, raw string) (*url.URL, error) {
 
 	if u.Fragment != "" {
 		return nil, fmt.Errorf("invalid %s: URL fragments are not allowed", field)
+	}
+
+	// Checked after parsing, on the HTML escaped form, as this is what is sent to HAProxy (e.g. "&" becomes "&amp;").
+	if len(html.EscapeString(raw)) > maxURLLen {
+		return nil, fmt.Errorf("invalid %s: URL is too long (maximum %d bytes)", field, maxURLLen)
 	}
 
 	u.Scheme = strings.ToLower(u.Scheme)
